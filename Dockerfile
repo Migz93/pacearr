@@ -1,4 +1,8 @@
 ﻿FROM node:22-trixie-slim AS deps
+# better-sqlite3 may not have a prebuilt binary for every Node and CPU
+# combination, so provide node-gyp's native build requirements in this stage.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
