@@ -672,16 +672,68 @@ function JobsTab() {
   );
 }
 
+const GITHUB_REPOSITORY_URL = "https://github.com/Migz93/pacearr";
+const GITHUB_RELEASES_URL = `${GITHUB_REPOSITORY_URL}/releases`;
+
+interface GitHubRelease {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  html_url: string;
+  published_at: string | null;
+  body: string | null;
+}
+
+function isGitHubRelease(value: unknown): value is GitHubRelease {
+  if (!value || typeof value !== "object") return false;
+  const release = value as Partial<GitHubRelease>;
+  return typeof release.id === "number"
+    && typeof release.tag_name === "string"
+    && typeof release.html_url === "string"
+    && (release.name === null || typeof release.name === "string")
+    && (release.published_at === null || typeof release.published_at === "string")
+    && (release.body === null || typeof release.body === "string");
+}
+
+function releaseTitle(release: GitHubRelease) {
+  return release.name || release.tag_name;
+}
+
+function isCurrentRelease(release: GitHubRelease, version: string | undefined) {
+  return Boolean(version) && (release.tag_name === `v${version}` || release.tag_name === version || release.name === version);
+}
+
 function AboutTab() {
   const [info, setInfo] = useState<AboutInfo | null>(null);
-  useEffect(() => { void apiGet<AboutInfo>("/api/settings/about").then(setInfo).catch(() => undefined); }, []);
+  const [releases, setReleases] = useState<GitHubRelease[] | null>(null);
+  const [releasesError, setReleasesError] = useState(false);
+  const [changelogRelease, setChangelogRelease] = useState<GitHubRelease | null>(null);
+
+  useEffect(() => {
+    void apiGet<AboutInfo>("/api/settings/about").then(setInfo).catch(() => undefined);
+
+    const controller = new AbortController();
+    void fetch("https://api.github.com/repos/Migz93/pacearr/releases?per_page=20", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`GitHub releases request failed: ${response.status}`);
+        const data: unknown = await response.json();
+        if (!Array.isArray(data) || !data.every(isGitHubRelease)) throw new Error("GitHub returned invalid release data.");
+        setReleases(data);
+      })
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setReleasesError(true);
+      });
+
+    return () => controller.abort();
+  }, []);
+
   return (
     <div className="settings-stack">
       <SectionCard title="About Pacearr">
         <div className="info-list">
-          <InfoRow label="Version"><code>{info?.version ?? "..."}</code></InfoRow>
+          <InfoRow label="Version"><a className="text-link" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
           <InfoRow label="Build Channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
-          <InfoRow label="Commit"><code>{info?.commitSha ?? "..."}</code></InfoRow>
+          {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code>{info?.nodeVersion ?? "..."}</code></InfoRow>
           <InfoRow label="Platform"><code>{info?.platform ?? "..."}</code></InfoRow>
           <InfoRow label="Data Directory"><code>{info?.dataDir ?? "..."}</code></InfoRow>
@@ -690,10 +742,43 @@ function AboutTab() {
       </SectionCard>
       <SectionCard title="Getting Support">
         <div className="info-list">
+          <InfoRow label="GitHub"><a className="text-link" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
           <InfoRow label="Configuration"><span className="muted">Data and logs are stored under /config in the container.</span></InfoRow>
           <InfoRow label="Health Check"><code>/api/health</code></InfoRow>
         </div>
       </SectionCard>
+      <SectionCard title="Releases" description="Release notes are fetched from the public Pacearr GitHub repository.">
+        {releasesError && <p className="muted">Release data is currently unavailable.</p>}
+        {!releases && !releasesError && <p className="muted">Loading releases...</p>}
+        {releases?.length === 0 && <p className="muted">No releases found.</p>}
+        {releases && releases.length > 0 && <div className="release-list">
+          {releases.map((release, index) => (
+            <div className="release-row" key={release.id}>
+              <div className="release-details">
+                <div className="release-heading">
+                  <strong>{releaseTitle(release)}</strong>
+                  {index === 0 && <span className="release-badge">Latest</span>}
+                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className="release-badge current">Current</span>}
+                </div>
+                {release.published_at && <small>{new Date(release.published_at).toLocaleDateString()}</small>}
+              </div>
+              <button className="secondary-button compact" onClick={() => setChangelogRelease(release)}>View changelog</button>
+            </div>
+          ))}
+        </div>}
+      </SectionCard>
+      {changelogRelease && <div className="modal-backdrop" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
+        <div className="modal changelog-modal" role="dialog" aria-modal="true" aria-labelledby="changelog-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="modal-header">
+            <div><h2 id="changelog-title">{releaseTitle(changelogRelease)} changelog</h2></div>
+            <button className="icon-button" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
+          </div>
+          {changelogRelease.body ? <pre className="changelog-body">{changelogRelease.body}</pre> : <p className="muted">No changelog is available for this release.</p>}
+          <div className="button-row end">
+            <a className="secondary-button compact" href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
+          </div>
+        </div>
+      </div>}
     </div>
   );
 }
