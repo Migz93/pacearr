@@ -1,0 +1,23 @@
+node_modules
+dist
+dist-server-tests
+data
+.env
+.env.*
+!.env.*.example
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/
+coverage/
+.nyc_output/
+.eslintcache
+.claude/
+LOCAL.md
+
+# Playwright
+tests/playwright/.auth/
+tests/test-results/
+tests/playwright-report/
+.devcontainer/devcontainer.json

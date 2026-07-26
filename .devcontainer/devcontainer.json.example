@@ -1,0 +1,41 @@
+{
+  "name": "dev-hubarr",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:latest",
+  "runArgs": [
+    "--name",
+    "zdev-hubarr"
+  ],
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/hubarr,type=bind,consistency=cached",
+  "workspaceFolder": "/workspaces/hubarr",
+  "remoteUser": "node",
+  "updateRemoteUserUID": true,
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": false,
+      "enableNonRootDocker": true,
+      "installZsh": true,
+      "upgradePackages": false
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "containerEnv": {
+    "HOME": "/home/node",
+    "NPM_CONFIG_CACHE": "/home/node/.npm"
+  },
+  "postCreateCommand": "npm ci && npx playwright install --with-deps chromium",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "anthropic.claude-code",
+        "openai.chatgpt"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

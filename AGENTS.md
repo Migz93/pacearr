@@ -1,0 +1,318 @@
+# Agent Guidelines — Docker Outside of Docker
+
+You are running inside a VS Code devcontainer. Read this file before doing any Docker-related work.
+
+> If a `LOCAL.md` file exists in this directory, read it — it contains environment-specific setup details for this machine. If it doesn't exist, ignore this note.
+
+## Your environment
+
+- You are inside a devcontainer, not on the host machine directly.
+- You have access to the host's Docker daemon via Docker-outside-of-Docker (DooD). You can run `docker` and `docker compose` commands normally.
+- You **cannot** browse the host filesystem. Paths like `/opt/...` that you reference in Docker configs exist on the host, not inside this container. Do not try to read or write them — just reference them correctly in your Docker configuration.
+
+## Host filesystem conventions
+
+`/opt` paths exist on the **host only**. The agent runs inside a devcontainer and cannot read, list, or inspect anything under `/opt` — do not attempt to `ls`, `cat`, or browse those paths.
+
+Everything for Pacearr lives under a single directory on the host:
+
+```
+/opt/pacearr/
+```
+
+All files the app needs — config, database, logs, whatever — go directly in there. Do not create subdirectories like `config/`, `data/`, or `logs/` unless the app itself requires a specific path inside the container. Keep it flat.
+
+## Docker naming conventions
+
+When building images or creating containers for this app, use the app name directly — do not suffix with `-app`, `-container`, `-service`, or similar.
+
+| Thing | Correct | Incorrect |
+|---|---|---|
+| Image name | `pacearr` | `pacearr-app`, `pacearr-image` |
+| Container name | `pacearr` | `pacearr-app`, `pacearr-container` |
+| Compose service name | `pacearr` | `app`, `pacearr-service` |
+
+If the app has multiple distinct services in the future, use `pacearr-frontend`, `pacearr-api` etc.
+
+## Bind mounts
+
+Bind-mount the entire app directory from the host into the container as a single volume. Do not use named Docker volumes — the user needs to be able to inspect and edit files directly on the host.
+
+Example docker-compose service:
+
+```yaml
+services:
+  pacearr:
+    image: pacearr
+    container_name: pacearr
+    network_mode: bridge
+    ports:
+      - "9302:9302"
+    volumes:
+      - /opt/pacearr:/config
+    restart: unless-stopped
+```
+
+Map `/opt/pacearr` on the host to whatever path the app expects internally. Pacearr currently expects `/config`.
+
+## Where your app code is
+
+Your workspace is mounted at `/workspaces/pacearr` inside this container. This is the same directory as `app/` on the host at `/opt/vscode/node/pacearr/app/`.
+
+## Networking
+
+Always use bridge networking — it is the only mode that works reliably with DooD on this host.
+
+- `docker run`: include `--network bridge`
+- Compose services: set `network_mode: bridge`
+- `docker build`: do **not** pass `--network`
+
+Do not use `host`, `none`, or custom named networks unless explicitly requested.
+
+## Summary checklist before creating any container
+
+- [ ] Image name matches the app name
+- [ ] Container name matches the app name
+- [ ] `/opt/pacearr` on the host bind-mounted as a single volume
+- [ ] Host directory documented or created in setup steps
+- [ ] `--network bridge` / `network_mode: bridge` set
+
+## GitHub Workflow And Release Process
+
+### Before Starting Any Work — Branch Check
+
+If this workspace is a git repository, always check the current branch with:
+
+```bash
+git branch --show-current
+```
+
+Then act on what you find:
+
+| Current branch | Situation | Action |
+|---|---|---|
+| `develop` | On the integration branch | Create a new `type/description` branch from `develop` and switch to it |
+| `main` | On the stable branch | Create a new `type/description` branch from `develop`, not from `main` |
+| `feat/*`, `fix/*`, `chore/*` etc. | Already on a work branch | Continue work here — no new branch needed |
+| Something unexpected | Unfamiliar branch | Ask the user before proceeding |
+
+Do this before making edits in a git-backed Pacearr repo. Never start work and then create the branch after the fact. If the workspace is not a git repository, state that clearly and continue with the requested local work.
+
+---
+
+### The Full Development Flow
+
+This is the required workflow for GitHub-backed changes:
+
+```
+type/branch-name branch → PR into develop → develop → chore/bump-version → PR into develop → PR into main → tag → release
+```
+
+1. Start a new branch from `develop` for every piece of work — features, bug fixes, chores, CI changes, everything. Never commit new work directly to `develop` or `main`.
+   - Branch naming: `feat/short-description`, `fix/short-description`, `chore/short-description`, `ci/short-description`, `docs/short-description`
+2. Do the work on that branch. Commit as many times as needed. Push the branch to GitHub.
+3. Open a PR from that branch into `develop` using `gh pr create`. This feeds release notes, so the PR title becomes the changelog entry. Use a semantic title (`feat:`, `fix:`, `chore:`, etc.).
+4. Merge the PR into `develop`. Delete the branch after merging.
+5. Repeat steps 1-4 for each piece of work. `develop` accumulates all merged PRs.
+6. When ready to release, create a `chore/bump-version-X.Y.Z` branch from `develop`.
+7. Bump `package.json` and `package-lock.json`, open a PR from that branch into `develop`, and merge it.
+8. Open a PR from `develop` into `main`. Merge it. This triggers release notes from all PR titles since the last release.
+9. Tag `main` with `vX.Y.Z` and push the tag. This triggers Docker build workflows when configured.
+10. Publish the GitHub release — review the auto-generated draft and publish it.
+
+---
+
+### How The Agent Should Interpret The User's Instructions
+
+The user will not always use precise git terminology. They may say things like:
+
+- "that's ready, push it" — push the current branch to GitHub if not already pushed, then open a PR from it into `develop`
+- "commit that to develop" — open a PR into `develop`, not a direct commit
+- "let's get this into develop" — same as above, open a PR
+- "merge develop into main" or "push to main" — this is a release step; see the release flow above
+
+When the user's instruction is ambiguous, either:
+
+- Interpret it charitably as the correct workflow step and proceed, explaining what you're doing
+- Push back briefly if genuinely unclear
+
+Never silently commit directly to `develop` or `main` when the user is describing feature or fix work. That bypasses PRs and breaks release notes.
+
+---
+
+### GitHub CLI Usage
+
+For GitHub-related work, use `gh` as the default tool. Use it for:
+
+- opening PRs (`gh pr create`)
+- checking PR status, checks, and mergeability
+- merging PRs (`gh pr merge`)
+- inspecting workflow runs and CodeQL alerts
+- creating and publishing releases
+
+Prefer `gh` over inferring GitHub state from local git — it gives the authoritative picture of what is open, merged, or failing on GitHub.
+
+### AI Sign-Off For GitHub Text
+
+Any text the agent sends to GitHub or stores in git history as authored output must end with an explicit AI sign-off.
+
+This applies to **body text and comments only** — never to titles or subjects:
+
+- commit messages
+- pull request descriptions (body)
+- issue comments
+- pull request comments
+- pull request reviews
+- any other agent-authored text posted to GitHub
+
+Do **not** append the sign-off to PR titles, issue titles, or any other subject/headline field.
+
+Use the sign-off that matches the agent:
+
+- `🤖 Generated with Codex`
+- `🤖 Generated with Claude Code`
+
+If the user explicitly asks for a different agent label, follow that request. Otherwise, always append the correct sign-off at the end of the text.
+
+---
+
+### Pull Request Description Format
+
+Every PR description must follow this structure. Sparse descriptions are not acceptable — include enough information that a reviewer can understand what changed and how to verify it without reading the diff first.
+
+```markdown
+## Summary
+
+A short paragraph or bullet list explaining what this PR does and why. Mention the user-facing or system-level effect, not just implementation detail.
+
+## Changes
+
+A file-by-file or component-by-component breakdown of what was modified and what each change does. Group related changes together.
+
+## Test plan
+
+A markdown checklist of concrete steps to verify the change works correctly.
+
+🤖 Generated with [Agent Name]
+```
+
+Minimum bar: every PR must have all three sections. A test plan with one item is fine if the change is small; a changes section with a single file is fine too. Do not omit sections or write placeholders like "verify it works".
+
+If the PR was prompted by an open GitHub issue, include a `Closes #<number>` line in the description body, not the title.
+
+---
+
+### Branch Rules Summary
+
+| Branch | Purpose | How things get in |
+|--------|---------|-------------------|
+| `feat/*`, `fix/*`, `chore/*` etc. | Active work | Direct commits |
+| `develop` | Integration | PRs from `feat/*`, `fix/*`, `chore/*`, `ci/*`, `docs/*` etc. |
+| `main` | Stable/released | PRs from `develop` only |
+
+- Do not push new feature or fix work directly to `develop` or `main`
+- Do not open PRs directly from feature branches into `main`
+
+---
+
+### Pull Request Conventions
+
+- Use semantic PR titles: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `ci:`
+- Follow the PR description format defined above
+- Call out explicitly if the change affects: release behavior, Docker publishing, auth, database schema, Plex/Sonarr/Tautulli integrations, cleanup/deletion behavior, or user-visible setup
+
+---
+
+### Release Process
+
+When the user says it's time to release:
+
+1. Confirm the version bump size — ask for patch / minor / major if not stated
+2. Create a `chore/bump-version-X.Y.Z` branch from `develop`
+3. Update `package.json` and `package-lock.json` with the new version
+4. Open a PR from that branch into `develop` and merge it
+5. Open a PR from `develop` into `main` and merge it
+6. Push the tag `vX.Y.Z` from `main`
+7. Review the release-drafter draft on GitHub and publish it
+
+Version files to update:
+
+- `package.json`
+- `package-lock.json`
+
+`src/server/version.ts` reads dynamically from `package.json` at runtime — no separate update needed there.
+
+Do not invent the version. Always confirm with the user if ambiguous.
+
+Tag format: `vX.Y.Z` — always from `main`, never from `develop`.
+
+---
+
+### Agent Behaviour — Snyk
+
+When working through Snyk findings:
+
+1. Always explain the finding first — describe what Snyk flagged, why it flagged it, and whether it is a genuine issue or a false positive before suggesting any action.
+2. Recommend Fix or Won't Fix honestly — if fixing the issue would require writing worse code, less readable code, or code purely to satisfy static analysis, say so clearly and recommend Won't Fix instead.
+3. When recommending Won't Fix, always provide:
+   - A plain-English comment the user can paste into the Snyk GUI
+   - The correct Snyk category to select: **Won't Fix** for false positives or deliberate decisions, **Ignore Temporarily** only if there is a genuine plan to revisit
+4. Never suggest a change purely to appease Snyk if it doesn't improve actual security or code quality.
+
+If `SECURITY.md` exists, read it for the full Snyk tooling guide, scan commands, and philosophy.
+
+---
+
+### Implementation Expectations — Logging And Comments
+
+When implementing new functionality, treat logging and code clarity as part of the feature work, not optional polish.
+
+#### Logging
+
+- Consider logging for every new feature, workflow, integration, or background process where runtime visibility would help with debugging, support, or diagnosing failures
+- Think through logging across the full implementation path, not just one layer — request handling, service logic, scheduled work, external API calls, and error paths where relevant
+- Add logs that are useful and intentional: enough context to understand what happened, without spamming noisy or redundant messages
+- Prioritise logs around important state changes, failures, retries, skipped work, destructive cleanup, and external-system interactions when those would otherwise be hard to trace
+- Use the appropriate log level: `info` for normal significant events, `warn` for recoverable failures or skipped work, `error` for failures that need attention, and `debug` for diagnostic detail
+- Pass structured data as the second `meta` argument rather than interpolating values into the message string, for example `logger.info("Sync complete", { count: 5 })`
+- If rewriting an existing section of code that has no logging, add appropriate logging at that point — the absence of logs is often what made the original issue hard to diagnose
+
+#### Code comments
+
+- Add explanatory comments where they materially improve readability or maintainability, especially around non-obvious logic, edge cases, or decisions that are easy to misread later
+- Keep comments clear and purposeful; do not add comments that only restate what the code already says
+- When a future maintainer might reasonably ask "why is this written this way?", prefer a short comment that answers that question at the point of implementation
+
+#### Technical docs
+
+- Treat technical documentation as part of the implementation for major or long-lived changes, not optional follow-up work
+- If a change affects architecture, sync/import flow, persistence, external integrations, cleanup/deletion behavior, or runtime behavior in a lasting way, update the relevant file under `docs/` in the same branch/PR
+- If `docs/README.md` exists, start there when deciding where documentation belongs
+- If no existing technical doc fits the change cleanly, add a new topic doc under `docs/` and link it from `docs/README.md`
+
+---
+
+### End-to-End Tests — Playwright
+
+If Pacearr has Playwright test infrastructure, use these expectations:
+
+- Tests live in `tests/playwright/` and run with `npm run test:e2e`
+- Tests should hit a live running Pacearr instance — no mocking, no test database — unless the test harness explicitly says otherwise
+- Auth should use a `SESSION_COOKIE` env var in `.env.playwright` (gitignored), not a browser-driven OAuth flow, because the devcontainer has no display
+- Session state should be saved to `tests/playwright/.auth/storageState.json` (gitignored) after the first successful auth
+- New test files go in `tests/playwright/` as `*.spec.ts` when that runner exists
+- `playwright.config.ts` and `tsconfig.playwright.json` control the runner when present
+
+When implementing a new feature, before closing out the work consider whether a Playwright test makes sense for it. If it does, suggest it to the user — describe what you'd test and ask if they want it added. Don't add tests silently. When a test is agreed and written, add a row for it in the relevant table in `TESTING.md` if that file exists.
+
+---
+
+### Agent Behaviour Expectations
+
+Actively guide the workflow rather than waiting for perfect instructions:
+
+- When the user starts new work in a git-backed repo: create a branch from `develop` automatically
+- When the user says the work is ready: open a PR to `develop`, don't push directly
+- When the user asks about releasing: confirm whether they mean prep, tag, or both
+- When the user asks for a version bump: confirm patch/minor/major if not stated
+- When the user's language conflicts with the workflow: interpret charitably or push back clearly — never silently do the wrong thing
