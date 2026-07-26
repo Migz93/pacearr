@@ -81,7 +81,7 @@ The Shows page reads the shared Sonarr library snapshot from SQLite and overlays
 
 Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run history import immediately.
 
-Every Sonarr series can be opened at `/shows/:seriesId`, whether or not it is enrolled. The detail view shows current Sonarr monitoring, seasons and episodes, plus matched viewer progress. Unenrolled shows offer an Enroll action; enrolled shows offer Reset and Unenroll. Unenroll removes Pacearr's enrollment and stored rolling progress only—it does not delete media or revert Sonarr monitoring state—and requests a background recommendation refresh.
+Every Sonarr series can be opened at `/shows/:seriesId`, whether or not it is enrolled. The detail view shows current Sonarr monitoring, seasons and episodes, plus matched viewer progress. Unenrolled shows offer an Enroll action; enrolled shows offer Reset and Unenroll. In live mode, Unenroll restores any Pacearr-managed Plex artwork and re-monitors the Sonarr series, seasons, and episodes before removing Pacearr's enrollment and rolling-progress state. It does not search for or delete media, and requests a background recommendation refresh after completing.
 
 The Recommendations page ranks un-enrolled shows by projected savings and displays 25 results at a time, with the current page stored in the URL. Administrators can persistently ignore candidates they do not intend to enroll and restore them through the “Show ignored” toggle.
 

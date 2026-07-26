@@ -10,6 +10,7 @@ Pacearr has five scheduler-managed jobs.
 | `history-import` | every 24 hours | Import Plex history and optional Tautulli history |
 | `full-history-reconcile` | every 30 days | Re-read all available Plex and Tautulli episode history to recover source gaps |
 | `rolling-reconcile` | every 6 hours | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files |
+| `recommendation-refresh` | every 6 hours | Refresh the cached Sonarr library and projected-savings recommendations |
 
 Job state is stored in `job_run_state`.
 
@@ -60,6 +61,10 @@ Each watch event stores:
 - raw payload JSON
 
 Events are unique by `(source, source_event_id)` so re-imports are idempotent.
+
+## History Synchronization
+
+Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent.
 
 ## Full History Reconciliation
 
@@ -121,6 +126,3 @@ Important workflow actions should usually write both:
 Application logs are retained for 14 days in `/config/logs`. Settings → Logs
 reads both currently running entries and retained rotated files, so it remains
 useful after a restart.
-# History synchronization
-
-Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent.
