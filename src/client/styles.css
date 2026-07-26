@@ -266,6 +266,16 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .info-row:last-child { border-bottom: 0; }
 .info-row > span { color: var(--muted); font-size: 13px; font-weight: 700; }
 .info-row code, .info-row pre { background: var(--panel-2); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-list { display: grid; gap: 8px; }
+.release-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #151819; }
+.release-details { min-width: 0; display: grid; gap: 4px; }
+.release-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.release-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.release-details small { color: var(--muted); font-size: 12px; }
+.release-badge { flex: 0 0 auto; border-radius: 999px; padding: 2px 7px; background: rgba(111, 211, 166, .18); color: #c5f4dc; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.release-badge.current { background: rgba(111, 211, 166, .28); color: var(--text); }
+.changelog-modal { display: grid; gap: 16px; }
+.changelog-body { max-height: 52vh; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #101313; color: var(--text); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .centered-panel { min-height: 220px; display: grid; place-items: center; color: var(--muted); }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
