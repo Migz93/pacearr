@@ -11,28 +11,13 @@ Implemented maintenance-style behavior:
 - durable job state in `job_run_state`
 - audit history in `history_events`
 
-## Inactive Reset
-
-Inactive reset checks enrolled shows and reapplies the all-season-pilot baseline when no enabled user has watched the show within the configured inactivity window.
-
-The default inactivity window is 7 days.
-
-Reset behavior:
-
-- clears expanded season state
-- monitors every real-season E01
-- unmonitors E02+
-- disables season-level monitoring flags
-- searches pilots
-- deletes E02+ files in live mode
-
 ## Progressive Cleanup
 
-Progressive cleanup is opportunistic and runs while processing watch events.
-
-When enabled, it can shrink older expanded seasons back to pilot-only when all enabled users have moved beyond those seasons.
-
-Because this can delete files, every change should remain conservative and auditable.
+Progressive cleanup is the implemented rolling-monitoring cleanup path. It runs
+while processing watch events and can shrink older expanded seasons back to
+pilot-only when all enabled users have moved beyond them. See
+[rolling-monitoring.md](rolling-monitoring.md#progressive-cleanup) for the
+authoritative behavior and safety boundary.
 
 ## Data Retention
 
@@ -46,8 +31,6 @@ Pacearr currently does not prune:
 
 - `watch_events`
 - `history_events`
-
-Future retention work should be explicit and configurable.
 
 ## Adding New Maintenance Work
 

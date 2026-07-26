@@ -74,11 +74,22 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
 function VersionFooter() {
   const [info, setInfo] = useState<AboutInfo | null>(null);
   useEffect(() => { void apiGet<AboutInfo>("/api/settings/about").then(setInfo).catch(() => undefined); }, []);
+  const subLabel = !info
+    ? "..."
+    : info.buildChannel === "stable"
+      ? `v${info.version}`
+      : info.commitSha === "local"
+        ? "local"
+        : info.commitSha.slice(0, 7);
+  const label = !info || info.buildChannel === "stable"
+    ? "Pacearr"
+    : `Pacearr ${info.buildChannel}`;
+
   return (
     <div className="sidebar-version">
       <Link to="/settings?tab=about">
         <span className="version-mark"><img className="version-logo" src="/pacearr-logo.svg" alt="" /></span>
-        <span><strong>Pacearr Local</strong><small>{info ? `v${info.version}` : "..."}</small></span>
+        <span><strong>{label}</strong><small>{subLabel}</small></span>
       </Link>
     </div>
   );

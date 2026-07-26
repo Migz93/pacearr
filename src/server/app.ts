@@ -110,7 +110,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-        "connect-src": ["'self'", "https://plex.tv"],
+        // The About page reads the public release feed directly from GitHub.
+        "connect-src": ["'self'", "https://plex.tv", "https://api.github.com"],
         "img-src": ["'self'", "data:"],
         "upgrade-insecure-requests": null,
       },
