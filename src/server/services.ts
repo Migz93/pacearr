@@ -663,7 +663,9 @@ export class PacearrServices {
     const updates = episodes.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
     await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
     await sonarr.updateEpisodesMonitoring(updates);
-    await sonarr.searchSeason(seriesId, seasonNumber);
+    if (episodes.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
+      await sonarr.searchSeason(seriesId, seasonNumber);
+    }
     const dryRun = this.isDryRun();
     if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt);
     await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, [...rolling.expandedSeasons, seasonNumber]);
@@ -717,6 +719,9 @@ export class PacearrServices {
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
     if (!progressUpdated) return { inserted: true, changed: false };
+    // Keep progress current, but let the operation already controlling this
+    // series finish its Sonarr mutations before event-side work resumes.
+    if (this.activeSeriesOperations.has(input.sonarrSeriesId)) return { inserted: true, changed: false };
     await this.performProgressiveCleanup(rolling.id, input.seasonNumber);
     if (input.episodeNumber === 1 && input.seasonNumber > 0) {
       return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel) };
@@ -869,6 +874,7 @@ export class PacearrServices {
     // expansion state. Reconcile from active progress so enabling live mode
     // later still expands seasons whose original events are now duplicates.
     if (!full) for (const rolling of this.db.listRollingShows()) {
+      if (this.activeSeriesOperations.has(rolling.sonarrSeriesId)) continue;
       const retainedSeasons = this.getActiveRetainedSeasons(rolling.id);
       for (const seasonNumber of retainedSeasons.filter((season) => !rolling.expandedSeasons.includes(season))) {
         const progress = this.db.listProgressForShow(rolling.id)
