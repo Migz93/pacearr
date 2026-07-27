@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
-import type { ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse } from "../../shared/types";
+import type { RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse } from "../../shared/types";
 
 function formatDate(value: string | null) {
   if (!value) return "Never";
@@ -205,6 +205,22 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
     }
   }
 
+  async function enroll() {
+    setBusy(true);
+    try {
+      const result = await apiPost<RunResult>(`/api/shows/${seriesId}/enroll`, { applyBaseline: true, importHistory: true });
+      setDetail((current) => current && {
+        ...current,
+        show: { ...current.show, enrolled: true, rollingShowId: result.rollingShowId ?? current.show.rollingShowId },
+      });
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!detail) {
     return (
       <div className="page">
@@ -262,7 +278,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 </button>
               </>
             ) : (
-              <button className="primary-button" disabled={busy} onClick={() => runAction(() => apiPost(`/api/shows/${show.sonarrSeriesId}/enroll`, { applyBaseline: true, importHistory: true }))}>
+              <button className="primary-button" disabled={busy} onClick={() => void enroll()}>
                 Enroll in rolling episodes
               </button>
             )}

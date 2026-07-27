@@ -414,6 +414,7 @@ export interface ConnectionTestResult {
 export interface RunResult {
   ok: boolean;
   message: string;
+  rollingShowId?: number;
   processed?: number;
   changed?: number;
   fetched?: number;

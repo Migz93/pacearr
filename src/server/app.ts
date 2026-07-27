@@ -444,10 +444,20 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json(await services.getShowDetail(Number(req.params.seriesId)));
   }));
   app.post("/api/shows/:seriesId/enroll", requireAuth, asyncRoute(async (req, res) => {
-    res.json(await services.enrollShow(Number(req.params.seriesId), {
+    const options = {
       applyBaseline: req.body.applyBaseline !== false,
       importHistory: req.body.importHistory !== false,
-    }));
+    };
+    const enrollment = await services.beginEnrollment(Number(req.params.seriesId), options);
+    res.json({ ok: true, message: `Enrolled ${enrollment.rolling.title}. Setup continues in the background.`, rollingShowId: enrollment.rolling.id });
+    void services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, options).catch((error) => {
+      logger.error("Enrollment setup failed after show was enrolled", {
+        seriesId: enrollment.series.id,
+        rollingShowId: enrollment.rolling.id,
+        title: enrollment.rolling.title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }));
   app.get("/api/recommendations", requireAuth, asyncRoute(async (req, res) => {
     const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
