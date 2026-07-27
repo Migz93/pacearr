@@ -107,7 +107,11 @@ export class PlexArtworkService {
 
   private itemPaths(rolling: RollingShowRecord, item: ArtworkItem, itemType: ArtworkKind): { dir: string; originalPosterPath: string; overlayPosterPath: string } {
     const dir = path.join(this.artworkDir, `${sanitizeForPath(rolling.title)} (${rolling.id})`);
-    const label = this.itemLabel(item, itemType);
+    // Records are looked up by plexItemRatingKey (see getPlexArtwork), so the
+    // filename carries it too — if Plex ever re-keys an already-tracked item
+    // (e.g. a library rescan), the new record gets its own files instead of
+    // silently overwriting the still-referenced backup of the old one.
+    const label = `${this.itemLabel(item, itemType)} [${sanitizeForPath(item.ratingKey)}]`;
     return { dir, overlayPosterPath: path.join(dir, `${label}.jpg`), originalPosterPath: path.join(dir, `${label} (Original).jpg`) };
   }
 
