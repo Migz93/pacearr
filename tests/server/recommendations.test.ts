@@ -172,6 +172,7 @@ test("reset and unenrolment are blocked while asynchronous enrollment setup is p
   const restoreFetch = installFetchStub({ seriesById: { 801: fringe } });
   try {
     const enrollment = await services.beginEnrollment(801, { applyBaseline: false, importHistory: false });
+    await assert.rejects(() => services.beginEnrollment(801, { applyBaseline: false, importHistory: false }), /already running/);
     const reset = await services.resetShow(enrollment.rolling.id);
     const remove = await services.removeShow(enrollment.rolling.id);
 
@@ -180,7 +181,7 @@ test("reset and unenrolment are blocked while asynchronous enrollment setup is p
     assert.match(reset.message, /still running/);
     assert.match(remove.message, /still running/);
 
-    await services.completeEnrollment(enrollment.series, enrollment.rolling, { applyBaseline: false, importHistory: false });
+    await services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: false, importHistory: false });
   } finally {
     restoreFetch();
     cleanup();

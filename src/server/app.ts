@@ -450,7 +450,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     };
     const enrollment = await services.beginEnrollment(Number(req.params.seriesId), options);
     res.json({ ok: true, message: `Enrolled ${enrollment.rolling.title}. Setup continues in the background.`, rollingShowId: enrollment.rolling.id });
-    void services.completeEnrollment(enrollment.series, enrollment.rolling, options).catch((error) => {
+    void services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, options).catch((error) => {
       logger.error("Enrollment setup failed after show was enrolled", {
         seriesId: enrollment.series.id,
         rollingShowId: enrollment.rolling.id,

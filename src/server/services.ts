@@ -71,6 +71,7 @@ export class PacearrServices {
   private readonly plexArtwork: PlexArtworkService;
   /** Prevent reset or unenrolment from racing asynchronous enrolment setup. */
   private readonly pendingEnrollments = new Map<number, number>();
+  private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
     this.plexArtwork = new PlexArtworkService(db, logger, dataDir);
@@ -392,18 +393,25 @@ export class PacearrServices {
   }
 
   async beginEnrollment(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean }) {
-    const sonarr = this.getSonarr();
-    const series = await sonarr.getSeriesById(seriesId);
-    const rolling = this.db.upsertRollingShow(series);
-    this.pendingEnrollments.set(seriesId, rolling.id);
-    this.logger.info("Show enrolled in Pacearr control", { seriesId, title: rolling.title, applyBaseline: options.applyBaseline, importHistory: options.importHistory });
-    this.db.removeRecommendationFromCache(seriesId);
-    this.db.addHistory("info", "show.enrolled", series.title, { seriesId });
+    if (this.pendingEnrollments.has(seriesId)) throw new Error("Enrollment setup is already running for this show.");
+    const operation = ++this.nextEnrollmentOperation;
+    this.pendingEnrollments.set(seriesId, operation);
+    try {
+      const sonarr = this.getSonarr();
+      const series = await sonarr.getSeriesById(seriesId);
+      const rolling = this.db.upsertRollingShow(series);
+      this.logger.info("Show enrolled in Pacearr control", { seriesId, title: rolling.title, applyBaseline: options.applyBaseline, importHistory: options.importHistory });
+      this.db.removeRecommendationFromCache(seriesId);
+      this.db.addHistory("info", "show.enrolled", series.title, { seriesId });
 
-    return { series, rolling };
+      return { series, rolling, operation };
+    } catch (error) {
+      if (this.pendingEnrollments.get(seriesId) === operation) this.pendingEnrollments.delete(seriesId);
+      throw error;
+    }
   }
 
-  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
     try {
       let changed = this.reconcileStoredWatchEvents(series, rolling.id);
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
@@ -417,13 +425,13 @@ export class PacearrServices {
       await this.syncPlexArtwork(series, rolling, this.getActiveRetainedSeasons(rolling.id));
       return { ok: true, message: `Enrolled ${rolling.title}.`, changed };
     } finally {
-      if (this.pendingEnrollments.get(series.id) === rolling.id) this.pendingEnrollments.delete(series.id);
+      if (this.pendingEnrollments.get(series.id) === operation) this.pendingEnrollments.delete(series.id);
     }
   }
 
   async enrollShow(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
-    const { series, rolling } = await this.beginEnrollment(seriesId, options);
-    return this.completeEnrollment(series, rolling, options);
+    const { series, rolling, operation } = await this.beginEnrollment(seriesId, options);
+    return this.completeEnrollment(series, rolling, operation, options);
   }
 
   private reconcileStoredWatchEvents(series: SonarrSeries, rollingShowId: number): number {
@@ -481,7 +489,7 @@ export class PacearrServices {
   async removeShow(rollingShowId: number): Promise<RunResult> {
     const show = this.db.getRollingShow(rollingShowId);
     if (!show) return { ok: false, message: "Show is not enrolled." };
-    if (this.pendingEnrollments.get(show.sonarrSeriesId) === show.id) {
+    if (this.pendingEnrollments.has(show.sonarrSeriesId)) {
       return { ok: false, message: `Enrollment setup for ${show.title} is still running. Try again once it finishes.` };
     }
     if (this.isDryRun()) {
@@ -523,7 +531,7 @@ export class PacearrServices {
   async resetShow(rollingShowId: number): Promise<RunResult> {
     const show = this.db.getRollingShow(rollingShowId);
     if (!show) return { ok: false, message: "Show is not enrolled." };
-    if (this.pendingEnrollments.get(show.sonarrSeriesId) === show.id) {
+    if (this.pendingEnrollments.has(show.sonarrSeriesId)) {
       return { ok: false, message: `Enrollment setup for ${show.title} is still running. Try again once it finishes.` };
     }
     const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset");
