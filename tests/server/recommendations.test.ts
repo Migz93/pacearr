@@ -173,9 +173,12 @@ test("reset and unenrolment are blocked while asynchronous enrollment setup is p
   try {
     const enrollment = await services.beginEnrollment(801, { applyBaseline: false, importHistory: false });
     await assert.rejects(() => services.beginEnrollment(801, { applyBaseline: false, importHistory: false }), /already running/);
+    const reconciliation = await services.reconcileRollingShows();
     const reset = await services.resetShow(enrollment.rolling.id);
     const remove = await services.removeShow(enrollment.rolling.id);
 
+    assert.equal(reconciliation.ok, true);
+    assert.equal(reconciliation.changed, 0);
     assert.equal(reset.ok, false);
     assert.equal(remove.ok, false);
     assert.match(reset.message, /still running/);

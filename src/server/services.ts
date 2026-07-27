@@ -914,6 +914,14 @@ export class PacearrServices {
     let changed = 0;
     const errors: string[] = [];
     for (const show of this.db.listRollingShows()) {
+      if (this.pendingEnrollments.has(show.sonarrSeriesId)) {
+        this.logger.info("Skipped reconciliation while enrollment setup is running", {
+          rollingShowId: show.id,
+          seriesId: show.sonarrSeriesId,
+          title: show.title,
+        });
+        continue;
+      }
       try {
         // Refresh persisted progress before planning so historical data fixes
         // are applied to already-enrolled shows as well as new enrolments.
