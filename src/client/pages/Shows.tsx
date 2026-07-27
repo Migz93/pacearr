@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
@@ -75,25 +75,32 @@ function ShowsBrowser() {
 
   useEffect(() => { setView(loadStoredView(tab)); setQuery(""); }, [tab]);
 
+  const activeTabRef = useRef(tab);
+  useEffect(() => { activeTabRef.current = tab; }, [tab]);
+
   async function load(background = false) {
+    const requestedTab = tab;
     if (!background) setLoading(true);
     try {
-      if (tab === "enrolled" || tab === "sonarr") {
-        const response = await apiGet<ShowsResponse>(tab === "enrolled" ? "/api/shows?enrolled=true" : "/api/shows");
+      if (requestedTab === "enrolled" || requestedTab === "sonarr") {
+        const response = await apiGet<ShowsResponse>(requestedTab === "enrolled" ? "/api/shows?enrolled=true" : "/api/shows");
+        if (activeTabRef.current !== requestedTab) return;
         setItems(response.shows.map((data): ShowBrowserItem => ({ kind: "library", data })));
         setRefreshing(response.refreshing);
       } else {
-        const response = await apiGet<RecommendationsResponse>(`/api/recommendations?includeIgnored=${tab === "ignored"}`);
-        const candidates = tab === "ignored" ? response.candidates.filter((candidate) => candidate.ignored) : response.candidates;
+        const response = await apiGet<RecommendationsResponse>(`/api/recommendations?includeIgnored=${requestedTab === "ignored"}`);
+        if (activeTabRef.current !== requestedTab) return;
+        const candidates = requestedTab === "ignored" ? response.candidates.filter((candidate) => candidate.ignored) : response.candidates;
         setItems(candidates.map((data): ShowBrowserItem => ({ kind: "recommendation", data })));
         setIgnoredCount(response.ignoredCount);
         setRefreshing(response.refreshing);
       }
       setError(null);
     } catch (caught) {
+      if (activeTabRef.current !== requestedTab) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setLoading(false);
+      if (activeTabRef.current === requestedTab) setLoading(false);
     }
   }
 
@@ -170,8 +177,8 @@ function ShowsBrowser() {
           <p className="muted">{TAB_SUBTITLES[tab]}</p>
         </div>
         <div className="button-row">
-          <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
-          <button className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshing}>
+          <button type="button" className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
+          <button type="button" className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshing}>
             <RefreshCw size={16} className={loading || refreshing ? "spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
           </button>
         </div>
@@ -180,6 +187,7 @@ function ShowsBrowser() {
       <div className="tab-strip" role="tablist">
         {TABS.map((entry) => (
           <button
+            type="button"
             key={entry.id}
             role="tab"
             aria-selected={tab === entry.id}
@@ -196,10 +204,10 @@ function ShowsBrowser() {
           <input value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
         </div>
         <div className="view-toggle" role="group" aria-label="View mode">
-          <button aria-pressed={view === "poster"} className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
+          <button type="button" aria-pressed={view === "poster"} aria-label="Poster view" className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
             <LayoutGrid size={16} />
           </button>
-          <button aria-pressed={view === "list"} className={view === "list" ? "active" : ""} onClick={() => toggleView("list")} title="List view">
+          <button type="button" aria-pressed={view === "list"} aria-label="List view" className={view === "list" ? "active" : ""} onClick={() => toggleView("list")} title="List view">
             <List size={16} />
           </button>
         </div>
@@ -238,9 +246,9 @@ function ShowsBrowser() {
             Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
           </span>
           <div className="button-row">
-            <button className="secondary-button compact" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+            <button type="button" className="secondary-button compact" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
             <span className="small">Page {safePage} of {pageCount}</span>
-            <button className="secondary-button compact" disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+            <button type="button" className="secondary-button compact" disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
           </div>
         </div>
       )}
@@ -284,10 +292,10 @@ function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
 
   return <div className="modal-backdrop" onClick={onClose}>
     <div className="modal" onClick={(event) => event.stopPropagation()}>
-      <div className="modal-header"><div><h2>Enroll show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+      <div className="modal-header"><div><h2>Enroll show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
       <div className="shows-toolbar"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="error">{error}</div>}
-      {query.trim().length < 2 ? <div className="empty">Enter at least two characters to search Sonarr.</div> : loading ? <div className="empty">Searching Sonarr...</div> : <div className="add-show-results">{shows.map((show) => <div className="add-show-row" key={show.sonarrSeriesId}><div><strong>{show.title}</strong><span>{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button className="primary-button compact" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="empty">No available Sonarr shows match this search.</div>}</div>}
+      {query.trim().length < 2 ? <div className="empty">Enter at least two characters to search Sonarr.</div> : loading ? <div className="empty">Searching Sonarr...</div> : <div className="add-show-results">{shows.map((show) => <div className="add-show-row" key={show.sonarrSeriesId}><div><strong>{show.title}</strong><span>{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className="primary-button compact" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="empty">No available Sonarr shows match this search.</div>}</div>}
     </div>
   </div>;
 }
@@ -296,7 +304,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   const navigate = useNavigate();
   const location = useLocation();
   const returnPath = (location.state as { from?: string } | null)?.from ?? "/shows";
-  const returnTabParam = returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null;
+  const returnTabParam = (returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null) ?? "enrolled";
   const returnLabel = TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
   const [detail, setDetail] = useState<ShowDetailResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -343,25 +351,13 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   }
 
   async function enroll() {
-    setBusy(true);
-    try {
-      const result = await apiPost<RunResult>(`/api/shows/${seriesId}/enroll`, { applyBaseline: true, importHistory: true });
-      setDetail((current) => current && {
-        ...current,
-        show: { ...current.show, enrolled: true, rollingShowId: result.rollingShowId ?? current.show.rollingShowId },
-      });
-      setError(null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBusy(false);
-    }
+    await runAction(() => apiPost<RunResult>(`/api/shows/${seriesId}/enroll`, { applyBaseline: true, importHistory: true }));
   }
 
   if (!detail) {
     return (
       <div className="page">
-        <button className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
         {error ? <div className="error detail-loading-error">{error}</div> : <div className="centered-panel">Loading show...</div>}
       </div>
     );
@@ -372,8 +368,8 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   return (
     <div className="page show-detail-page">
       <div className="show-detail-topbar">
-        <button className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        <button className="secondary-button" onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
+        <button type="button" className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className="secondary-button" onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
       {error && <div className="error">{error}</div>}
       <section className="show-detail-hero">
@@ -403,6 +399,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
             {show.enrolled && show.rollingShowId ? (
               <>
                 <button
+                  type="button"
                   className="secondary-button danger"
                   disabled={busy}
                   title={detail.dryRunPreview.enabled
@@ -413,6 +410,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                   <RotateCcw size={15} /> Reset
                 </button>
                 <button
+                  type="button"
                   className="secondary-button danger"
                   disabled={busy}
                   title="Stops Pacearr from managing this show and removes its stored rolling progress. It does not delete media or undo the show's current Sonarr monitoring state."
@@ -423,11 +421,12 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             ) : (
               <>
-                <button className="primary-button" disabled={busy} onClick={() => void enroll()}>
+                <button type="button" className="primary-button" disabled={busy} onClick={() => void enroll()}>
                   Enroll in rolling episodes
                 </button>
                 {detail.recommendation && (
                   <button
+                    type="button"
                     className="secondary-button"
                     disabled={busy}
                     onClick={() => runAction(() => detail.recommendation!.ignored
@@ -503,7 +502,7 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
   const [open, setOpen] = useState(false);
   return (
     <div className="season-panel">
-      <button className="season-row" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button type="button" className="season-row" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <div>
         <strong>Season {season.seasonNumber}</strong>

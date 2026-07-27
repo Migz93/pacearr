@@ -89,6 +89,8 @@ export function calculateProjectedSavings(
 
   return droppedSeasons.reduce((sum, seasonNumber) => {
     const seasonSize = series.seasons?.find((season) => season.seasonNumber === seasonNumber)?.statistics?.sizeOnDisk ?? 0;
+    // A dropped season still keeps its pilot (episode 1) monitored, so that file's
+    // size isn't actually reclaimed — subtract it out of the season's total.
     const pilot = episodesBySeason.get(seasonNumber)?.find((episode) => episode.episodeNumber === 1);
     const pilotSize = pilot?.episodeFileId ? sizeByFileId.get(pilot.episodeFileId) ?? 0 : 0;
     return sum + Math.max(0, seasonSize - pilotSize);
@@ -208,14 +210,15 @@ export class PacearrServices {
     const query = options.query?.trim().toLowerCase();
     const appSettings = this.db.getAppSettings();
     const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
-    return items.filter(({ series }) =>
+    const matched = items.filter(({ series }) =>
       (!options.enrolledOnly || enrolled.has(series.id)) &&
       (!query || series.title.toLowerCase().includes(query))
-    ).sort((a, b) => a.series.title.localeCompare(b.series.title))
-      .map(({ series, posterUrl }) => {
-        const progress = this.db.listLatestUserProgressForSeries(series.id, cutoff).filter((item) => item.enabled);
-        return this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl, progress);
-      });
+    ).sort((a, b) => a.series.title.localeCompare(b.series.title));
+    const progressBySeries = this.db.listLatestUserProgressForSeriesBatch(matched.map(({ series }) => series.id), cutoff);
+    return matched.map(({ series, posterUrl }) => {
+      const progress = (progressBySeries.get(series.id) ?? []).filter((item) => item.enabled);
+      return this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl, progress);
+    });
   }
 
   async refreshSonarrLibrary(): Promise<void> {
@@ -261,12 +264,12 @@ export class PacearrServices {
 
   async getShowDetail(seriesId: number): Promise<ShowDetailResponse> {
     const sonarr = this.getSonarr();
+    const rolling = this.db.getRollingShowBySeriesId(seriesId);
     const [series, episodes, episodeFiles] = await Promise.all([
       sonarr.getSeriesById(seriesId),
       sonarr.getEpisodes(seriesId),
-      sonarr.getEpisodeFiles(seriesId),
+      rolling ? Promise.resolve<SonarrEpisodeFile[]>([]) : sonarr.getEpisodeFiles(seriesId),
     ]);
-    const rolling = this.db.getRollingShowBySeriesId(series.id);
     const watchStats = this.db.listWatchStatsForSeries(series.id);
     const seasonWatchStats = this.db.listSeasonWatchStatsForSeries(series.id);
     const statsByEpisode = new Map(watchStats.map((stat) => [`${stat.seasonNumber}:${stat.episodeNumber}`, stat]));

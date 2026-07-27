@@ -18,6 +18,7 @@ import type {
   UserRecord,
   WatchEvent,
   ShowRecommendation,
+  ShowUserProgress,
   SonarrLibraryCacheItem,
   DashboardShowActivity,
   PlexArtworkRecord,
@@ -637,6 +638,39 @@ export class PacearrDatabase {
       WHERE ranked_events.row_number = 1
       ORDER BY ranked_events.watched_at DESC, users.display_name
     `).all(...values).map((row: any) => ({ ...row, enabled: bool(row.enabled) }));
+  }
+
+  /** Batched form of listLatestUserProgressForSeries — avoids one query per series when listing an entire library. */
+  listLatestUserProgressForSeriesBatch(sonarrSeriesIds: number[], since?: string): Map<number, ShowUserProgress[]> {
+    if (sonarrSeriesIds.length === 0) return new Map();
+    const placeholders = sonarrSeriesIds.map(() => "?").join(", ");
+    const filter = since ? "AND we.watched_at >= ?" : "";
+    const values = since ? [...sonarrSeriesIds, since] : [...sonarrSeriesIds];
+    const rows = this.db.prepare(`
+      WITH ranked_events AS (
+        SELECT we.sonarr_series_id AS sonarr_series_id, we.user_id, we.season_number, we.episode_number, we.watched_at, we.id,
+          ROW_NUMBER() OVER (
+            PARTITION BY we.sonarr_series_id, we.user_id
+            ORDER BY we.watched_at DESC, we.id DESC
+          ) AS row_number
+        FROM watch_events we
+        WHERE we.sonarr_series_id IN (${placeholders}) AND we.user_id IS NOT NULL ${filter}
+      )
+      SELECT ranked_events.sonarr_series_id AS sonarrSeriesId, users.id AS userId, users.display_name AS displayName,
+        users.avatar_url AS avatarUrl, users.enabled AS enabled, ranked_events.season_number AS seasonNumber,
+        ranked_events.episode_number AS episodeNumber, ranked_events.watched_at AS watchedAt
+      FROM ranked_events
+      JOIN users ON users.id = ranked_events.user_id
+      WHERE ranked_events.row_number = 1
+      ORDER BY ranked_events.watched_at DESC, users.display_name
+    `).all(...values) as Array<ShowUserProgress & { sonarrSeriesId: number; enabled: number | boolean }>;
+
+    const grouped = new Map<number, ShowUserProgress[]>();
+    for (const { sonarrSeriesId, ...row } of rows) {
+      const progress: ShowUserProgress = { ...row, enabled: bool(row.enabled) };
+      grouped.set(sonarrSeriesId, [...(grouped.get(sonarrSeriesId) ?? []), progress]);
+    }
+    return grouped;
   }
 
   listWatchStatsForSeries(sonarrSeriesId: number) {
