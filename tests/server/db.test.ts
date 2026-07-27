@@ -36,8 +36,9 @@ test("rolling progress follows a viewer's most recent watch, even after a rewatc
   try {
     const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null }]);
     const rolling = db.upsertRollingShow({ id: 42, title: "Fringe" });
-    db.upsertRollingUserProgress(rolling.id, user.id, 5, 8, "2025-01-01T10:00:00.000Z");
-    db.upsertRollingUserProgress(rolling.id, user.id, 1, 3, "2026-07-13T10:00:00.000Z");
+    assert.equal(db.upsertRollingUserProgress(rolling.id, user.id, 5, 8, "2025-01-01T10:00:00.000Z"), true);
+    assert.equal(db.upsertRollingUserProgress(rolling.id, user.id, 1, 3, "2026-07-13T10:00:00.000Z"), true);
+    assert.equal(db.upsertRollingUserProgress(rolling.id, user.id, 5, 9, "2025-02-01T10:00:00.000Z"), false);
 
     const progress = db.listProgressForShow(rolling.id)[0];
     assert.equal(progress?.lastWatchedSeason, 1);

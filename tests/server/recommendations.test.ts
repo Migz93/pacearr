@@ -166,6 +166,27 @@ test("enrolling a show seeds rolling progress from watch history that was alread
   }
 });
 
+test("reset and unenrolment are blocked while asynchronous enrollment setup is pending", async () => {
+  const { services, cleanup } = createHarness();
+  const fringe: SonarrSeries = { id: 801, title: "Fringe", year: 2008, seasons: [] };
+  const restoreFetch = installFetchStub({ seriesById: { 801: fringe } });
+  try {
+    const enrollment = await services.beginEnrollment(801, { applyBaseline: false, importHistory: false });
+    const reset = await services.resetShow(enrollment.rolling.id);
+    const remove = await services.removeShow(enrollment.rolling.id);
+
+    assert.equal(reset.ok, false);
+    assert.equal(remove.ok, false);
+    assert.match(reset.message, /still running/);
+    assert.match(remove.message, /still running/);
+
+    await services.completeEnrollment(enrollment.series, enrollment.rolling, { applyBaseline: false, importHistory: false });
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("listRecommendations computes precise per-season savings, excludes enrolled/fully-retained shows, and sorts by savings descending", async () => {
   const { db, services, cleanup } = createHarness();
 

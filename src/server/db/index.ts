@@ -540,9 +540,9 @@ export class PacearrDatabase {
       .run(JSON.stringify(expanded), now(), rollingShowId);
   }
 
-  upsertRollingUserProgress(rollingShowId: number, userId: number, season: number, episode: number, watchedAt: string): RollingShowUserRecord {
+  upsertRollingUserProgress(rollingShowId: number, userId: number, season: number, episode: number, watchedAt: string): boolean {
     const stamp = now();
-    this.db.prepare(`
+    return this.db.prepare(`
       INSERT INTO rolling_show_users (rolling_show_id, user_id, last_watched_season, last_watched_episode, last_watched_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(rolling_show_id, user_id) DO UPDATE SET
@@ -554,8 +554,7 @@ export class PacearrDatabase {
       -- current rolling position is their most recent watch, not their
       -- numerically furthest historical episode.
       WHERE excluded.last_watched_at >= rolling_show_users.last_watched_at
-    `).run(rollingShowId, userId, season, episode, watchedAt, stamp, stamp);
-    return this.getRollingUserProgress(rollingShowId, userId)!;
+    `).run(rollingShowId, userId, season, episode, watchedAt, stamp, stamp).changes > 0;
   }
 
   listProgressForShow(rollingShowId: number): RollingShowUserRecord[] {
