@@ -119,9 +119,22 @@ export class PlexArtworkService {
     if (record.originalPosterPath === originalPosterPath && record.overlayPosterPath === overlayPosterPath) return record;
     fs.mkdirSync(dir, { recursive: true });
     for (const [from, to] of [[record.originalPosterPath, originalPosterPath], [record.overlayPosterPath, overlayPosterPath]] as const) {
+      // A prior attempt may have already moved this file (e.g. it moved one
+      // of the pair, then failed on the other); skip so a retry can't clobber
+      // or re-throw on a file that's already in place.
+      if (fs.existsSync(to)) continue;
       try { fs.renameSync(from, to); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
+    }
+    // Only persist the new paths once both files are confirmed to actually
+    // be there — a missing source (already moved elsewhere, or lost outside
+    // Pacearr) must never leave the database pointing at a canonical path
+    // with nothing behind it. Leaving the record untouched means the next
+    // sync retries the move instead of silently losing track of the file.
+    if (!fs.existsSync(originalPosterPath) || !fs.existsSync(overlayPosterPath)) {
+      this.logger.warn("Plex artwork file missing during folder reorganization; leaving database path unchanged", { rollingShowId: rolling.id, itemType, seasonNumber: item.seasonNumber });
+      return record;
     }
     this.db.updatePlexArtworkPaths(record.id, originalPosterPath, overlayPosterPath);
     this.logger.info("Plex artwork files reorganized into per-show folder", { rollingShowId: rolling.id, itemType, seasonNumber: item.seasonNumber });
