@@ -29,5 +29,6 @@ COPY --chown=node:node --from=build /app/package.json ./package.json
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 RUN mkdir -p /config && chown -R node:node /config
+USER node
 EXPOSE 9302
 CMD ["node", "dist/server/server/index.js"]
