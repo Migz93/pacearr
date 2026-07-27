@@ -424,7 +424,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 <button type="button" className="primary-button" disabled={busy} onClick={() => void enroll()}>
                   Enroll in rolling episodes
                 </button>
-                {detail.recommendation && (
+                {detail.recommendation && (detail.recommendation.eligible || detail.recommendation.ignored) && (
                   <button
                     type="button"
                     className="secondary-button"

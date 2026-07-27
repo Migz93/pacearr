@@ -332,10 +332,17 @@ export class PacearrServices {
     const recommendation = rolling ? null : (() => {
       const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
       const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
+      // Mirrors listRecommendations' eligibility rule — a show only appears (and can be
+      // ignored/restored) on the Recommendations/Ignored tabs if it has seasons to drop
+      // and clears the configured minimum savings threshold. Gates the Ignore control so
+      // it can't persist an ignore record for a show that could never appear there.
+      const minimumSavingsBytes = appSettings.recommendationMinimumSavingsGb * 1024 ** 3;
+      const eligible = droppedSeasons.length > 0 && projectedSavingsBytes >= minimumSavingsBytes;
       return {
         sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
         projectedSavingsBytes,
         ignored: this.db.listIgnoredRecommendationIds().includes(series.id),
+        eligible,
       };
     })();
 

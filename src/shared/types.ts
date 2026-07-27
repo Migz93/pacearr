@@ -266,6 +266,7 @@ export interface ShowDetailResponse {
     sizeOnDiskBytes: number;
     projectedSavingsBytes: number;
     ignored: boolean;
+    eligible: boolean;
   } | null;
 }
 
