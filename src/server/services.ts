@@ -265,10 +265,9 @@ export class PacearrServices {
   async getShowDetail(seriesId: number): Promise<ShowDetailResponse> {
     const sonarr = this.getSonarr();
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    const [series, episodes, episodeFiles] = await Promise.all([
+    const [series, episodes] = await Promise.all([
       sonarr.getSeriesById(seriesId),
       sonarr.getEpisodes(seriesId),
-      rolling ? Promise.resolve<SonarrEpisodeFile[]>([]) : sonarr.getEpisodeFiles(seriesId),
     ]);
     const watchStats = this.db.listWatchStatsForSeries(series.id);
     const seasonWatchStats = this.db.listSeasonWatchStatsForSeries(series.id);
@@ -329,21 +328,24 @@ export class PacearrServices {
       });
 
     const enabledProgress = progress.filter((item) => item.enabled);
-    const recommendation = rolling ? null : (() => {
+    const recommendation = rolling ? null : await (async () => {
       const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
+      const ignored = this.db.listIgnoredRecommendationIds().includes(series.id);
+      const sizeOnDiskBytes = series.statistics?.sizeOnDisk ?? 0;
+      // Mirrors refreshRecommendations: only pay for the episode-files fetch when there's
+      // actually something that could be dropped, instead of on every detail-page load.
+      if (droppedSeasons.length === 0) {
+        return { sizeOnDiskBytes, projectedSavingsBytes: 0, ignored, eligible: false };
+      }
+      const episodeFiles = await sonarr.getEpisodeFiles(seriesId);
       const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
       // Mirrors listRecommendations' eligibility rule — a show only appears (and can be
       // ignored/restored) on the Recommendations/Ignored tabs if it has seasons to drop
       // and clears the configured minimum savings threshold. Gates the Ignore control so
       // it can't persist an ignore record for a show that could never appear there.
       const minimumSavingsBytes = appSettings.recommendationMinimumSavingsGb * 1024 ** 3;
-      const eligible = droppedSeasons.length > 0 && projectedSavingsBytes >= minimumSavingsBytes;
-      return {
-        sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
-        projectedSavingsBytes,
-        ignored: this.db.listIgnoredRecommendationIds().includes(series.id),
-        eligible,
-      };
+      const eligible = projectedSavingsBytes >= minimumSavingsBytes;
+      return { sizeOnDiskBytes, projectedSavingsBytes, ignored, eligible };
     })();
 
     return {

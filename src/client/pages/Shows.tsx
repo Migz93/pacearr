@@ -39,8 +39,13 @@ function viewStorageKey(tab: ShowsTab) {
 }
 
 function loadStoredView(tab: ShowsTab): ViewMode {
-  if (typeof window === "undefined") return "poster";
-  return window.localStorage.getItem(viewStorageKey(tab)) === "list" ? "list" : "poster";
+  // localStorage can throw (private browsing, blocked storage, sandboxed iframes) —
+  // treat the remembered view as a nice-to-have, not something that can break the page.
+  try {
+    return window.localStorage.getItem(viewStorageKey(tab)) === "list" ? "list" : "poster";
+  } catch {
+    return "poster";
+  }
 }
 
 function formatDate(value: string | null) {
@@ -75,6 +80,8 @@ function ShowsBrowser() {
 
   useEffect(() => { setView(loadStoredView(tab)); setQuery(""); }, [tab]);
 
+  // Tracks the tab actually selected right now, independent of `load`'s closure, so a
+  // slow response for a tab the user has since switched away from can't overwrite it.
   const activeTabRef = useRef(tab);
   useEffect(() => { activeTabRef.current = tab; }, [tab]);
 
@@ -141,7 +148,11 @@ function ShowsBrowser() {
 
   function toggleView(nextView: ViewMode) {
     setView(nextView);
-    window.localStorage.setItem(viewStorageKey(tab), nextView);
+    try {
+      window.localStorage.setItem(viewStorageKey(tab), nextView);
+    } catch {
+      // Storage is unavailable — the choice just won't persist across reloads.
+    }
   }
 
   const filtered = useMemo(() => {
@@ -201,7 +212,7 @@ function ShowsBrowser() {
       <div className="shows-toolbar-row">
         <div className="shows-toolbar">
           <Search size={17} />
-          <input value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
+          <input aria-label="Search shows" value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
         </div>
         <div className="view-toggle" role="group" aria-label="View mode">
           <button type="button" aria-pressed={view === "poster"} aria-label="Poster view" className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
@@ -293,7 +304,7 @@ function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
   return <div className="modal-backdrop" onClick={onClose}>
     <div className="modal" onClick={(event) => event.stopPropagation()}>
       <div className="modal-header"><div><h2>Enroll show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
-      <div className="shows-toolbar"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
+      <div className="shows-toolbar"><Search size={17} /><input aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="error">{error}</div>}
       {query.trim().length < 2 ? <div className="empty">Enter at least two characters to search Sonarr.</div> : loading ? <div className="empty">Searching Sonarr...</div> : <div className="add-show-results">{shows.map((show) => <div className="add-show-row" key={show.sonarrSeriesId}><div><strong>{show.title}</strong><span>{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className="primary-button compact" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="empty">No available Sonarr shows match this search.</div>}</div>}
     </div>
