@@ -213,12 +213,11 @@ export class PlexArtworkService {
     // poster width — episode thumbnails are 16:9 and much wider than show
     // and season posters, so a width tied to the image would dwarf the text.
     const maxRectWidth = width - Math.round(width * 0.08);
-    let maxGroupWidth = maxRectWidth - horizontalPadding * 2;
+    const maxGroupWidth = maxRectWidth - horizontalPadding * 2;
     let metrics = await measureGroup(fontSize);
     if (metrics.groupWidth > maxGroupWidth) {
       fontSize = Math.max(12, Math.floor(fontSize * (maxGroupWidth / metrics.groupWidth)));
       horizontalPadding = Math.round(fontSize * 0.9);
-      maxGroupWidth = maxRectWidth - horizontalPadding * 2;
       metrics = await measureGroup(fontSize);
     }
     const { lineHeight, iconSize, iconGap, groupWidth } = metrics;
