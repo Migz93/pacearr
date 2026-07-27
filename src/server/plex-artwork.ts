@@ -26,8 +26,11 @@ function escapeXml(value: string) {
 // Linux and collapses whitespace, so the show's own title can be used
 // directly instead of an opaque id.
 function sanitizeForPath(value: string): string {
-  const cleaned = value.replace(/[\\/:*?"<>|]/g, "").replace(/\s+/g, " ").trim();
-  return cleaned.length > 0 ? cleaned.slice(0, 100) : "untitled";
+  const cleaned = value.replace(/[\\/:*?"<>|\x00-\x1f]/g, "").replace(/\s+/g, " ").trim();
+  // Trailing spaces/dots are invalid on Windows-hosted volumes, and slicing
+  // to the length limit can reintroduce one at the new end of the string.
+  const truncated = cleaned.slice(0, 100).replace(/[ .]+$/, "");
+  return truncated.length > 0 ? truncated : "untitled";
 }
 
 export class PlexArtworkService {
@@ -76,7 +79,11 @@ export class PlexArtworkService {
       try { fs.unlinkSync(filePath); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork backup", { filePath, error: error instanceof Error ? error.message : String(error) });
       }
-      showDirs.add(path.dirname(filePath));
+      const dir = path.dirname(filePath);
+      // Records that predate the per-show folder migration still point at
+      // legacy flat files directly under artworkDir; never treat the
+      // storage root itself as a per-show folder to remove.
+      if (path.resolve(dir) !== path.resolve(this.artworkDir)) showDirs.add(dir);
     }
     // Only removes the per-show folder once it's empty, so files from other
     // still-enrolled shows are never touched.
@@ -199,18 +206,22 @@ export class PlexArtworkService {
       return { lineHeight: lh, textBlockWidth, iconSize, iconGap, groupWidth: iconSize + iconGap + textBlockWidth };
     };
 
-    const horizontalPadding = Math.round(fontSize * 0.9);
+    // Padding must track the *final* font size, so it's recomputed below if
+    // the shrink branch fires.
+    let horizontalPadding = Math.round(fontSize * 0.9);
     // The badge width hugs its content rather than a fixed fraction of the
     // poster width — episode thumbnails are 16:9 and much wider than show
     // and season posters, so a width tied to the image would dwarf the text.
     const maxRectWidth = width - Math.round(width * 0.08);
-    const maxGroupWidth = maxRectWidth - horizontalPadding * 2;
+    let maxGroupWidth = maxRectWidth - horizontalPadding * 2;
     let metrics = await measureGroup(fontSize);
     if (metrics.groupWidth > maxGroupWidth) {
       fontSize = Math.max(12, Math.floor(fontSize * (maxGroupWidth / metrics.groupWidth)));
+      horizontalPadding = Math.round(fontSize * 0.9);
+      maxGroupWidth = maxRectWidth - horizontalPadding * 2;
       metrics = await measureGroup(fontSize);
     }
-    const { lineHeight, textBlockWidth, iconSize, iconGap, groupWidth } = metrics;
+    const { lineHeight, iconSize, iconGap, groupWidth } = metrics;
 
     // The badge height hugs the icon/text block too, with padding
     // proportional to the poster height, instead of a fixed fraction of the
@@ -239,10 +250,19 @@ export class PlexArtworkService {
     await image.composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).jpeg({ quality: 92, mozjpeg: true }).toFile(outputPath);
   }
 
+  // Probe renders are a pure function of (text, font size), and the text
+  // comes from a small constant set (ARTWORK_TEXT), so results are cached
+  // across items and syncs instead of re-rasterizing the same strings.
+  private static readonly textWidthCache = new Map<string, number>();
+
   private async measureTextWidth(line: string, fontSize: number): Promise<number> {
+    const cacheKey = `${fontSize}|${line}`;
+    const cached = PlexArtworkService.textWidthCache.get(cacheKey);
+    if (cached !== undefined) return cached;
     const probeHeight = Math.max(Math.round(fontSize * 1.5), 32);
     const svg = `<svg width="4000" height="${probeHeight}" xmlns="http://www.w3.org/2000/svg"><text x="0" y="${probeHeight / 2}" dominant-baseline="middle" text-anchor="start" fill="white" font-family="DejaVu Sans" font-weight="bold" font-size="${fontSize}" letter-spacing="1">${escapeXml(line)}</text></svg>`;
     const { info } = await sharp(Buffer.from(svg)).trim().toBuffer({ resolveWithObject: true });
+    PlexArtworkService.textWidthCache.set(cacheKey, info.width);
     return info.width;
   }
 
