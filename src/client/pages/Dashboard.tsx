@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Download, HardDrive, PlayCircle, RotateCcw, ShieldAlert, UsersRound } from "lucide-react";
+import { Download, HardDrive, PlayCircle, ShieldAlert, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { apiGet, apiPost } from "../lib/api";
 import { formatBytes, formatRelativeTime } from "../lib/utils";

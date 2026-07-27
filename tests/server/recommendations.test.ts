@@ -403,7 +403,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
 });
 
 test("ignored recommendations are persistent, hidden by default, and can be restored", async () => {
-  const { db, services, cleanup } = createHarness();
+  const { services, cleanup } = createHarness();
   const show: SonarrSeries = {
     id: 900,
     title: "Never Watching",
