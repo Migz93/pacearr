@@ -85,6 +85,7 @@ export interface AppSettings {
   inactivityResetDays: number;
   autoResetEnabled: boolean;
   progressiveCleanupEnabled: boolean;
+  progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;
   recommendationMinimumSavingsGb: number;
   trustProxy: boolean;

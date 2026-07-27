@@ -311,6 +311,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
+    if (body.progressiveCleanupDelayDays !== undefined) patch.progressiveCleanupDelayDays = Math.max(0, Math.floor(Number(body.progressiveCleanupDelayDays) || 0));
     if (body.recommendationMinimumSavingsGb !== undefined) {
       patch.recommendationMinimumSavingsGb = Math.max(0, Number(body.recommendationMinimumSavingsGb) || 0);
     }

@@ -70,7 +70,27 @@ test("dry-run mode is enabled by default and live cleanup deletion cannot be dis
     db.setSetting("app", { cleanupDeletesFiles: false });
     assert.equal(db.getAppSettings().dryRun, true);
     assert.equal(db.getAppSettings().cleanupDeletesFiles, true);
+    assert.equal(db.getAppSettings().progressiveCleanupDelayDays, 7);
     assert.equal(db.updateAppSettings({ cleanupDeletesFiles: false }).cleanupDeletesFiles, true);
+    assert.equal(db.updateAppSettings({ progressiveCleanupDelayDays: 3 }).progressiveCleanupDelayDays, 3);
+  } finally {
+    cleanup();
+  }
+});
+
+test("season inactivity timestamps persist until a viewer returns or the season is cleaned", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const show = db.upsertRollingShow({ id: 7, title: "Severance", tvdbId: 371980, year: 2022 });
+    db.markSeasonInactive(show.id, 1, "2026-04-01T10:00:00.000Z");
+    // A later observation must not restart a retention period already in progress.
+    db.markSeasonInactive(show.id, 1, "2026-04-03T10:00:00.000Z");
+    assert.equal(db.getSeasonInactiveSince(show.id, 1), "2026-04-01T10:00:00.000Z");
+    db.clearSeasonInactivity(show.id, 1);
+    assert.equal(db.getSeasonInactiveSince(show.id, 1), null);
+    db.markSeasonInactive(show.id, 1, "2026-04-04T10:00:00.000Z");
+    db.removeExpandedSeason(show.id, 1);
+    assert.equal(db.getSeasonInactiveSince(show.id, 1), null);
   } finally {
     cleanup();
   }
