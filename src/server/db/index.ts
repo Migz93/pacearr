@@ -500,6 +500,11 @@ export class PacearrDatabase {
       .run(overlaySha256, renderVersion, now(), id);
   }
 
+  updatePlexArtworkPaths(id: number, originalPosterPath: string, overlayPosterPath: string): void {
+    this.db.prepare("UPDATE plex_artwork SET original_poster_path = ?, overlay_poster_path = ?, updated_at = ? WHERE id = ?")
+      .run(originalPosterPath, overlayPosterPath, now(), id);
+  }
+
   listRollingShows(): RollingShowRecord[] {
     return (this.db.prepare("SELECT * FROM rolling_shows ORDER BY title").all() as any[]).map(rollingShowFromRow);
   }
