@@ -48,10 +48,12 @@ function installFetchStub(routes: {
   seriesById?: Record<number, SonarrSeries>;
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
+  requests?: Array<{ method: string; pathname: string }>;
 }) {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") return emptyPlexHistoryXml();
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -67,6 +69,7 @@ function installFetchStub(routes: {
       const seriesId = Number(url.searchParams.get("seriesId"));
       return jsonResponse(routes.episodeFilesBySeries?.[seriesId] ?? []);
     }
+    if ((init?.method ?? "GET").toUpperCase() !== "GET") return jsonResponse({});
     throw new Error(`Unhandled fetch in test: ${url.toString()}`);
   }) as typeof fetch;
   return () => { globalThis.fetch = originalFetch; };
@@ -97,6 +100,90 @@ test("watch events for non-enrolled shows are matched against the full Sonarr li
     await services.importHistory();
 
     assert.equal(db.listUnmatchedWatchEvents().length, 0);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+function rollingSeries(id: number): SonarrSeries {
+  return {
+    id,
+    title: "Delay Test",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+}
+
+function rollingEpisodes(id: number): SonarrEpisode[] {
+  return [
+    { id: id * 10 + 1, seriesId: id, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: id * 100 + 1 },
+    { id: id * 10 + 2, seriesId: id, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: id * 100 + 2 },
+  ];
+}
+
+test("rolling reconciliation waits for the default seven-day inactivity delay", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(901);
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 901: series }, episodesBySeries: { 901: rollingEpisodes(901) }, episodeFilesBySeries: { 901: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const rolling = db.upsertRollingShow({ id: 901, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString());
+
+    await services.reconcileRollingShows();
+
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+    assert.equal(requests.some((request) => request.method === "DELETE"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("rolling reconciliation honours a custom delay and immediate cleanup at zero", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(902);
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 902: series }, episodesBySeries: { 902: rollingEpisodes(902) }, episodeFilesBySeries: { 902: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
+    const rolling = db.upsertRollingShow({ id: 902, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString());
+    await services.reconcileRollingShows();
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+
+    db.updateAppSettings({ progressiveCleanupDelayDays: 0 });
+    await services.reconcileRollingShows();
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, []);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90202")), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a returning active viewer clears an inactive season's cleanup timer", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(903);
+  const restoreFetch = installFetchStub({ seriesById: { 903: series }, episodesBySeries: { 903: rollingEpisodes(903) }, episodeFilesBySeries: { 903: [] } });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-delay", plexAccountId: "delay", tautulliUserId: null, username: "delay", displayName: "Delay", avatarUrl: null }]);
+    db.updateUser(user.id, { enabled: true, tautulliUserId: null });
+    const rolling = db.upsertRollingShow({ id: 903, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.upsertRollingUserProgress(rolling.id, user.id, 1, 2, new Date().toISOString());
+
+    await services.reconcileRollingShows();
+
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+    assert.equal(db.getSeasonInactiveSince(rolling.id, 1), null);
   } finally {
     restoreFetch();
     cleanup();

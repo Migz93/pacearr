@@ -191,7 +191,10 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       </div>
       <div className="settings-divider"><span>Cleanup</span></div>
       <ToggleField label="Progressive cleanup" hint="While processing new watch activity, Pacearr can return older expanded seasons to pilot-only monitoring once every enabled viewer has moved beyond them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
-      <p className="field-hint">Every six hours, Pacearr reconciles every enrolled show with current enabled-viewer progress. In live mode it unmonitors and permanently deletes non-pilot episodes that are no longer needed; Dry Run is the safety boundary for previewing those actions.</p>
+      <Field label="Inactive-season cleanup delay (days)" hint="Wait this long after an expanded season has no active viewers before returning it to pilot-only. Set to 0 for immediate cleanup.">
+        <input type="number" min={0} step={1} value={form.progressiveCleanupDelayDays} onChange={(event) => setForm({ ...form, progressiveCleanupDelayDays: Number(event.target.value) })} />
+      </Field>
+      <p className="field-hint">Every six hours, Pacearr reconciles every enrolled show with current enabled-viewer progress and inactivity delays. In live mode it unmonitors and permanently deletes non-pilot episodes that are no longer needed; Dry Run is the safety boundary for previewing those actions.</p>
       <ToggleField label="Trust proxy" hint="Enable when Pacearr is behind a reverse proxy. Requires a container restart." checked={form.trustProxy} onChange={(value) => setForm({ ...form, trustProxy: value })} />
       <SaveBar saving={saving} success={success} error={error} label="Save General" onSave={() => void save()} />
     </SectionCard>

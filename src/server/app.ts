@@ -6,7 +6,7 @@ import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
-import { PacearrDatabase } from "./db/index.js";
+import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration } from "./integrations/tautulli.js";
@@ -311,6 +311,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
+    if (body.progressiveCleanupDelayDays !== undefined) {
+      const delayDays = Number(body.progressiveCleanupDelayDays);
+      patch.progressiveCleanupDelayDays = Math.max(0, Math.floor(Number.isFinite(delayDays) ? delayDays : DEFAULT_APP_SETTINGS.progressiveCleanupDelayDays));
+    }
     if (body.recommendationMinimumSavingsGb !== undefined) {
       patch.recommendationMinimumSavingsGb = Math.max(0, Number(body.recommendationMinimumSavingsGb) || 0);
     }

@@ -29,7 +29,7 @@ import { runMigrations } from "./migrations.js";
 
 const now = () => new Date().toISOString();
 
-const DEFAULT_APP_SETTINGS: AppSettings = {
+export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
@@ -38,6 +38,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   inactivityResetDays: 7,
   autoResetEnabled: true,
   progressiveCleanupEnabled: true,
+  progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
   recommendationMinimumSavingsGb: 50,
   trustProxy: false,
@@ -524,12 +525,20 @@ export class PacearrDatabase {
 
   resetExpandedSeasons(rollingShowId: number): void {
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
+    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
   }
 
   replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): void {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
+    if (expanded.length === 0) {
+      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+    } else {
+      this.db.prepare(`DELETE FROM rolling_season_inactivity
+        WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
+        .run(rollingShowId, ...expanded);
+    }
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
@@ -538,6 +547,28 @@ export class PacearrDatabase {
     const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
+    this.clearSeasonInactivity(rollingShowId, seasonNumber);
+  }
+
+  getSeasonInactiveSince(rollingShowId: number, seasonNumber: number): string | null {
+    const row = this.db.prepare(`
+      SELECT inactive_since AS inactiveSince FROM rolling_season_inactivity
+      WHERE rolling_show_id = ? AND season_number = ?
+    `).get(rollingShowId, seasonNumber) as { inactiveSince: string } | undefined;
+    return row?.inactiveSince ?? null;
+  }
+
+  markSeasonInactive(rollingShowId: number, seasonNumber: number, inactiveSince: string): void {
+    this.db.prepare(`
+      INSERT INTO rolling_season_inactivity (rolling_show_id, season_number, inactive_since)
+      VALUES (?, ?, ?)
+      ON CONFLICT(rolling_show_id, season_number) DO NOTHING
+    `).run(rollingShowId, seasonNumber, inactiveSince);
+  }
+
+  clearSeasonInactivity(rollingShowId: number, seasonNumber: number): void {
+    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ? AND season_number = ?")
+      .run(rollingShowId, seasonNumber);
   }
 
   upsertRollingUserProgress(rollingShowId: number, userId: number, season: number, episode: number, watchedAt: string): boolean {

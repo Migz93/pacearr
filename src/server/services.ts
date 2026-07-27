@@ -571,6 +571,57 @@ export class PacearrServices {
       .sort((a, b) => a - b);
   }
 
+  /**
+   * Returns the seasons that must remain expanded while recording when older
+   * seasons first became inactive. A season with no recorded active viewer is
+   * deliberately timed from this first evaluation; we cannot safely infer a
+   * prior transition for legacy enrolments that predate this tracking.
+   */
+  private getCleanupRetention(rolling: RollingShowRecord, inactiveSince = new Date()): { retainedSeasons: number[]; eligibleForCleanup: number[] } {
+    const settings = this.db.getAppSettings();
+    const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    const activeProgress = this.db.listProgressForShow(rolling.id).filter((progress) =>
+      progress.lastWatchedSeason > 0 &&
+      this.db.getUser(progress.userId)?.enabled &&
+      new Date(progress.lastWatchedAt).getTime() >= cutoff
+    );
+    const retained = new Set(this.getActiveRetainedSeasons(rolling.id));
+    const eligibleForCleanup: number[] = [];
+    const delayMs = settings.progressiveCleanupDelayDays * 24 * 60 * 60 * 1000;
+
+    for (const seasonNumber of rolling.expandedSeasons) {
+      // A viewer who has not yet progressed beyond this season still needs it,
+      // even when their current season is earlier than the candidate season.
+      const hasActiveViewer = activeProgress.some((progress) => progress.lastWatchedSeason <= seasonNumber);
+      if (hasActiveViewer) {
+        if (this.db.getSeasonInactiveSince(rolling.id, seasonNumber)) {
+          this.db.clearSeasonInactivity(rolling.id, seasonNumber);
+          this.logger.info("Expanded season inactivity timer cleared by returning viewer", {
+            rollingShowId: rolling.id,
+            seriesId: rolling.sonarrSeriesId,
+            title: rolling.title,
+            seasonNumber,
+          });
+        }
+        retained.add(seasonNumber);
+        continue;
+      }
+
+      const recordedInactiveSince = this.db.getSeasonInactiveSince(rolling.id, seasonNumber);
+      const startedAt = recordedInactiveSince ?? inactiveSince.toISOString();
+      if (!recordedInactiveSince) {
+        this.db.markSeasonInactive(rolling.id, seasonNumber, startedAt);
+        this.logger.info("Expanded season became inactive", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title, seasonNumber, inactiveSince: startedAt, cleanupDelayDays: settings.progressiveCleanupDelayDays });
+      }
+      if (!settings.progressiveCleanupEnabled || inactiveSince.getTime() - new Date(startedAt).getTime() < delayMs) {
+        retained.add(seasonNumber);
+      } else {
+        eligibleForCleanup.push(seasonNumber);
+      }
+    }
+    return { retainedSeasons: [...retained].sort((a, b) => a - b), eligibleForCleanup };
+  }
+
   private async applyActiveViewerPlan(seriesId: number, reason: string): Promise<number> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
     return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : []);
@@ -625,6 +676,14 @@ export class PacearrServices {
       fileIds: plan.filesToDelete,
     });
 
+    const cleanupEpisodes = plan.filesToDelete.map((fileId) => {
+      const episode = episodes.find((item) => item.episodeFileId === fileId);
+      return episode ? { seasonNumber: episode.seasonNumber, episodeNumber: episode.episodeNumber } : null;
+    }).filter((episode): episode is { seasonNumber: number; episodeNumber: number } => episode !== null);
+    if (reason === "scheduled-reconcile" && cleanupEpisodes.length > 0) {
+      this.logger.info("Scheduled reconciliation repairing inactive season episodes", { seriesId, title: series.title, cleanupEpisodes, dryRun: settings.dryRun });
+    }
+
     if (searchAllPilots) await sonarr.searchEpisodes(plan.pilotSearches.map((episode) => episode.id));
     // Reconciliation does not repeatedly search healthy pilots. It only starts
     // a season search when new viewer progress made that season required.
@@ -648,6 +707,7 @@ export class PacearrServices {
       unmonitored: plan.episodesToUnmonitor.length,
       deletedFiles: plan.filesToDelete.length,
       reclaimedBytes,
+      cleanupEpisodes,
     });
     if (!dryRun && rolling) this.db.replaceExpandedSeasons(rolling.id, plan.retainedSeasons);
     if (rolling) await this.syncPlexArtwork(series, rolling, plan.retainedSeasons);
@@ -724,7 +784,7 @@ export class PacearrServices {
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
     if (operation === null) return { inserted: true, changed: false };
     try {
-      await this.performProgressiveCleanup(rolling.id, input.seasonNumber);
+      await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       if (input.episodeNumber === 1 && input.seasonNumber > 0) {
         return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel) };
       }
@@ -766,20 +826,15 @@ export class PacearrServices {
     return { changed: updates.length + filesToDelete.length, reclaimedBytes };
   }
 
-  private async performProgressiveCleanup(rollingShowId: number, currentSeason: number): Promise<void> {
+  private async performProgressiveCleanup(rollingShowId: number, currentSeason: number, observedAt = new Date()): Promise<void> {
     const settings = this.db.getAppSettings();
-    if (!settings.progressiveCleanupEnabled || currentSeason <= 1) return;
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return;
-    const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
-    const activeProgress = this.db.listProgressForShow(rollingShowId).filter((progress) =>
-      this.db.getUser(progress.userId)?.enabled && new Date(progress.lastWatchedAt).getTime() >= cutoff
-    );
-    for (const season of rolling.expandedSeasons.filter((expanded) => expanded < currentSeason)) {
-      const someoneStillThere = activeProgress.some((progress) => progress.lastWatchedSeason <= season);
-      if (someoneStillThere) continue;
+    const { eligibleForCleanup } = this.getCleanupRetention(rolling, observedAt);
+    if (!settings.progressiveCleanupEnabled) return;
+    for (const season of eligibleForCleanup.filter((season) => season < currentSeason)) {
       const result = await this.cleanupSeasonToPilot(rolling.sonarrSeriesId, rolling.id, season);
-      this.db.addHistory("info", "cleanup.progressive", rolling.title, { seasonNumber: season, ...result });
+      this.db.addHistory("info", "cleanup.progressive", rolling.title, { seasonNumber: season, reason: "inactive-delay-elapsed", ...result });
     }
   }
 
@@ -949,8 +1004,11 @@ export class PacearrServices {
         // Refresh persisted progress before planning so historical data fixes
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
-        const retainedSeasons = this.getActiveRetainedSeasons(show.id);
+        const { retainedSeasons, eligibleForCleanup } = this.getCleanupRetention(show);
         changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false);
+        if (eligibleForCleanup.length > 0) {
+          this.logger.info("Scheduled reconciliation applied inactive-season cleanup", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, eligibleForCleanup });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`${show.title}: ${message}`);
