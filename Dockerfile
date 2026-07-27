@@ -15,7 +15,7 @@ RUN npm run build
 
 FROM node:22-trixie-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV PORT=9302
