@@ -5,7 +5,6 @@ import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
 import Dashboard from "./pages/Dashboard";
 import Shows from "./pages/Shows";
-import Recommendations from "./pages/Recommendations";
 import Users from "./pages/Users";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
@@ -66,7 +65,7 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/shows" element={<Shows />} />
         <Route path="/shows/:seriesId" element={<Shows />} />
-        <Route path="/recommendations" element={<Recommendations />} />
+        <Route path="/recommendations" element={<Navigate to="/shows?tab=recommendations" replace />} />
         <Route path="/users" element={<Users />} />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings onSaved={refresh} />} />

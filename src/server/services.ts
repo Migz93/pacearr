@@ -7,6 +7,7 @@ import type {
   ShowListItem,
   ShowRecommendation,
   ShowSeasonSummary,
+  ShowUserProgress,
   SonarrEpisode,
   SonarrEpisodeFile,
   SonarrLibraryCacheItem,
@@ -65,6 +66,35 @@ export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpiso
         ).map((episode) => episode.episodeFileId!)
       : [],
   };
+}
+
+export function getDroppedSeasons(series: SonarrSeries, retainedSeasons: number[]): number[] {
+  const retained = new Set(retainedSeasons);
+  return (series.seasons ?? [])
+    .map((season) => season.seasonNumber)
+    .filter((seasonNumber) => seasonNumber > 0 && !retained.has(seasonNumber));
+}
+
+export function calculateProjectedSavings(
+  series: SonarrSeries,
+  episodes: SonarrEpisode[],
+  episodeFiles: SonarrEpisodeFile[],
+  droppedSeasons: number[]
+): number {
+  const sizeByFileId = new Map(episodeFiles.map((file) => [file.id, file.size]));
+  const episodesBySeason = new Map<number, SonarrEpisode[]>();
+  for (const episode of episodes) {
+    episodesBySeason.set(episode.seasonNumber, [...(episodesBySeason.get(episode.seasonNumber) ?? []), episode]);
+  }
+
+  return droppedSeasons.reduce((sum, seasonNumber) => {
+    const seasonSize = series.seasons?.find((season) => season.seasonNumber === seasonNumber)?.statistics?.sizeOnDisk ?? 0;
+    // A dropped season still keeps its pilot (episode 1) monitored, so that file's
+    // size isn't actually reclaimed — subtract it out of the season's total.
+    const pilot = episodesBySeason.get(seasonNumber)?.find((episode) => episode.episodeNumber === 1);
+    const pilotSize = pilot?.episodeFileId ? sizeByFileId.get(pilot.episodeFileId) ?? 0 : 0;
+    return sum + Math.max(0, seasonSize - pilotSize);
+  }, 0);
 }
 
 export class PacearrServices {
@@ -178,13 +208,17 @@ export class PacearrServices {
     const items = this.db.getSonarrLibraryCache()?.items ?? [];
     const enrolled = new Map(this.db.listRollingShows().map((show) => [show.sonarrSeriesId, show]));
     const query = options.query?.trim().toLowerCase();
-    return items.filter(({ series }) =>
+    const appSettings = this.db.getAppSettings();
+    const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
+    const matched = items.filter(({ series }) =>
       (!options.enrolledOnly || enrolled.has(series.id)) &&
       (!query || series.title.toLowerCase().includes(query))
-    ).sort((a, b) => a.series.title.localeCompare(b.series.title))
-      .map(({ series, posterUrl }) =>
-        this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl)
-      );
+    ).sort((a, b) => a.series.title.localeCompare(b.series.title));
+    const progressBySeries = this.db.listLatestUserProgressForSeriesBatch(matched.map(({ series }) => series.id), cutoff);
+    return matched.map(({ series, posterUrl }) => {
+      const progress = (progressBySeries.get(series.id) ?? []).filter((item) => item.enabled);
+      return this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl, progress);
+    });
   }
 
   async refreshSonarrLibrary(): Promise<void> {
@@ -206,7 +240,8 @@ export class PacearrServices {
   private buildCachedShowListItem(
     series: SonarrSeries,
     rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,
-    posterUrl: string | null
+    posterUrl: string | null,
+    watchers: ShowUserProgress[] = []
   ): ShowListItem {
     return {
       sonarrSeriesId: series.id,
@@ -222,16 +257,18 @@ export class PacearrServices {
       status: series.status ?? null,
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
+      watcherCount: new Set(watchers.map((item) => item.userId)).size,
+      watchers,
     };
   }
 
   async getShowDetail(seriesId: number): Promise<ShowDetailResponse> {
     const sonarr = this.getSonarr();
+    const rolling = this.db.getRollingShowBySeriesId(seriesId);
     const [series, episodes] = await Promise.all([
       sonarr.getSeriesById(seriesId),
       sonarr.getEpisodes(seriesId),
     ]);
-    const rolling = this.db.getRollingShowBySeriesId(series.id);
     const watchStats = this.db.listWatchStatsForSeries(series.id);
     const seasonWatchStats = this.db.listSeasonWatchStatsForSeries(series.id);
     const statsByEpisode = new Map(watchStats.map((stat) => [`${stat.seasonNumber}:${stat.episodeNumber}`, stat]));
@@ -290,8 +327,29 @@ export class PacearrServices {
         };
       });
 
+    const enabledProgress = progress.filter((item) => item.enabled);
+    const recommendation = rolling ? null : await (async () => {
+      const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
+      const ignored = this.db.listIgnoredRecommendationIds().includes(series.id);
+      const sizeOnDiskBytes = series.statistics?.sizeOnDisk ?? 0;
+      // Mirrors refreshRecommendations: only pay for the episode-files fetch when there's
+      // actually something that could be dropped, instead of on every detail-page load.
+      if (droppedSeasons.length === 0) {
+        return { sizeOnDiskBytes, projectedSavingsBytes: 0, ignored, eligible: false };
+      }
+      const episodeFiles = await sonarr.getEpisodeFiles(seriesId);
+      const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
+      // Mirrors listRecommendations' eligibility rule — a show only appears (and can be
+      // ignored/restored) on the Recommendations/Ignored tabs if it has seasons to drop
+      // and clears the configured minimum savings threshold. Gates the Ignore control so
+      // it can't persist an ignore record for a show that could never appear there.
+      const minimumSavingsBytes = appSettings.recommendationMinimumSavingsGb * 1024 ** 3;
+      const eligible = projectedSavingsBytes >= minimumSavingsBytes;
+      return { sizeOnDiskBytes, projectedSavingsBytes, ignored, eligible };
+    })();
+
     return {
-      show: await this.buildShowListItem(series, rolling, sonarr),
+      show: await this.buildShowListItem(series, rolling, sonarr, enabledProgress),
       seasons,
       episodes: episodeSummaries,
       progress,
@@ -299,6 +357,7 @@ export class PacearrServices {
       dryRunPreview: {
         enabled: appSettings.dryRun,
       },
+      recommendation,
     };
   }
 
@@ -344,25 +403,11 @@ export class PacearrServices {
 
       const episodes = await sonarr.getEpisodes(series.id);
       const plan = calculateRollingPlan(series, episodes, retainedSeasons, true);
-      const retained = new Set(plan.retainedSeasons);
-      const droppedSeasons = (series.seasons ?? [])
-        .map((season) => season.seasonNumber)
-        .filter((seasonNumber) => seasonNumber > 0 && !retained.has(seasonNumber));
+      const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
       if (droppedSeasons.length === 0) return null;
 
       const episodeFiles = await sonarr.getEpisodeFiles(series.id);
-      const sizeByFileId = new Map(episodeFiles.map((file) => [file.id, file.size]));
-      const episodesBySeason = new Map<number, SonarrEpisode[]>();
-      for (const episode of episodes) {
-        episodesBySeason.set(episode.seasonNumber, [...(episodesBySeason.get(episode.seasonNumber) ?? []), episode]);
-      }
-
-      const projectedSavingsBytes = droppedSeasons.reduce((sum, seasonNumber) => {
-        const seasonSize = series.seasons?.find((season) => season.seasonNumber === seasonNumber)?.statistics?.sizeOnDisk ?? 0;
-        const pilot = episodesBySeason.get(seasonNumber)?.find((episode) => episode.episodeNumber === 1);
-        const pilotSize = pilot?.episodeFileId ? sizeByFileId.get(pilot.episodeFileId) ?? 0 : 0;
-        return sum + Math.max(0, seasonSize - pilotSize);
-      }, 0);
+      const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
 
       const show = await this.buildShowListItem(series, null, sonarr);
       const recommendation: ShowRecommendation = {
@@ -1045,7 +1090,12 @@ export class PacearrServices {
     };
   }
 
-  private async buildShowListItem(series: SonarrSeries, rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>, sonarr: SonarrIntegration): Promise<ShowListItem> {
+  private async buildShowListItem(
+    series: SonarrSeries,
+    rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,
+    sonarr: SonarrIntegration,
+    watchers: ShowUserProgress[] = []
+  ): Promise<ShowListItem> {
     const posterUrl = await this.imageCache.ensureSonarrPosterCached(series.id, sonarr.getPosterUrl(series), sonarr.getPosterRequestHeaders(series));
     return {
       sonarrSeriesId: series.id,
@@ -1061,6 +1111,8 @@ export class PacearrServices {
       status: series.status ?? null,
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
+      watcherCount: new Set(watchers.map((item) => item.userId)).size,
+      watchers,
     };
   }
 }
