@@ -721,12 +721,15 @@ export class PacearrServices {
     if (!progressUpdated) return { inserted: true, changed: false };
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
-    if (this.activeSeriesOperations.has(input.sonarrSeriesId)) return { inserted: true, changed: false };
-    await this.performProgressiveCleanup(rolling.id, input.seasonNumber);
-    if (input.episodeNumber === 1 && input.seasonNumber > 0) {
-      return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel) };
-    }
-    return { inserted: true, changed: false };
+    const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
+    if (operation === null) return { inserted: true, changed: false };
+    try {
+      await this.performProgressiveCleanup(rolling.id, input.seasonNumber);
+      if (input.episodeNumber === 1 && input.seasonNumber > 0) {
+        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel) };
+      }
+      return { inserted: true, changed: false };
+    } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
   private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number): Promise<{ changed: number; reclaimedBytes: number }> {
@@ -874,16 +877,17 @@ export class PacearrServices {
     // expansion state. Reconcile from active progress so enabling live mode
     // later still expands seasons whose original events are now duplicates.
     if (!full) for (const rolling of this.db.listRollingShows()) {
-      if (this.activeSeriesOperations.has(rolling.sonarrSeriesId)) continue;
-      const retainedSeasons = this.getActiveRetainedSeasons(rolling.id);
-      for (const seasonNumber of retainedSeasons.filter((season) => !rolling.expandedSeasons.includes(season))) {
-        const progress = this.db.listProgressForShow(rolling.id)
-          .filter((item) => item.lastWatchedSeason === seasonNumber)
-          .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt))[0];
-        if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile")) {
-          changed++;
+      const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
+      if (operation === null) continue;
+      try {
+        const retainedSeasons = this.getActiveRetainedSeasons(rolling.id);
+        for (const seasonNumber of retainedSeasons.filter((season) => !rolling.expandedSeasons.includes(season))) {
+          const progress = this.db.listProgressForShow(rolling.id)
+            .filter((item) => item.lastWatchedSeason === seasonNumber)
+            .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt))[0];
+          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile")) changed++;
         }
-      }
+      } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
     }
 
     const action = full ? "history.full_reconcile" : "history.import";
