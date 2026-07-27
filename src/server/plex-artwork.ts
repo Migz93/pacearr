@@ -87,7 +87,12 @@ export class PlexArtworkService {
     }
     // Only removes the per-show folder once it's empty, so files from other
     // still-enrolled shows are never touched.
-    for (const dir of showDirs) try { fs.rmdirSync(dir); } catch { /* not empty, or already gone */ }
+    for (const dir of showDirs) {
+      try { fs.rmdirSync(dir); } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOTEMPTY" && code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork show folder", { dir, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   }
 
   // The show's own title/id names its folder, and each file is named after
