@@ -31,6 +31,37 @@ test("rolling show enrollment is idempotent by Sonarr series id", () => {
   }
 });
 
+test("rolling progress follows a viewer's most recent watch, even after a rewatch starts in an earlier season", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 42, title: "Fringe" });
+    db.upsertRollingUserProgress(rolling.id, user.id, 5, 8, "2025-01-01T10:00:00.000Z");
+    db.upsertRollingUserProgress(rolling.id, user.id, 1, 3, "2026-07-13T10:00:00.000Z");
+
+    const progress = db.listProgressForShow(rolling.id)[0];
+    assert.equal(progress?.lastWatchedSeason, 1);
+    assert.equal(progress?.lastWatchedEpisode, 3);
+    assert.equal(progress?.lastWatchedAt, "2026-07-13T10:00:00.000Z");
+
+    db.insertWatchEvent({
+      source: "plex-history", sourceEventId: "old", userId: user.id, plexAccountId: "1", username: "alice",
+      sonarrSeriesId: 42, showTitle: "Fringe", seasonNumber: 5, episodeNumber: 8,
+      watchedAt: "2025-01-01T10:00:00.000Z", rawPayload: {},
+    });
+    db.insertWatchEvent({
+      source: "plex-history", sourceEventId: "recent", userId: user.id, plexAccountId: "1", username: "alice",
+      sonarrSeriesId: 42, showTitle: "Fringe", seasonNumber: 1, episodeNumber: 3,
+      watchedAt: "2026-07-13T10:00:00.000Z", rawPayload: {},
+    });
+    const latest = db.listLatestUserProgressForSeries(42)[0];
+    assert.equal(latest?.seasonNumber, 1);
+    assert.equal(latest?.episodeNumber, 3);
+  } finally {
+    cleanup();
+  }
+});
+
 test("dry-run mode is enabled by default and live cleanup deletion cannot be disabled", () => {
   const { db, cleanup } = createDb();
   try {

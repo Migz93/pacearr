@@ -38,3 +38,11 @@ test("rolling plan retains active viewer seasons and resets only other seasons t
   assert.equal(plan.filesToDelete.length, 6);
   assert.equal(plan.filesToDelete.some((id) => id >= 2000 && id < 4000), false);
 });
+
+test("rolling plan does not search monitored episodes that already have files", () => {
+  const downloadedEpisodes = episodes.map((episode) => ({ ...episode, hasFile: true }));
+  const plan = calculateRollingPlan(series, downloadedEpisodes, [2, 3], true);
+
+  assert.deepEqual(plan.pilotSearches, []);
+  assert.deepEqual(plan.seasonSearches, []);
+});

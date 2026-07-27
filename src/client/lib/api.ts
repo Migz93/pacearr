@@ -14,7 +14,9 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
 }
 
 export function apiGet<T>(path: string) {
-  return apiRequest<T>(path);
+  // Detail pages reload immediately after mutations. Do not allow a browser's
+  // HTTP cache to return the pre-mutation representation for that reload.
+  return apiRequest<T>(path, { cache: "no-store" });
 }
 
 export function apiPost<T>(path: string, body?: unknown) {

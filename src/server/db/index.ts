@@ -550,12 +550,10 @@ export class PacearrDatabase {
         last_watched_episode = excluded.last_watched_episode,
         last_watched_at = excluded.last_watched_at,
         updated_at = excluded.updated_at
-      WHERE excluded.last_watched_season > rolling_show_users.last_watched_season
-        OR (excluded.last_watched_season = rolling_show_users.last_watched_season
-          AND excluded.last_watched_episode > rolling_show_users.last_watched_episode)
-        OR (excluded.last_watched_season = rolling_show_users.last_watched_season
-          AND excluded.last_watched_episode = rolling_show_users.last_watched_episode
-          AND excluded.last_watched_at >= rolling_show_users.last_watched_at)
+      -- A viewer can restart a show after reaching a later season. Their
+      -- current rolling position is their most recent watch, not their
+      -- numerically furthest historical episode.
+      WHERE excluded.last_watched_at >= rolling_show_users.last_watched_at
     `).run(rollingShowId, userId, season, episode, watchedAt, stamp, stamp);
     return this.getRollingUserProgress(rollingShowId, userId)!;
   }
@@ -588,37 +586,7 @@ export class PacearrDatabase {
     `).get(rollingShowId, userId) as RollingShowUserRecord | null;
   }
 
-  listLatestUserProgressForSeries(sonarrSeriesId: number) {
-    return this.db.prepare(`
-      WITH ranked_events AS (
-        SELECT
-          user_id,
-          season_number,
-          episode_number,
-          watched_at,
-          ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY watched_at DESC, id DESC) AS row_number
-        FROM watch_events
-        WHERE sonarr_series_id = ? AND user_id IS NOT NULL
-      )
-      SELECT
-        users.id AS userId,
-        users.display_name AS displayName,
-        users.avatar_url AS avatarUrl,
-        users.enabled AS enabled,
-        ranked_events.season_number AS seasonNumber,
-        ranked_events.episode_number AS episodeNumber,
-        ranked_events.watched_at AS watchedAt
-      FROM ranked_events
-      JOIN users ON users.id = ranked_events.user_id
-      WHERE ranked_events.row_number = 1
-      ORDER BY ranked_events.season_number DESC, ranked_events.episode_number DESC, users.display_name
-    `).all(sonarrSeriesId).map((row: any) => ({
-      ...row,
-      enabled: bool(row.enabled),
-    }));
-  }
-
-  listFurthestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
+  listLatestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
     const filter = since ? "AND we.watched_at >= ?" : "";
     const values = since ? [sonarrSeriesId, since] : [sonarrSeriesId];
     return this.db.prepare(`
@@ -626,7 +594,7 @@ export class PacearrDatabase {
         SELECT we.user_id, we.season_number, we.episode_number, we.watched_at, we.id,
           ROW_NUMBER() OVER (
             PARTITION BY we.user_id
-            ORDER BY we.season_number DESC, we.episode_number DESC, we.watched_at DESC, we.id DESC
+            ORDER BY we.watched_at DESC, we.id DESC
           ) AS row_number
         FROM watch_events we
         WHERE we.sonarr_series_id = ? AND we.user_id IS NOT NULL ${filter}
@@ -637,7 +605,7 @@ export class PacearrDatabase {
       FROM ranked_events
       JOIN users ON users.id = ranked_events.user_id
       WHERE ranked_events.row_number = 1
-      ORDER BY ranked_events.season_number DESC, ranked_events.episode_number DESC, users.display_name
+      ORDER BY ranked_events.watched_at DESC, users.display_name
     `).all(...values).map((row: any) => ({ ...row, enabled: bool(row.enabled) }));
   }
 
