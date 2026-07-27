@@ -1,9 +1,47 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Eye, EyeOff, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+} from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
+import { formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
-import type { RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse } from "../../shared/types";
+import { ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
+import type {
+  RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
+} from "../../shared/types";
+
+type ShowsTab = "enrolled" | "recommendations" | "ignored" | "sonarr";
+type ViewMode = "poster" | "list";
+
+const TABS: { id: ShowsTab; label: string }[] = [
+  { id: "enrolled", label: "Enrolled" },
+  { id: "recommendations", label: "Recommendations" },
+  { id: "ignored", label: "Ignored" },
+  { id: "sonarr", label: "Sonarr" },
+];
+
+const TAB_SUBTITLES: Record<ShowsTab, string> = {
+  enrolled: "Shows currently controlled by Pacearr.",
+  recommendations: "Un-enrolled Sonarr shows, ranked by how much disk space enrolling would free up.",
+  ignored: "Recommendations you've chosen to ignore.",
+  sonarr: "Every show in your Sonarr library.",
+};
+
+const PAGE_SIZE = 24;
+
+function isShowsTab(value: string | null): value is ShowsTab {
+  return TABS.some((tab) => tab.id === value);
+}
+
+function viewStorageKey(tab: ShowsTab) {
+  return `pacearr:shows-view:${tab}`;
+}
+
+function loadStoredView(tab: ShowsTab): ViewMode {
+  if (typeof window === "undefined") return "poster";
+  return window.localStorage.getItem(viewStorageKey(tab)) === "list" ? "list" : "poster";
+}
 
 function formatDate(value: string | null) {
   if (!value) return "Never";
@@ -17,23 +55,40 @@ function episodeLabel(seasonNumber: number, episodeNumber: number) {
 export default function Shows() {
   const { seriesId } = useParams();
   if (seriesId) return <ShowDetail seriesId={Number(seriesId)} />;
-  return <ShowGrid />;
+  return <ShowsBrowser />;
 }
 
-function ShowGrid() {
-  const [shows, setShows] = useState<ShowListItem[]>([]);
+function ShowsBrowser() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tab: ShowsTab = isShowsTab(tabParam) ? tabParam : "enrolled";
+  const page = Math.max(1, Math.floor(Number(searchParams.get("page")) || 1));
+
+  const [items, setItems] = useState<ShowBrowserItem[]>([]);
+  const [ignoredCount, setIgnoredCount] = useState(0);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
+
+  useEffect(() => { setView(loadStoredView(tab)); setQuery(""); }, [tab]);
 
   async function load(background = false) {
     if (!background) setLoading(true);
     try {
-      const response = await apiGet<ShowsResponse>("/api/shows?enrolled=true");
-      setShows(response.shows);
-      setRefreshing(response.refreshing);
+      if (tab === "enrolled" || tab === "sonarr") {
+        const response = await apiGet<ShowsResponse>(tab === "enrolled" ? "/api/shows?enrolled=true" : "/api/shows");
+        setItems(response.shows.map((data): ShowBrowserItem => ({ kind: "library", data })));
+        setRefreshing(response.refreshing);
+      } else {
+        const response = await apiGet<RecommendationsResponse>(`/api/recommendations?includeIgnored=${tab === "ignored"}`);
+        const candidates = tab === "ignored" ? response.candidates.filter((candidate) => candidate.ignored) : response.candidates;
+        setItems(candidates.map((data): ShowBrowserItem => ({ kind: "recommendation", data })));
+        setIgnoredCount(response.ignoredCount);
+        setRefreshing(response.refreshing);
+      }
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -42,12 +97,12 @@ function ShowGrid() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [tab]);
   useEffect(() => {
     if (!refreshing) return;
     const timer = setInterval(() => void load(true), 2000);
     return () => clearInterval(timer);
-  }, [refreshing]);
+  }, [refreshing, tab]);
 
   async function refresh() {
     setError(null);
@@ -59,53 +114,134 @@ function ShowGrid() {
     }
   }
 
+  function setTab(nextTab: ShowsTab) {
+    const next = new URLSearchParams(searchParams);
+    if (nextTab === "enrolled") next.delete("tab"); else next.set("tab", nextTab);
+    next.delete("page");
+    setSearchParams(next);
+  }
+
+  function setPage(nextPage: number) {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage <= 1) next.delete("page"); else next.set("page", String(nextPage));
+    setSearchParams(next);
+  }
+
+  function handleQueryChange(value: string) {
+    setQuery(value);
+    setPage(1);
+  }
+
+  function toggleView(nextView: ViewMode) {
+    setView(nextView);
+    window.localStorage.setItem(viewStorageKey(tab), nextView);
+  }
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return shows;
-    return shows.filter((show) => show.title.toLowerCase().includes(normalized));
-  }, [shows, query]);
+    if (!normalized) return items;
+    return items.filter((item) => item.data.title.toLowerCase().includes(normalized));
+  }, [items, query]);
+
+  const totalSavingsBytes = useMemo(
+    () => items.reduce((sum, item) => sum + (item.kind === "recommendation" ? item.data.projectedSavingsBytes : 0), 0),
+    [items]
+  );
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const visibleItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const currentTabUrl = `/shows${searchParams.size > 0 ? `?${searchParams.toString()}` : ""}`;
+  const isRecommendationTab = tab === "recommendations" || tab === "ignored";
+
+  function emptyMessage() {
+    if (refreshing && items.length === 0) return "The Sonarr library is being prepared in the background. This page will update automatically.";
+    if (tab === "enrolled") return "No controlled shows match that search. Use Enroll show to add one from Sonarr.";
+    if (tab === "sonarr") return "No Sonarr shows match that search.";
+    if (tab === "recommendations") return "No recommendations right now — every un-enrolled show would stay fully retained, or every show is already enrolled.";
+    return "No ignored recommendations.";
+  }
 
   return (
     <div className="page shows-page">
       <div className="page-header">
         <div>
           <h1>Shows</h1>
-          <p className="muted">Shows currently controlled by Pacearr.</p>
+          <p className="muted">{TAB_SUBTITLES[tab]}</p>
         </div>
         <div className="button-row">
-          <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Add show</button>
+          <button className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
           <button className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshing}>
             <RefreshCw size={16} className={loading || refreshing ? "spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
           </button>
         </div>
       </div>
       {error && <div className="error">{error}</div>}
-      <div className="shows-toolbar">
-        <Search size={17} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search controlled shows..." />
+      <div className="tab-strip" role="tablist">
+        {TABS.map((entry) => (
+          <button
+            key={entry.id}
+            role="tab"
+            aria-selected={tab === entry.id}
+            className={tab === entry.id ? "active" : ""}
+            onClick={() => setTab(entry.id)}
+          >
+            {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
+          </button>
+        ))}
       </div>
+      <div className="shows-toolbar-row">
+        <div className="shows-toolbar">
+          <Search size={17} />
+          <input value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
+        </div>
+        <div className="view-toggle" role="group" aria-label="View mode">
+          <button aria-pressed={view === "poster"} className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
+            <LayoutGrid size={16} />
+          </button>
+          <button aria-pressed={view === "list"} className={view === "list" ? "active" : ""} onClick={() => toggleView("list")} title="List view">
+            <List size={16} />
+          </button>
+        </div>
+      </div>
+      {isRecommendationTab && !loading && items.length > 0 && (
+        <div className="recommend-stat-row">
+          <div className="recommend-stat"><span>Candidates</span><strong>{items.length}</strong></div>
+          <div className="recommend-stat"><span>Potential Savings</span><strong>{formatBytes(totalSavingsBytes)}</strong></div>
+        </div>
+      )}
       {loading ? (
         <div className="centered-panel">Loading shows...</div>
-      ) : (
+      ) : view === "poster" ? (
         <div className="poster-grid">
-          {filtered.map((show) => (
-            <Link className="poster-card" to={`/shows/${show.sonarrSeriesId}`} key={show.sonarrSeriesId}>
-              <div className="poster-art">
-                <Poster show={show} />
-                <div className="poster-art-gradient" aria-hidden="true" />
-                <div className={`show-state poster-state ${show.enrolled ? "enrolled" : ""}`}>
-                  {show.enrolled ? "Enrolled" : "Review"}
-                </div>
-              </div>
-              <div className="poster-card-copy">
-                <strong>{show.title}</strong>
-                <span>{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"}</span>
-              </div>
-            </Link>
-          ))}
-          {filtered.length === 0 && refreshing
-            ? <div className="empty">The Sonarr library is being prepared in the background. This page will update automatically.</div>
-            : filtered.length === 0 && <div className="empty">No controlled shows match that search. Use Add show to enroll one from Sonarr.</div>}
+          {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
+          {filtered.length === 0 && <div className="empty">{emptyMessage()}</div>}
+        </div>
+      ) : (
+        <div className="recommend-table">
+          {isRecommendationTab ? (
+            <div className="recommend-head">
+              <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Watchers</span><span>Projected savings</span>
+            </div>
+          ) : (
+            <div className="library-head">
+              <span>Show</span><span>Seasons</span><span>Watchers</span>
+            </div>
+          )}
+          {visibleItems.map((item) => <ShowListRow item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
+          {filtered.length === 0 && <div className="empty">{emptyMessage()}</div>}
+        </div>
+      )}
+      {filtered.length > PAGE_SIZE && (
+        <div className="recommend-pagination">
+          <span className="muted small">
+            Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
+          </span>
+          <div className="button-row">
+            <button className="secondary-button compact" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+            <span className="small">Page {safePage} of {pageCount}</span>
+            <button className="secondary-button compact" disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+          </div>
         </div>
       )}
       {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} />}
@@ -148,7 +284,7 @@ function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
 
   return <div className="modal-backdrop" onClick={onClose}>
     <div className="modal" onClick={(event) => event.stopPropagation()}>
-      <div className="modal-header"><div><h2>Add show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+      <div className="modal-header"><div><h2>Enroll show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
       <div className="shows-toolbar"><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="error">{error}</div>}
       {query.trim().length < 2 ? <div className="empty">Enter at least two characters to search Sonarr.</div> : loading ? <div className="empty">Searching Sonarr...</div> : <div className="add-show-results">{shows.map((show) => <div className="add-show-row" key={show.sonarrSeriesId}><div><strong>{show.title}</strong><span>{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button className="primary-button compact" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="empty">No available Sonarr shows match this search.</div>}</div>}
@@ -160,7 +296,8 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   const navigate = useNavigate();
   const location = useLocation();
   const returnPath = (location.state as { from?: string } | null)?.from ?? "/shows";
-  const returnLabel = returnPath.startsWith("/recommendations") ? "Recommendations" : "Shows";
+  const returnTabParam = returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null;
+  const returnLabel = TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
   const [detail, setDetail] = useState<ShowDetailResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -252,9 +389,16 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
             >
               {detail.dryRunPreview.enabled ? "Dry run" : "Live"}
             </span>
+            {detail.recommendation?.ignored && <span className="badge warn">Ignored</span>}
           </div>
           <h1>{show.title}</h1>
           <p className="muted">{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"} · {show.episodeCount} episodes · {show.status ?? "unknown status"}</p>
+          {detail.recommendation && (
+            <div className="recommend-stat-row detail-recommend-stats">
+              <div className="recommend-stat"><span>Size on disk</span><strong>{formatBytes(detail.recommendation.sizeOnDiskBytes)}</strong></div>
+              <div className="recommend-stat"><span>Projected savings if enrolled</span><strong>{formatBytes(detail.recommendation.projectedSavingsBytes)}</strong></div>
+            </div>
+          )}
           <div className="button-row">
             {show.enrolled && show.rollingShowId ? (
               <>
@@ -278,9 +422,23 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 </button>
               </>
             ) : (
-              <button className="primary-button" disabled={busy} onClick={() => void enroll()}>
-                Enroll in rolling episodes
-              </button>
+              <>
+                <button className="primary-button" disabled={busy} onClick={() => void enroll()}>
+                  Enroll in rolling episodes
+                </button>
+                {detail.recommendation && (
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => runAction(() => detail.recommendation!.ignored
+                      ? apiDelete(`/api/recommendations/${seriesId}/ignore`)
+                      : apiPost(`/api/recommendations/${seriesId}/ignore`, { title: show.title }))}
+                  >
+                    {detail.recommendation.ignored ? <RotateCcw size={15} /> : <EyeOff size={15} />}
+                    {detail.recommendation.ignored ? "Restore" : "Ignore"}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

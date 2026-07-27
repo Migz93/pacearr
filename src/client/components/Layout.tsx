@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { History, LayoutDashboard, ListVideo, LogOut, Settings, Sparkles, Users } from "lucide-react";
+import { History, LayoutDashboard, ListVideo, LogOut, Settings, Users } from "lucide-react";
 import { apiGet } from "../lib/api";
 import { getPlexImageSrc } from "../lib/plexImage";
 import type { AboutInfo, SessionUser } from "../../shared/types";
@@ -8,7 +8,6 @@ import type { AboutInfo, SessionUser } from "../../shared/types";
 const nav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/shows", label: "Shows", icon: ListVideo },
-  { to: "/recommendations", label: "Recommendations", icon: Sparkles },
   { to: "/users", label: "Users", icon: Users },
   { to: "/history", label: "History", icon: History },
   { to: "/settings", label: "Settings", icon: Settings },

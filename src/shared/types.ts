@@ -215,6 +215,8 @@ export interface ShowListItem {
   status: string | null;
   seasonCount: number;
   episodeCount: number;
+  watcherCount: number;
+  watchers: ShowUserProgress[];
 }
 
 export interface ShowSeasonSummary {
@@ -260,6 +262,11 @@ export interface ShowDetailResponse {
   dryRunPreview: {
     enabled: boolean;
   };
+  recommendation: {
+    sizeOnDiskBytes: number;
+    projectedSavingsBytes: number;
+    ignored: boolean;
+  } | null;
 }
 
 export interface SonarrLibraryCacheItem {
