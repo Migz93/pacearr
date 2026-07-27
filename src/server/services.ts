@@ -581,7 +581,9 @@ export class PacearrServices {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const activeProgress = this.db.listProgressForShow(rolling.id).filter((progress) =>
-      this.db.getUser(progress.userId)?.enabled && new Date(progress.lastWatchedAt).getTime() >= cutoff
+      progress.lastWatchedSeason > 0 &&
+      this.db.getUser(progress.userId)?.enabled &&
+      new Date(progress.lastWatchedAt).getTime() >= cutoff
     );
     const retained = new Set(this.getActiveRetainedSeasons(rolling.id));
     const eligibleForCleanup: number[] = [];
@@ -592,7 +594,15 @@ export class PacearrServices {
       // even when their current season is earlier than the candidate season.
       const hasActiveViewer = activeProgress.some((progress) => progress.lastWatchedSeason <= seasonNumber);
       if (hasActiveViewer) {
-        this.db.clearSeasonInactivity(rolling.id, seasonNumber);
+        if (this.db.getSeasonInactiveSince(rolling.id, seasonNumber)) {
+          this.db.clearSeasonInactivity(rolling.id, seasonNumber);
+          this.logger.info("Expanded season inactivity timer cleared by returning viewer", {
+            rollingShowId: rolling.id,
+            seriesId: rolling.sonarrSeriesId,
+            title: rolling.title,
+            seasonNumber,
+          });
+        }
         retained.add(seasonNumber);
         continue;
       }

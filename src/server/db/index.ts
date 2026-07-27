@@ -29,7 +29,7 @@ import { runMigrations } from "./migrations.js";
 
 const now = () => new Date().toISOString();
 
-const DEFAULT_APP_SETTINGS: AppSettings = {
+export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
