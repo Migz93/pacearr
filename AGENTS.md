@@ -136,12 +136,12 @@ Pacearr is worked on by two AI agents — Claude and Codex — usually in separa
 
 | Last review was... | Result | Next step |
 |---|---|---|
-| Full | Clean | Branch is cleared to open the applicable PR (step 3, 7, or 8) |
+| Full | Clean | The changeset is cleared to open the applicable PR (step 3, 7, or 8) |
 | Full | Findings | Resolve each finding (see below), then request a **delta review** scoped to just the fix/disposition |
 | Delta | Clean | Automatically request a new **full review** from scratch — a clean delta is never the finish line |
 | Delta | Findings | Resolve each finding (see below), then request another **delta review** |
 
-In words: the first review of a branch is always a full review of the whole diff. From there, keep alternating — a delta review after every round of fixes, and once a delta review comes back clean, immediately trigger one more full review from scratch, offered without being asked, before considering the branch done. Only a **full** review pass coming back clean clears the branch to open a PR; a clean delta review alone is never sufficient on its own. Keep alternating full ⇄ delta-until-clean until a full pass finds nothing new. This catches things a narrow delta view misses (e.g. the same unsafe pattern repeated elsewhere in the codebase) while keeping most rounds cheap.
+In words: the first review of a changeset (a work branch's diff for steps 3/7, or `develop`'s accumulated diff for step 8) is always a full review of the whole diff. From there, keep alternating — a delta review after every round of fixes, and once a delta review comes back clean, immediately trigger one more full review from scratch, offered without being asked, before considering the changeset done. Only a **full** review pass coming back clean clears the changeset to open a PR; a clean delta review alone is never sufficient on its own. Keep alternating full ⇄ delta-until-clean until a full pass finds nothing new. This catches things a narrow delta view misses (e.g. the same unsafe pattern repeated elsewhere in the codebase) while keeping most rounds cheap.
 
 **Resolving a finding:** "findings" doesn't mean every suggestion must be applied as-is. If the implementer agrees, fix it. If the implementer disagrees, it should respond to the reviewer with its reasoning and evidence instead of silently applying (or silently ignoring) the suggestion. The reviewer re-evaluates against that reasoning. If they still disagree after that exchange, surface it to the user for a decision — neither agent unilaterally overrides the other. Whatever the outcome — a code change or a deliberate no-change — send it through the next delta review like any other resolved finding, so the reviewer confirms the final state before the next full pass.
 
