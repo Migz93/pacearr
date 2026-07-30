@@ -126,7 +126,7 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
 
 ### Cross-AI Review Before Opening The PR (Mandatory)
 
-Pacearr is worked on by two AI agents — Claude and Codex — usually in separate chat sessions, with the user relaying messages between them. Before opening any PR — step 3 above, the version-bump PR in step 7, or the release PR in step 8 — every work branch — feature, fix, chore, CI, or docs, matching "the required workflow for all changes" at the top of this flow — must go through a review pass by the *other* agent. This is required, not optional polish: it catches real issues before human review, which substantially cuts down the back-and-forth.
+Pacearr is worked on by two AI agents — Claude and Codex — usually in separate chat sessions, with the user relaying messages between them. Before opening any PR — step 3 above, the version-bump PR in step 7, or the `develop` → `main` release PR in step 8 — the source diff being merged (a work branch's changes for step 3 or 7, or the full set of changes accumulated on `develop` since the last release for step 8) must go through a review pass by the *other* agent. This applies to every kind of change — feature, fix, chore, CI, or docs, matching "the required workflow for all changes" at the top of this flow. This is required, not optional polish: it catches real issues before human review, which substantially cuts down the back-and-forth.
 
 **Roles are relative, not fixed to a specific AI.** Whichever agent wrote the code is "the implementer"; the other agent is "the reviewer." If Codex implemented, Claude reviews, and vice versa — this section applies symmetrically regardless of which agent is reading it right now.
 
