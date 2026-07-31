@@ -22,15 +22,11 @@ const TABS: { id: ShowsTab; label: string }[] = [
   { id: "sonarr", label: "Sonarr" },
 ];
 
-const SORT_OPTIONS: { id: SortMode; label: string }[] = [
-  { id: "title-asc", label: "Name (A → Z)" },
-  { id: "title-desc", label: "Name (Z → A)" },
-  { id: "size-desc", label: "Size (High → Low)" },
-  { id: "size-asc", label: "Size (Low → High)" },
-];
+const SORT_MODES: SortMode[] = ["title-asc", "title-desc", "size-desc", "size-asc"];
 
 // Recommendations/Ignored are led by projected savings (see TAB_SUBTITLES), not raw size on
-// disk, so "Size" sorts by that metric there to match the tab's existing default ordering.
+// disk, so the "size" sort modes rank by that metric there — labeled "Savings" rather than
+// "Size" so the control doesn't imply it matches the "Size on disk" column shown in-list.
 const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
   enrolled: "title-asc",
   sonarr: "title-asc",
@@ -38,8 +34,18 @@ const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
   ignored: "size-desc",
 };
 
+function sortOptionsFor(tab: ShowsTab): { id: SortMode; label: string }[] {
+  const sizeLabel = tab === "recommendations" || tab === "ignored" ? "Savings" : "Size";
+  return [
+    { id: "title-asc", label: "Name (A → Z)" },
+    { id: "title-desc", label: "Name (Z → A)" },
+    { id: "size-desc", label: `${sizeLabel} (High → Low)` },
+    { id: "size-asc", label: `${sizeLabel} (Low → High)` },
+  ];
+}
+
 function isSortMode(value: string | null): value is SortMode {
-  return SORT_OPTIONS.some((option) => option.id === value);
+  return SORT_MODES.includes(value as SortMode);
 }
 
 function sizeOf(item: ShowBrowserItem): number {
@@ -276,7 +282,7 @@ function ShowsBrowser() {
         <div className="shows-sort-toolbar">
           <ArrowUpDown size={16} />
           <select aria-label="Sort shows" value={sort} onChange={(event) => changeSort(event.target.value as SortMode)}>
-            {SORT_OPTIONS.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}
+            {sortOptionsFor(tab).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}
           </select>
         </div>
         <div className="view-toggle" role="group" aria-label="View mode">
