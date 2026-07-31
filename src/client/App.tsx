@@ -78,8 +78,8 @@ export default function App() {
 
 function PlexPopupLoading() {
   return (
-    <div className="centered">
-      <RefreshCw size={28} className="spin" />
+    <div className="centered" role="status" aria-live="polite" aria-label="Opening Plex...">
+      <RefreshCw size={28} className="spin" aria-hidden="true" />
     </div>
   );
 }

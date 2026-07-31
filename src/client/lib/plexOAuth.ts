@@ -71,7 +71,9 @@ export class PlexOAuth {
     // The user may close the popup manually before the token arrives (or, now that the
     // popup closes itself once Plex confirms auth, the close can simply be observed before
     // this loop's next tick). Allow a few extra polls after detecting closure before giving
-    // up, in case the Plex API response is slightly delayed.
+    // up, in case the Plex API response is slightly delayed. Grace polls don't consume the
+    // main attempts budget, so a popup closing near attempt 180 still gets the full grace
+    // period instead of being cut off by the outer timeout.
     let gracePollsLeft = 5;
     for (let attempts = 0; attempts < 180; attempts++) {
       const response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
@@ -84,6 +86,7 @@ export class PlexOAuth {
       if (this.popup?.closed) {
         if (gracePollsLeft <= 0) throw new Error("Plex login popup was closed before authorization completed.");
         gracePollsLeft -= 1;
+        attempts -= 1;
       }
       await wait(1000);
     }
