@@ -46,22 +46,41 @@ if [ "$current_uid" = "0" ]; then
   fi
   export DATA_DIR
   mkdir -p "$DATA_DIR"
-  # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
-  # recurses via fts()/openat-relative syscalls against already-opened
-  # directory file descriptors, so a parent directory swapped for a symlink
-  # mid-walk can't redirect a later chown outside DATA_DIR the way
-  # re-resolving each path string (as `find -exec` does) could.
-  # -h is still required: without it, chown follows a symlink to its target,
-  # so a symlink under DATA_DIR pointing outside it would let this root-run
-  # repair change ownership of an arbitrary file elsewhere on the
-  # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
-  # but does not traverse into it, so contents outside DATA_DIR are
-  # untouched either way.)
-  # -P (GNU's default for -R, spelled out here rather than relied on) means
-  # a directory symlink is re-owned like any other entry but never walked
-  # into — reinforcing that -h can't be defeated by nesting the escape one
-  # level deeper via a symlinked subdirectory.
-  chown -R -P -h node:node "$DATA_DIR"
+  # Skip the recursive repair once it's already done, rather than walking
+  # the whole tree unconditionally on every start. chown -R always chowns
+  # the directory argument itself as part of the same operation, so
+  # DATA_DIR only ends up node-owned after a full repair has completed —
+  # that reliably distinguishes "never repaired" (a fresh bind mount, or an
+  # existing directory from an old root-run container: the two cases this
+  # fix actually needs to handle) from "already repaired" (every restart
+  # after the first), without re-walking a potentially large image cache /
+  # log / database tree on every start. It does not re-verify every nested
+  # entry once the top level looks correct, so a file dropped into DATA_DIR
+  # out-of-band as root after a prior successful repair (e.g. a manual
+  # host-side copy) won't be caught until ownership is reset — that's an
+  # app-level write failure on that one file, not a security gap, since
+  # skipping this step never causes us to touch anything we otherwise
+  # wouldn't have.
+  current_data_dir_owner="$(stat -c '%u:%g' "$DATA_DIR")"
+  node_ids="$(id -u node):$(id -g node)"
+  if [ "$current_data_dir_owner" != "$node_ids" ]; then
+    # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
+    # recurses via fts()/openat-relative syscalls against already-opened
+    # directory file descriptors, so a parent directory swapped for a symlink
+    # mid-walk can't redirect a later chown outside DATA_DIR the way
+    # re-resolving each path string (as `find -exec` does) could.
+    # -h is still required: without it, chown follows a symlink to its target,
+    # so a symlink under DATA_DIR pointing outside it would let this root-run
+    # repair change ownership of an arbitrary file elsewhere on the
+    # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
+    # but does not traverse into it, so contents outside DATA_DIR are
+    # untouched either way.)
+    # -P (GNU's default for -R, spelled out here rather than relied on) means
+    # a directory symlink is re-owned like any other entry but never walked
+    # into — reinforcing that -h can't be defeated by nesting the escape one
+    # level deeper via a symlinked subdirectory.
+    chown -R -P -h node:node "$DATA_DIR"
+  fi
   exec gosu node "$@"
 fi
 
