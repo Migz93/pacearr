@@ -1,7 +1,23 @@
 #!/bin/sh
 set -e
 
-if [ "$(id -u)" = "0" ]; then
+# Pin PATH to trusted system directories only. Without this, an env var
+# override at container launch could shadow `id` or `gosu` with a binary
+# from a writable mount, which matters here because everything below runs
+# as root before privileges are dropped.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# Resolved as its own assignment rather than inside the `if` test below:
+# a command substitution's exit status doesn't propagate through `[ ]` to
+# trigger `set -e`, so if `id -u` itself failed inside the condition, the
+# comparison would just silently evaluate to "not root" and this script
+# would fall through to running the app directly, without ever dropping to
+# gosu node. As a plain assignment, a failing `id -u` aborts the script via
+# set -e instead of being swallowed into a wrong answer.
+current_uid="$(id -u)"
+
+if [ "$current_uid" = "0" ]; then
   # DATA_DIR is a user-configurable env var that we're about to recursively
   # chown as root. No supported deployment sets it to anything but /config
   # (see docs/deployment.md), so require that exact literal value rather
