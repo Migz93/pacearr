@@ -97,7 +97,11 @@ function PlexPopupDone() {
     return () => window.clearTimeout(retryId);
   }, []);
 
-  return <div className="centered">Plex authorized. You can close this window.</div>;
+  return (
+    <div className="centered" role="status" aria-live="polite">
+      Plex authorized. You can close this window.
+    </div>
+  );
 }
 
 function Login({ onLogin }: { onLogin: () => Promise<void> }) {
