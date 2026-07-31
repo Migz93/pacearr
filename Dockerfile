@@ -15,7 +15,7 @@ RUN npm run build
 
 FROM node:22-trixie-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig \
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig gosu \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV PORT=9302
@@ -25,10 +25,11 @@ ARG BUILD_CHANNEL=custom
 ARG COMMIT_SHA=local
 ENV BUILD_CHANNEL=$BUILD_CHANNEL
 ENV COMMIT_SHA=$COMMIT_SHA
-COPY --chown=node:node --from=build /app/package.json ./package.json
-COPY --chown=node:node --from=build /app/node_modules ./node_modules
-COPY --chown=node:node --from=build /app/dist ./dist
-RUN mkdir -p /config && chown -R node:node /config
-USER node
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 EXPOSE 9302
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "dist/server/server/index.js"]

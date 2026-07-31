@@ -104,9 +104,13 @@ Important constraints:
 
 ## Container User
 
-The current Docker image runs as the default container user so it can write to a host-created `/opt/pacearr` bind mount even when that directory is root-owned.
+The container's actual process (PID 1) runs as the non-root `node` user. It gets there via `docker-entrypoint.sh`, which starts as root, then:
 
-If the image is changed to run as the `node` user later, make sure deployment instructions include a reliable host-side ownership setup step.
+1. Creates `DATA_DIR` (`/config`) if it doesn't exist yet.
+2. Walks `DATA_DIR` and `chown -h`s any entry not already owned by `node:node`. The `-h` flag is required — it makes `chown` act on symlinks themselves rather than following them, so a symlink under `/config` pointing outside it can't be used to redirect ownership changes to an arbitrary host path.
+3. Drops privileges via `gosu node` before `exec`ing the real `CMD`.
+
+This means no host-side ownership setup step is required: a brand-new, empty `/opt/pacearr` bind mount (root-owned by default when Docker creates it) is repaired on first start, and an existing `/opt/pacearr` from an older root-run container is repaired on upgrade. `/app` itself stays root-owned — the `node` user can read but not write application code/dependencies.
 
 ## Runtime Config
 
