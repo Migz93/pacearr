@@ -1,0 +1,15 @@
+services:
+  pacearr:
+    image: pacearr
+    container_name: pacearr
+    build: .
+    ports:
+      - "9302:9302"
+    volumes:
+      - /opt/pacearr:/config
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/config
+      - TZ=UTC
+    network_mode: bridge
+    restart: unless-stopped

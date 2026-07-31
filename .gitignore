@@ -21,3 +21,4 @@ tests/playwright/.auth/
 tests/test-results/
 tests/playwright-report/
 .devcontainer/devcontainer.json
+__pycache__/

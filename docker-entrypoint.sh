@@ -1,79 +1,48 @@
 #!/bin/sh
 set -e
 
-# Pin PATH to trusted system directories only. Without this, an env var
-# override at container launch could shadow `id` or `gosu` with a binary
-# from a writable mount, which matters here because everything below runs
-# as root before privileges are dropped.
+# Pin PATH to trusted system directories. Everything below runs as root before
+# privileges are dropped, so without this an env var set at container launch
+# could shadow `id`, `realpath` or `gosu` with a binary from a writable mount.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-# Resolved as its own assignment rather than inside the `if` test below:
-# a command substitution's exit status doesn't propagate through `[ ]` to
-# trigger `set -e`, so if `id -u` itself failed inside the condition, the
-# comparison would just silently evaluate to "not root" and this script
-# would fall through to running the app directly, without ever dropping to
-# gosu node. As a plain assignment, a failing `id -u` aborts the script via
-# set -e instead of being swallowed into a wrong answer.
+# Assigned on its own line rather than inlined into the `if` below: a command
+# substitution's exit status doesn't propagate through `[ ]` to trigger set -e,
+# so a failing `id -u` would silently read as "not root" and fall through to
+# running the app as root, with no ownership repair and no drop to node.
 current_uid="$(id -u)"
 
 if [ "$current_uid" = "0" ]; then
-  # DATA_DIR is a user-configurable env var that we're about to recursively
-  # chown as root. No supported deployment sets it to anything but /config
-  # (see docs/deployment.md), so require that exact literal value rather
-  # than /config-or-below: allowing a subpath would mean mkdir -p and
-  # chown -R both have to walk through path components that live inside the
-  # attacker-writable bind mount, and a component swapped for a symlink
-  # between the realpath check below and the mkdir/chown that follow it
-  # could redirect them outside /config (chown -h only protects the final
-  # symlink in a path, not intermediate components — see the interior-walk
-  # note below for why that's fine once we're inside /config itself, but
-  # it does NOT cover resolving down to /config in the first place). Pinning
-  # to the literal path removes that resolution step entirely: mkdir -p
-  # becomes a no-op against the trusted mountpoint, not a walk through
-  # untrusted content.
-  # realpath -m (components don't need to exist yet, since DATA_DIR may not
-  # exist on a fresh mount) catches equivalent forms like "//", "/./", or
-  # "/config/.." that a raw string check would miss.
+  # DATA_DIR is user-configurable and is about to be walked and chowned as
+  # root, so require it to resolve to exactly /config rather than to /config or
+  # anything below it. A subpath would put attacker-writable bind mount content
+  # in the path components that mkdir -p and the repair helper resolve through,
+  # and a component swapped for a symlink between this check and those calls
+  # could redirect them outside /config. Pinning to the literal mountpoint
+  # removes that resolution step entirely.
+  # realpath -m canonicalises without requiring the path to exist yet, catching
+  # equivalent forms like "//", "/./" or "/config/.." that a plain string
+  # comparison would miss.
   case "$DATA_DIR" in
     /*) ;;
     *) echo "entrypoint: DATA_DIR must be an absolute path, got '$DATA_DIR'" >&2; exit 1 ;;
   esac
-  DATA_DIR="$(realpath -m "$DATA_DIR")"
+  DATA_DIR="$(realpath -m -- "$DATA_DIR")"
   if [ "$DATA_DIR" != "/config" ]; then
     echo "entrypoint: DATA_DIR resolves to '$DATA_DIR', which must be exactly /config" >&2
     exit 1
   fi
   export DATA_DIR
   mkdir -p "$DATA_DIR"
-  # This runs unconditionally on every root start rather than trying to
-  # skip it when DATA_DIR looks "already repaired" — two attempts at that
-  # optimization (a top-level-ownership check, then a completion marker
-  # file) both turned out to introduce their own vulnerabilities: the
-  # former isn't a reliable completion signal since chown -R sets the
-  # directory argument's ownership before recursing into children, and the
-  # latter is itself a file inside the attacker-writable bind mount, so a
-  # symlink swapped in for it would have made the "record that we're done"
-  # step (touch/chown without -h) follow the symlink and re-own an
-  # arbitrary external path as root. Given both shortcuts compromised the
-  # exact guarantee this script exists to provide, doing the walk every
-  # time is the deliberate choice here, not an oversight.
-  # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
-  # recurses via fts()/openat-relative syscalls against already-opened
-  # directory file descriptors, so a parent directory swapped for a symlink
-  # mid-walk can't redirect a later chown outside DATA_DIR the way
-  # re-resolving each path string (as `find -exec` does) could.
-  # -h is still required: without it, chown follows a symlink to its target,
-  # so a symlink under DATA_DIR pointing outside it would let this root-run
-  # repair change ownership of an arbitrary file elsewhere on the
-  # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
-  # but does not traverse into it, so contents outside DATA_DIR are
-  # untouched either way.)
-  # -P (GNU's default for -R, spelled out here rather than relied on) means
-  # a directory symlink is re-owned like any other entry but never walked
-  # into — reinforcing that -h can't be defeated by nesting the escape one
-  # level deeper via a symlinked subdirectory.
-  chown -R -P -h node:node "$DATA_DIR"
+
+  # /config may be a fresh host bind mount (created root-owned by Docker), or
+  # hold files restored or copied in with different ownership. The helper walks
+  # it using directory descriptors and no-follow operations at every level, so a
+  # directory swapped for a symlink mid-walk cannot redirect a chown outside
+  # /config, and it issues a chown only for entries that actually mismatch.
+  python3 /ownership-repair.py "$DATA_DIR"
+
   exec gosu node "$@"
 fi
 
