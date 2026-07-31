@@ -46,45 +46,34 @@ if [ "$current_uid" = "0" ]; then
   fi
   export DATA_DIR
   mkdir -p "$DATA_DIR"
-  # Skip the recursive repair once it's already done, rather than walking
-  # the whole tree unconditionally on every start. The completion signal is
-  # a dedicated marker file, written only after chown -R below has already
-  # succeeded — deliberately NOT DATA_DIR's own top-level ownership: GNU
-  # chown -R sets ownership on the directory argument itself before
-  # recursing into its children, so if the walk were interrupted or a
-  # nested chown failed partway through, DATA_DIR's top level could already
-  # look node-owned even though children (database, cache, logs) are still
-  # root-owned and unwritable. Gating on the marker instead means the fast
-  # path can only ever be taken after a full repair has actually finished.
-  ownership_marker="$DATA_DIR/.docker-entrypoint-ownership-ok"
-  node_ids="$(id -u node):$(id -g node)"
-  marker_owner=""
-  if [ -e "$ownership_marker" ]; then
-    marker_owner="$(stat -c '%u:%g' "$ownership_marker")"
-  fi
-  if [ "$marker_owner" != "$node_ids" ]; then
-    # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
-    # recurses via fts()/openat-relative syscalls against already-opened
-    # directory file descriptors, so a parent directory swapped for a symlink
-    # mid-walk can't redirect a later chown outside DATA_DIR the way
-    # re-resolving each path string (as `find -exec` does) could.
-    # -h is still required: without it, chown follows a symlink to its target,
-    # so a symlink under DATA_DIR pointing outside it would let this root-run
-    # repair change ownership of an arbitrary file elsewhere on the
-    # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
-    # but does not traverse into it, so contents outside DATA_DIR are
-    # untouched either way.)
-    # -P (GNU's default for -R, spelled out here rather than relied on) means
-    # a directory symlink is re-owned like any other entry but never walked
-    # into — reinforcing that -h can't be defeated by nesting the escape one
-    # level deeper via a symlinked subdirectory.
-    chown -R -P -h node:node "$DATA_DIR"
-    # Only reached once the repair above has fully succeeded (set -e aborts
-    # the script otherwise), so the marker's ownership can only mean a
-    # complete repair actually finished — not that the walk merely started.
-    touch "$ownership_marker"
-    chown node:node "$ownership_marker"
-  fi
+  # This runs unconditionally on every root start rather than trying to
+  # skip it when DATA_DIR looks "already repaired" — two attempts at that
+  # optimization (a top-level-ownership check, then a completion marker
+  # file) both turned out to introduce their own vulnerabilities: the
+  # former isn't a reliable completion signal since chown -R sets the
+  # directory argument's ownership before recursing into children, and the
+  # latter is itself a file inside the attacker-writable bind mount, so a
+  # symlink swapped in for it would have made the "record that we're done"
+  # step (touch/chown without -h) follow the symlink and re-own an
+  # arbitrary external path as root. Given both shortcuts compromised the
+  # exact guarantee this script exists to provide, doing the walk every
+  # time is the deliberate choice here, not an oversight.
+  # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
+  # recurses via fts()/openat-relative syscalls against already-opened
+  # directory file descriptors, so a parent directory swapped for a symlink
+  # mid-walk can't redirect a later chown outside DATA_DIR the way
+  # re-resolving each path string (as `find -exec` does) could.
+  # -h is still required: without it, chown follows a symlink to its target,
+  # so a symlink under DATA_DIR pointing outside it would let this root-run
+  # repair change ownership of an arbitrary file elsewhere on the
+  # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
+  # but does not traverse into it, so contents outside DATA_DIR are
+  # untouched either way.)
+  # -P (GNU's default for -R, spelled out here rather than relied on) means
+  # a directory symlink is re-owned like any other entry but never walked
+  # into — reinforcing that -h can't be defeated by nesting the escape one
+  # level deeper via a symlinked subdirectory.
+  chown -R -P -h node:node "$DATA_DIR"
   exec gosu node "$@"
 fi
 
