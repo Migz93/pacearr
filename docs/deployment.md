@@ -106,7 +106,7 @@ Important constraints:
 
 The container's actual process (PID 1) runs as the non-root `node` user. It gets there via `docker-entrypoint.sh`, which starts as root, then:
 
-1. Refuses to start if `DATA_DIR` isn't a non-root absolute path (rejects empty/unset and `/`). `DATA_DIR` is a user-configurable env var that's about to be recursively `chown`ed as root, so a misconfigured override can't be allowed to turn into a recursive chown of the whole container filesystem.
+1. Canonicalises `DATA_DIR` (`realpath -m`, so it works before the directory exists) and refuses to start if the resolved path is empty/unset, `/`, or `/app` (or a path under it) — this catches equivalent forms like `//`, `/./`, or `/config/../..` that also resolve to `/`, not just the literal string. `DATA_DIR` is a user-configurable env var that's about to be recursively `chown`ed as root, so a misconfigured override can't be allowed to turn into a recursive chown of the whole container filesystem or silently defeat the `/app` read-only guarantee below.
 2. Creates `DATA_DIR` (`/config`) if it doesn't exist yet.
 3. Runs `chown -R -h node:node "$DATA_DIR"`. The `-R` walk uses coreutils' own fd-relative traversal rather than re-resolving path strings, so a directory swapped out from under the walk can't redirect it outside `DATA_DIR`. The `-h` flag makes `chown` act on symlinks themselves rather than following them, so a symlink under `/config` pointing outside it gets re-owned itself without touching whatever it points to.
 4. Drops privileges via `gosu node` before `exec`ing the real `CMD`.
