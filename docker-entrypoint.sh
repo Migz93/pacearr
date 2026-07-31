@@ -47,23 +47,22 @@ if [ "$current_uid" = "0" ]; then
   export DATA_DIR
   mkdir -p "$DATA_DIR"
   # Skip the recursive repair once it's already done, rather than walking
-  # the whole tree unconditionally on every start. chown -R always chowns
-  # the directory argument itself as part of the same operation, so
-  # DATA_DIR only ends up node-owned after a full repair has completed —
-  # that reliably distinguishes "never repaired" (a fresh bind mount, or an
-  # existing directory from an old root-run container: the two cases this
-  # fix actually needs to handle) from "already repaired" (every restart
-  # after the first), without re-walking a potentially large image cache /
-  # log / database tree on every start. It does not re-verify every nested
-  # entry once the top level looks correct, so a file dropped into DATA_DIR
-  # out-of-band as root after a prior successful repair (e.g. a manual
-  # host-side copy) won't be caught until ownership is reset — that's an
-  # app-level write failure on that one file, not a security gap, since
-  # skipping this step never causes us to touch anything we otherwise
-  # wouldn't have.
-  current_data_dir_owner="$(stat -c '%u:%g' "$DATA_DIR")"
+  # the whole tree unconditionally on every start. The completion signal is
+  # a dedicated marker file, written only after chown -R below has already
+  # succeeded — deliberately NOT DATA_DIR's own top-level ownership: GNU
+  # chown -R sets ownership on the directory argument itself before
+  # recursing into its children, so if the walk were interrupted or a
+  # nested chown failed partway through, DATA_DIR's top level could already
+  # look node-owned even though children (database, cache, logs) are still
+  # root-owned and unwritable. Gating on the marker instead means the fast
+  # path can only ever be taken after a full repair has actually finished.
+  ownership_marker="$DATA_DIR/.docker-entrypoint-ownership-ok"
   node_ids="$(id -u node):$(id -g node)"
-  if [ "$current_data_dir_owner" != "$node_ids" ]; then
+  marker_owner=""
+  if [ -e "$ownership_marker" ]; then
+    marker_owner="$(stat -c '%u:%g' "$ownership_marker")"
+  fi
+  if [ "$marker_owner" != "$node_ids" ]; then
     # Use chown's own -R walk rather than `find -exec chown {} +`: coreutils
     # recurses via fts()/openat-relative syscalls against already-opened
     # directory file descriptors, so a parent directory swapped for a symlink
@@ -80,6 +79,11 @@ if [ "$current_uid" = "0" ]; then
     # into — reinforcing that -h can't be defeated by nesting the escape one
     # level deeper via a symlinked subdirectory.
     chown -R -P -h node:node "$DATA_DIR"
+    # Only reached once the repair above has fully succeeded (set -e aborts
+    # the script otherwise), so the marker's ownership can only mean a
+    # complete repair actually finished — not that the walk merely started.
+    touch "$ownership_marker"
+    chown node:node "$ownership_marker"
   fi
   exec gosu node "$@"
 fi
