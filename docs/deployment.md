@@ -111,7 +111,7 @@ The container's actual process (PID 1) runs as the non-root `node` user. It gets
 3. Runs `chown -R -h node:node "$DATA_DIR"`. The `-R` walk uses coreutils' own fd-relative traversal rather than re-resolving path strings, so a directory swapped out from under the walk can't redirect it outside `DATA_DIR`. The `-h` flag makes `chown` act on symlinks themselves rather than following them, so a symlink under `/config` pointing outside it gets re-owned itself without touching whatever it points to.
 4. Drops privileges via `gosu node` before `exec`ing the real `CMD`.
 
-This means no host-side ownership setup step is required: a brand-new, empty `/opt/pacearr` bind mount (root-owned by default when Docker creates it) is repaired on first start, and an existing `/opt/pacearr` from an older root-run container is repaired on upgrade. `/app` itself stays root-owned — the `node` user can read but not write application code/dependencies.
+This means no host-side ownership setup step is required: a brand-new, empty host bind mount (root-owned by default when Docker creates it) is repaired on first start, and an existing bind mount from an older root-run container is repaired on upgrade. `/app` itself stays root-owned — the `node` user can read but not write application code/dependencies.
 
 ## Runtime Config
 
