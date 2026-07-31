@@ -257,6 +257,7 @@ export class PacearrServices {
       status: series.status ?? null,
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
+      sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
       watcherCount: new Set(watchers.map((item) => item.userId)).size,
       watchers,
     };
@@ -1137,6 +1138,7 @@ export class PacearrServices {
       status: series.status ?? null,
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
+      sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
       watcherCount: new Set(watchers.map((item) => item.userId)).size,
       watchers,
     };

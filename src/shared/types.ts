@@ -215,6 +215,7 @@ export interface ShowListItem {
   status: string | null;
   seasonCount: number;
   episodeCount: number;
+  sizeOnDiskBytes: number;
   watcherCount: number;
   watchers: ShowUserProgress[];
 }

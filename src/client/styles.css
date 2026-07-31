@@ -119,11 +119,14 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .tab-strip button { flex: 1; white-space: nowrap; border: 0; border-radius: 8px; background: transparent; color: var(--muted); min-height: 38px; font-weight: 700; padding: 0 14px; }
 .tab-strip button:hover, .tab-strip button.active { background: var(--panel); color: var(--text); }
 .shows-toolbar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-.shows-toolbar { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: #101313; border-radius: 8px; padding: 0 12px; margin-bottom: 18px; color: var(--muted); }
-.shows-toolbar input { border: 0; background: transparent; margin: 0; padding-left: 0; }
+.shows-toolbar { box-sizing: border-box; height: 40px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: #101313; border-radius: 8px; padding: 0 12px; margin-bottom: 18px; color: var(--muted); }
+.shows-toolbar input { height: 100%; border: 0; background: transparent; margin: 0; padding: 0; }
 .shows-toolbar-row .shows-toolbar { flex: 1; margin-bottom: 0; }
-.view-toggle { display: flex; gap: 2px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; padding: 3px; background: var(--panel-2); }
-.view-toggle button { display: grid; place-items: center; width: 34px; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.shows-sort-toolbar { box-sizing: border-box; height: 40px; display: flex; align-items: center; gap: 10px; flex: 0 0 auto; border: 1px solid var(--line); background: #101313; border-radius: 8px; padding: 0 12px; color: var(--muted); }
+.shows-sort-toolbar select { height: 100%; border: 0; background: transparent; color: var(--text); width: auto; min-width: 150px; margin: 0; padding: 0; }
+.shows-sort-toolbar select option { background: #101313; color: var(--text); }
+.view-toggle { box-sizing: border-box; height: 40px; display: flex; gap: 2px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; padding: 3px; background: var(--panel-2); }
+.view-toggle button { display: grid; place-items: center; width: 34px; height: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
 .view-toggle button:hover, .view-toggle button.active { background: var(--panel); color: var(--text); }
 .poster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); gap: 16px; align-items: start; }
 .poster-card { position: relative; display: block; color: var(--text); text-decoration: none; }
@@ -392,6 +395,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   .recommend-head, .library-head { display: none; }
   .recommend-row, .library-row { grid-template-columns: 1fr; gap: 8px; }
   .shows-toolbar-row { flex-direction: column; align-items: stretch; }
+  .shows-sort-toolbar select { width: 100%; }
   .recommend-stat-row { flex-direction: column; }
   .recommend-stat { min-width: 0; }
   .user-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

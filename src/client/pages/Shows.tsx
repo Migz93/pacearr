@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+  ArrowLeft, ArrowRight, ArrowUpDown, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { formatBytes } from "../lib/utils";
@@ -13,6 +13,7 @@ import type {
 
 type ShowsTab = "enrolled" | "recommendations" | "ignored" | "sonarr";
 type ViewMode = "poster" | "list";
+type SortMode = "title-asc" | "title-desc" | "size-desc" | "size-asc";
 
 const TABS: { id: ShowsTab; label: string }[] = [
   { id: "enrolled", label: "Enrolled" },
@@ -20,6 +21,45 @@ const TABS: { id: ShowsTab; label: string }[] = [
   { id: "ignored", label: "Ignored" },
   { id: "sonarr", label: "Sonarr" },
 ];
+
+const SORT_MODES: SortMode[] = ["title-asc", "title-desc", "size-desc", "size-asc"];
+
+// Recommendations/Ignored are led by projected savings (see TAB_SUBTITLES), not raw size on
+// disk, so the "size" sort modes rank by that metric there — labeled "Savings" rather than
+// "Size" so the control doesn't imply it matches the "Size on disk" column shown in-list.
+const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
+  enrolled: "title-asc",
+  sonarr: "title-asc",
+  recommendations: "size-desc",
+  ignored: "size-desc",
+};
+
+function sortOptionsFor(tab: ShowsTab): { id: SortMode; label: string }[] {
+  const sizeLabel = tab === "recommendations" || tab === "ignored" ? "Savings" : "Size";
+  return [
+    { id: "title-asc", label: "Name (A → Z)" },
+    { id: "title-desc", label: "Name (Z → A)" },
+    { id: "size-desc", label: `${sizeLabel} (High → Low)` },
+    { id: "size-asc", label: `${sizeLabel} (Low → High)` },
+  ];
+}
+
+function isSortMode(value: string | null): value is SortMode {
+  return SORT_MODES.includes(value as SortMode);
+}
+
+function sizeOf(item: ShowBrowserItem): number {
+  return item.kind === "recommendation" ? item.data.projectedSavingsBytes : item.data.sizeOnDiskBytes;
+}
+
+function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): number {
+  if (sort === "title-asc" || sort === "title-desc") {
+    const cmp = a.data.title.localeCompare(b.data.title);
+    return sort === "title-asc" ? cmp : -cmp;
+  }
+  const cmp = sizeOf(a) - sizeOf(b);
+  return sort === "size-asc" ? cmp : -cmp;
+}
 
 const TAB_SUBTITLES: Record<ShowsTab, string> = {
   enrolled: "Shows currently controlled by Pacearr.",
@@ -45,6 +85,19 @@ function loadStoredView(tab: ShowsTab): ViewMode {
     return window.localStorage.getItem(viewStorageKey(tab)) === "list" ? "list" : "poster";
   } catch {
     return "poster";
+  }
+}
+
+function sortStorageKey(tab: ShowsTab) {
+  return `pacearr:shows-sort:${tab}`;
+}
+
+function loadStoredSort(tab: ShowsTab): SortMode {
+  try {
+    const stored = window.localStorage.getItem(sortStorageKey(tab));
+    return isSortMode(stored) ? stored : DEFAULT_SORT[tab];
+  } catch {
+    return DEFAULT_SORT[tab];
   }
 }
 
@@ -77,8 +130,9 @@ function ShowsBrowser() {
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
+  const [sort, setSort] = useState<SortMode>(() => loadStoredSort(tab));
 
-  useEffect(() => { setView(loadStoredView(tab)); setQuery(""); }, [tab]);
+  useEffect(() => { setView(loadStoredView(tab)); setSort(loadStoredSort(tab)); setQuery(""); }, [tab]);
 
   // Tracks the tab actually selected right now, independent of `load`'s closure, so a
   // slow response for a tab the user has since switched away from can't overwrite it.
@@ -155,20 +209,31 @@ function ShowsBrowser() {
     }
   }
 
+  function changeSort(nextSort: SortMode) {
+    setSort(nextSort);
+    try {
+      window.localStorage.setItem(sortStorageKey(tab), nextSort);
+    } catch {
+      // Storage is unavailable — the choice just won't persist across reloads.
+    }
+  }
+
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return items;
     return items.filter((item) => item.data.title.toLowerCase().includes(normalized));
   }, [items, query]);
 
+  const sorted = useMemo(() => [...filtered].sort((a, b) => compareItems(a, b, sort)), [filtered, sort]);
+
   const totalSavingsBytes = useMemo(
     () => items.reduce((sum, item) => sum + (item.kind === "recommendation" ? item.data.projectedSavingsBytes : 0), 0),
     [items]
   );
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
-  const visibleItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const visibleItems = sorted.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const currentTabUrl = `/shows${searchParams.size > 0 ? `?${searchParams.toString()}` : ""}`;
   const isRecommendationTab = tab === "recommendations" || tab === "ignored";
 
@@ -213,6 +278,12 @@ function ShowsBrowser() {
         <div className="shows-toolbar">
           <Search size={17} />
           <input aria-label="Search shows" value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
+        </div>
+        <div className="shows-sort-toolbar">
+          <ArrowUpDown size={16} />
+          <select aria-label="Sort shows" value={sort} onChange={(event) => changeSort(event.target.value as SortMode)}>
+            {sortOptionsFor(tab).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}
+          </select>
         </div>
         <div className="view-toggle" role="group" aria-label="View mode">
           <button type="button" aria-pressed={view === "poster"} aria-label="Poster view" className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
