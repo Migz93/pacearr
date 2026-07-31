@@ -110,7 +110,9 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
 
 1. Start a new branch from `develop` for every piece of work — features, bug fixes, chores, CI changes, everything. Never commit new work directly to `develop` or `main`.
    - Branch naming: `feat/short-description`, `fix/short-description`, `chore/short-description`, `ci/short-description`, `docs/short-description`
-2. Do the work on that branch. Commit as many times as needed. Push the branch to GitHub.
+2. Do the work on that branch. Commit as many times as needed.
+
+2a. Get a cross-AI review before opening the PR. See "Cross-AI Review Before Opening The PR" below — this is mandatory, not optional polish. Push the branch to GitHub whenever the reviewer needs to see it (the diff can also be pasted directly into the prompt) — pushing early is fine. What matters is that the **PR itself** is not opened until a full review comes back clean.
 3. Open a PR from that branch into `develop` using `gh pr create`. This feeds release notes, so the PR title becomes the changelog entry. Use a semantic title (`feat:`, `fix:`, `chore:`, etc.).
 4. Merge the PR into `develop`. Delete the branch after merging.
 5. Repeat steps 1-4 for each piece of work. `develop` accumulates all merged PRs.
@@ -119,6 +121,35 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
 8. Open a PR from `develop` into `main`. Merge it. This triggers release notes from all PR titles since the last release.
 9. Tag `main` with `vX.Y.Z` and push the tag. This triggers Docker build workflows when configured.
 10. Publish the GitHub release — review the auto-generated draft and publish it.
+
+---
+
+### Cross-AI Review Before Opening The PR (Mandatory)
+
+Pacearr is worked on by two AI agents — Claude and Codex — usually in separate chat sessions, with the user relaying messages between them. Before opening any PR — step 3 above, the version-bump PR in step 7, or the `develop` → `main` release PR in step 8 — the source diff being merged (a work branch's changes for step 3 or 7, or the full set of changes accumulated on `develop` since the last release for step 8) must go through a review pass by the *other* agent. This applies to every kind of change — feature, fix, chore, CI, or docs, matching "the required workflow for all changes" at the top of this flow. This is required, not optional polish: it catches real issues before human review, which substantially cuts down the back-and-forth.
+
+**Roles are relative, not fixed to a specific AI.** Whichever agent wrote the code is "the implementer"; the other agent is "the reviewer." If Codex implemented, Claude reviews, and vice versa — this section applies symmetrically regardless of which agent is reading it right now.
+
+**When this starts:** once the implementer believes the work is complete *and* the user has confirmed they're happy with it. Not before — the user is still the gate on scope and direction.
+
+**The review loop** (the implementer drives this state machine — never wait for the user to ask "what's next" or "can you do a full review"):
+
+| Last review was... | Result | Next step |
+|---|---|---|
+| Full | Clean | The changeset is cleared to open the applicable PR (step 3, 7, or 8) |
+| Full | Findings | Resolve each finding (see below), then request a **delta review** scoped to just the fix/disposition |
+| Delta | Clean | Automatically request a new **full review** from scratch — a clean delta is never the finish line |
+| Delta | Findings | Resolve each finding (see below), then request another **delta review** |
+
+In words: the first review of a changeset (a work branch's diff for steps 3/7, or `develop`'s accumulated diff for step 8) is always a full review of the whole diff. From there, keep alternating — a delta review after every round of fixes, and once a delta review comes back clean, immediately trigger one more full review from scratch, offered without being asked, before considering the changeset done. Only a **full** review pass coming back clean clears the changeset to open a PR; a clean delta review alone is never sufficient on its own. Keep alternating full ⇄ delta-until-clean until a full pass finds nothing new. This catches things a narrow delta view misses (e.g. the same unsafe pattern repeated elsewhere in the codebase) while keeping most rounds cheap.
+
+**A review result is tied to the exact commit and base it reviewed, not to the branch in general.** Always state the commit SHA being reviewed *and* the base commit it was diffed against in both the review request and the response — the `develop` base commit for steps 3 and 7, the `main` base commit for step 8. If either moves before the PR is opened — a new commit is pushed, or the base shifts (e.g. more work merges into `develop` while a step 7/8 review is in flight) — the prior result is void, even if it was "Clean." Request a new review: a delta review if only expected fix commits were added, a full review if the base itself changed underneath the changeset.
+
+**What counts as a finding (and what doesn't):** a finding is something incorrect, inconsistent with the rest of the document or codebase, or likely to mislead a future reader — that's what "Findings" in the table above means, and what has to be resolved before a delta review can come back clean. Purely optional suggestions — stylistic preference, an alternative phrasing with no material difference, a nice-to-have that doesn't fix an actual problem — are not findings. The reviewer should call these out as optional explicitly; the implementer can take or leave them freely, and doing either does not block a "Clean" result or require a delta review.
+
+**Resolving a finding:** "findings" doesn't mean every suggestion must be applied as-is. If the implementer agrees, fix it. If the implementer disagrees, it should respond to the reviewer with its reasoning and evidence instead of silently applying (or silently ignoring) the suggestion. The reviewer re-evaluates against that reasoning. If they still disagree after that exchange, surface it to the user for a decision — neither agent unilaterally overrides the other. Whatever the outcome — a code change or a deliberate no-change — send it through the next delta review like any other resolved finding, so the reviewer confirms the final state before the next full pass.
+
+**Minimal effort for the user:** their job is only to paste the prompt into the other agent's chat and paste the response back here. The implementer tracks review state (was the last request a delta or a full pass? did it come back clean?) and always produces the next prompt proactively.
 
 ---
 
