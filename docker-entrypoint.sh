@@ -57,7 +57,11 @@ if [ "$current_uid" = "0" ]; then
   # filesystem. (Verified: -R -h re-owns a symlinked directory entry itself
   # but does not traverse into it, so contents outside DATA_DIR are
   # untouched either way.)
-  chown -R -h node:node "$DATA_DIR"
+  # -P (GNU's default for -R, spelled out here rather than relied on) means
+  # a directory symlink is re-owned like any other entry but never walked
+  # into — reinforcing that -h can't be defeated by nesting the escape one
+  # level deeper via a symlinked subdirectory.
+  chown -R -P -h node:node "$DATA_DIR"
   exec gosu node "$@"
 fi
 

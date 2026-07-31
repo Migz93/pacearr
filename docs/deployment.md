@@ -104,7 +104,7 @@ Important constraints:
 
 ## Container User
 
-The container's actual process (PID 1) runs as the non-root `node` user. It gets there via `docker-entrypoint.sh`, which starts as root, then:
+When the container starts as root — the only supported/documented way to run this image — the actual process (PID 1) ends up as the non-root `node` user. It gets there via `docker-entrypoint.sh`, which starts as root, then:
 
 1. Canonicalises `DATA_DIR` (`realpath -m`, so it works before the directory exists) and refuses to start unless the resolved path is exactly `/config` — this catches equivalent forms like `//`, `/./`, or `/config/..` that resolve elsewhere, not just a literal string match. `DATA_DIR` is a user-configurable env var that's about to be recursively `chown`ed as root, and no supported deployment sets it to anything but `/config` (see [Persistent Data](#persistent-data) above), so an exact match is required rather than an "or below it" prefix match: allowing a subpath would mean `mkdir -p`/`chown -R` have to resolve through path components living inside the attacker-writable bind mount, which a component swapped for a symlink between validation and creation could redirect elsewhere. Requiring the literal mountpoint removes that resolution step entirely.
 2. Creates `DATA_DIR` (`/config`) if it doesn't exist yet.
@@ -112,6 +112,8 @@ The container's actual process (PID 1) runs as the non-root `node` user. It gets
 4. Drops privileges via `gosu node` before `exec`ing the real `CMD`.
 
 This means no host-side ownership setup step is required: a brand-new, empty host bind mount (root-owned by default when Docker creates it) is repaired on first start, and an existing bind mount from an older root-run container is repaired on upgrade. `/app` itself stays root-owned — the `node` user can read but not write application code/dependencies.
+
+The `DATA_DIR`/`/config` validation above is scoped to this root-start path, since that's the only place the image performs the privileged, root-owned `chown -R`. Steps 1–3 only run when the container starts as root (`docker-entrypoint.sh` checks this itself); an unsupported non-root launch (e.g. `docker run --user`) skips straight to `exec` with whatever `DATA_DIR` and UID it was given, with none of the above repair or validation applied.
 
 ## Runtime Config
 
