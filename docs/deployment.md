@@ -14,27 +14,10 @@ The image holds the built React client in `dist/client`, the compiled Express se
 
 ## Running It
 
-```bash
-docker compose up -d --build
-```
-
-Or without compose:
-
-```bash
-docker build -t pacearr .
-docker rm -f pacearr
-docker run -d \
-  --name pacearr \
-  --network bridge \
-  -p 9302:9302 \
-  -v /opt/pacearr:/config \
-  --restart unless-stopped \
-  pacearr
-```
-
-Keep the image and container name as `pacearr`, use bridge networking, and preserve the `/opt/pacearr:/config` bind mount so configuration, database, and logs remain intact while the container is recreated.
-
-Workspace checks are useful, but they don't verify the running deployment. Whenever implementation changes need end-to-end verification, rebuild the image from the current workspace and recreate the live container from it.
+Build, run, and rebuild commands live in `AGENTS.md` under "Rebuilding The
+Container After Code Changes", alongside the container conventions they have
+to stay consistent with. This file covers what the deployment *is*, not how to
+drive it.
 
 ## Persistent Data
 
