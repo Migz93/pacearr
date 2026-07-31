@@ -14,7 +14,7 @@ function silentLogger(): Logger {
   return { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 }
 
-function createHarness() {
+function createHarness(logger: Logger = silentLogger()) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-recommend-test-"));
   const config: RuntimeConfig = {
     port: 9302,
@@ -24,7 +24,6 @@ function createHarness() {
     logLevel: "error",
   };
   const db = new PacearrDatabase(config);
-  const logger = silentLogger();
   const imageCache = new ImageCacheService(dir, logger);
   const services = new PacearrServices(db, logger, imageCache, dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
@@ -48,6 +47,7 @@ function installFetchStub(routes: {
   seriesById?: Record<number, SonarrSeries>;
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
+  episodeFileErrorsBySeries?: Record<number, string>;
   requests?: Array<{ method: string; pathname: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -67,6 +67,8 @@ function installFetchStub(routes: {
     }
     if (url.pathname === "/api/v3/episodefile") {
       const seriesId = Number(url.searchParams.get("seriesId"));
+      const error = routes.episodeFileErrorsBySeries?.[seriesId];
+      if (error) return new Response(JSON.stringify({ message: error }), { status: 404, headers: { "content-type": "application/json" } });
       return jsonResponse(routes.episodeFilesBySeries?.[seriesId] ?? []);
     }
     if ((init?.method ?? "GET").toUpperCase() !== "GET") return jsonResponse({});
@@ -396,6 +398,105 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     db.updateAppSettings({ recommendationMinimumSavingsGb: 1 });
     const cutoffResult = services.listRecommendations();
     assert.deepEqual(cutoffResult.candidates.map((candidate) => candidate.sonarrSeriesId), [500]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("recommendation refresh skips a Sonarr failure and logs it without losing other candidates", async () => {
+  const warnings: Array<{ message: string; meta?: unknown }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn(message: string, meta?: unknown) { warnings.push({ message, meta }); },
+    error() {},
+  } as unknown as Logger;
+  const { services, cleanup } = createHarness(logger);
+  const broken: SonarrSeries = {
+    id: 1000,
+    title: "Broken Episode File Reference",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const healthy: SonarrSeries = {
+    id: 1001,
+    title: "Healthy Recommendation",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const episodes = (seriesId: number): SonarrEpisode[] => [
+    { id: seriesId + 1, seriesId, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: seriesId + 10 },
+    { id: seriesId + 2, seriesId, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: seriesId + 20 },
+  ];
+  const restoreFetch = installFetchStub({
+    series: [broken, healthy],
+    episodesBySeries: { 1000: episodes(1000), 1001: episodes(1001) },
+    episodeFilesBySeries: { 1001: [
+      { id: 1011, seriesId: 1001, seasonNumber: 1, size: 500 },
+      { id: 1021, seriesId: 1001, seasonNumber: 1, size: 1_500 },
+    ] },
+    episodeFileErrorsBySeries: { 1000: "EpisodeFile with ID 258557 does not exist" },
+  });
+
+  try {
+    await services.refreshRecommendations();
+    assert.deepEqual(services.listRecommendations().candidates.map((candidate) => candidate.sonarrSeriesId), [1001]);
+    const skipped = warnings.find((warning) => warning.message === "Skipped show during recommendation refresh");
+    assert.ok(skipped);
+    assert.equal((skipped.meta as { seriesId: number }).seriesId, 1000);
+    assert.equal((skipped.meta as { title: string }).title, "Broken Episode File Reference");
+    assert.match((skipped.meta as { error: string }).error, /EpisodeFile with ID 258557 does not exist/);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("recommendation refresh keeps the previous cache when every candidate fails", async () => {
+  const errors: Array<{ message: string; meta?: unknown }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn() {},
+    error(message: string, meta?: unknown) { errors.push({ message, meta }); },
+  } as unknown as Logger;
+  const { db, services, cleanup } = createHarness(logger);
+  const show: SonarrSeries = {
+    id: 1100,
+    title: "Unavailable Recommendation",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const restoreFetch = installFetchStub({
+    series: [show],
+    episodesBySeries: { 1100: [
+      { id: 1101, seriesId: 1100, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 1110 },
+      { id: 1102, seriesId: 1100, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 1120 },
+    ] },
+    episodeFileErrorsBySeries: { 1100: "EpisodeFile with ID 999999 does not exist" },
+  });
+
+  try {
+    db.saveRecommendationCache([{
+      sonarrSeriesId: 9999,
+      title: "Previous Recommendation",
+      year: null,
+      posterUrl: null,
+      status: null,
+      seasonCount: 1,
+      episodeCount: 2,
+      sizeOnDiskBytes: 2_000,
+      retainedSeasons: [],
+      droppedSeasons: [1],
+      watcherCount: 0,
+      watchers: [],
+      projectedSavingsBytes: 1_000,
+      ignored: false,
+    }]);
+
+    await services.refreshRecommendations();
+
+    assert.deepEqual(services.listRecommendations().candidates.map((candidate) => candidate.sonarrSeriesId), [9999]);
+    assert.equal(errors[0]?.message, "Recommendation refresh failed for every candidate; keeping previous cache");
+    assert.deepEqual(errors[0]?.meta, { attempted: 1, skipped: 1 });
   } finally {
     restoreFetch();
     cleanup();
