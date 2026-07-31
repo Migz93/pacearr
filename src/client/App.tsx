@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "./lib/api";
 import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
@@ -17,10 +18,10 @@ export default function App() {
   const navigate = useNavigate();
 
   if (window.location.pathname === "/login/plex/loading") {
-    return <div className="centered">Opening Plex...</div>;
+    return <PlexPopupLoading />;
   }
   if (window.location.pathname === "/login/plex/done") {
-    return <div className="centered">Plex authorized. You can close this window.</div>;
+    return <PlexPopupDone />;
   }
 
   async function refresh() {
@@ -72,6 +73,34 @@ export default function App() {
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Layout>
+  );
+}
+
+function PlexPopupLoading() {
+  return (
+    <div className="centered" role="status" aria-live="polite" aria-label="Opening Plex...">
+      <RefreshCw size={28} className="spin" aria-hidden="true" />
+    </div>
+  );
+}
+
+function PlexPopupDone() {
+  useEffect(() => {
+    window.close();
+
+    // Some browsers ignore a window.close() call fired before the page has
+    // fully settled — retry once shortly after in case the first call is dropped.
+    const retryId = window.setTimeout(() => {
+      window.close();
+    }, 250);
+
+    return () => window.clearTimeout(retryId);
+  }, []);
+
+  return (
+    <div className="centered" role="status" aria-live="polite">
+      Plex authorized. You can close this window.
+    </div>
   );
 }
 

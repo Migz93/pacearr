@@ -38,7 +38,9 @@ export class PlexOAuth {
 
   async login(): Promise<string> {
     if (!this.popup || this.popup.closed) throw new Error("Plex login popup could not be opened.");
-    await wait(800);
+    // Give mobile browsers a moment to commit the user-opened same-origin popup
+    // before redirecting it to the cross-origin Plex auth page.
+    await wait(1500);
     this.headers = {
       Accept: "application/json",
       "X-Plex-Product": "Pacearr",
@@ -66,6 +68,13 @@ export class PlexOAuth {
 
   private async poll(): Promise<string> {
     if (!this.pin || !this.headers) throw new Error("Plex PIN was not initialized.");
+    // The user may close the popup manually before the token arrives (or, now that the
+    // popup closes itself once Plex confirms auth, the close can simply be observed before
+    // this loop's next tick). Allow a few extra polls after detecting closure before giving
+    // up, in case the Plex API response is slightly delayed. Grace polls don't consume the
+    // main attempts budget, so a popup closing near attempt 180 still gets the full grace
+    // period instead of being cut off by the outer timeout.
+    let gracePollsLeft = 5;
     for (let attempts = 0; attempts < 180; attempts++) {
       const response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
       if (!response.ok) throw new Error(`Failed to poll Plex PIN: ${response.status}`);
@@ -74,7 +83,11 @@ export class PlexOAuth {
         this.popup?.close();
         return data.authToken;
       }
-      if (this.popup?.closed) throw new Error("Plex login popup was closed before authorization completed.");
+      if (this.popup?.closed) {
+        if (gracePollsLeft <= 0) throw new Error("Plex login popup was closed before authorization completed.");
+        gracePollsLeft -= 1;
+        attempts -= 1;
+      }
       await wait(1000);
     }
     throw new Error("Timed out waiting for Plex authorization.");
