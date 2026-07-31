@@ -85,7 +85,7 @@ Every Sonarr series can be opened at `/shows/:seriesId`, whether or not it is en
 
 The Recommendations page ranks un-enrolled shows by projected savings and displays 25 results at a time, with the current page stored in the URL. Administrators can persistently ignore candidates they do not intend to enroll and restore them through the “Show ignored” toggle.
 
-Recommendation calculations are stored in `recommendation_cache` so page loads do not wait on Sonarr. The existing snapshot remains readable while the shared background refresh runs. The configured minimum projected savings (50 GB by default) and ignored state are applied when the cache is read, so those filters take effect without recalculating the snapshot.
+Recommendation calculations are stored in `recommendation_cache` so page loads do not wait on Sonarr. The existing snapshot remains readable while the shared background refresh runs. The configured minimum projected savings (50 GB by default) and ignored state are applied when the cache is read, so those filters take effect without recalculating the snapshot. If one Sonarr series cannot be read during a refresh, Pacearr logs the failure and skips that series while continuing to calculate recommendations for the rest of the library. If every candidate fails during a refresh, Pacearr keeps the previous cached snapshot instead of replacing it with an empty result and logs the refresh failure distinctly from a normal empty result.
 
 ### Watch history import
 

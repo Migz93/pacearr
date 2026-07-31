@@ -397,44 +397,70 @@ export class PacearrServices {
     // simultaneous requests at Sonarr on one page load.
     const limit = pLimit(5);
     const built = await Promise.all(candidates.map((series) => limit(async () => {
-      const progress = this.db.listLatestUserProgressForSeries(series.id, cutoff);
-      const enabledProgress = progress.filter((item) => item.enabled);
-      const retainedSeasons = [...new Set(enabledProgress.map((item) => item.seasonNumber))].filter((seasonNumber) => seasonNumber > 0);
+      try {
+        const progress = this.db.listLatestUserProgressForSeries(series.id, cutoff);
+        const enabledProgress = progress.filter((item) => item.enabled);
+        const retainedSeasons = [...new Set(enabledProgress.map((item) => item.seasonNumber))].filter((seasonNumber) => seasonNumber > 0);
 
-      const episodes = await sonarr.getEpisodes(series.id);
-      const plan = calculateRollingPlan(series, episodes, retainedSeasons, true);
-      const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
-      if (droppedSeasons.length === 0) return null;
+        const episodes = await sonarr.getEpisodes(series.id);
+        const plan = calculateRollingPlan(series, episodes, retainedSeasons, true);
+        const droppedSeasons = getDroppedSeasons(series, plan.retainedSeasons);
+        if (droppedSeasons.length === 0) return { recommendation: null, skipped: false };
 
-      const episodeFiles = await sonarr.getEpisodeFiles(series.id);
-      const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
+        const episodeFiles = await sonarr.getEpisodeFiles(series.id);
+        const projectedSavingsBytes = calculateProjectedSavings(series, episodes, episodeFiles, droppedSeasons);
 
-      const show = await this.buildShowListItem(series, null, sonarr);
-      const recommendation: ShowRecommendation = {
-        sonarrSeriesId: series.id,
-        title: show.title,
-        year: show.year,
-        posterUrl: show.posterUrl,
-        status: show.status,
-        seasonCount: show.seasonCount,
-        episodeCount: show.episodeCount,
-        sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
-        retainedSeasons: plan.retainedSeasons,
-        droppedSeasons,
-        watcherCount: new Set(enabledProgress.map((item) => item.userId)).size,
-        watchers: enabledProgress,
-        projectedSavingsBytes,
-        ignored: ignoredIds.has(series.id),
-      };
-      return recommendation;
+        const show = await this.buildShowListItem(series, null, sonarr);
+        const recommendation: ShowRecommendation = {
+          sonarrSeriesId: series.id,
+          title: show.title,
+          year: show.year,
+          posterUrl: show.posterUrl,
+          status: show.status,
+          seasonCount: show.seasonCount,
+          episodeCount: show.episodeCount,
+          sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
+          retainedSeasons: plan.retainedSeasons,
+          droppedSeasons,
+          watcherCount: new Set(enabledProgress.map((item) => item.userId)).size,
+          watchers: enabledProgress,
+          projectedSavingsBytes,
+          ignored: ignoredIds.has(series.id),
+        };
+        return { recommendation, skipped: false };
+      } catch (error) {
+        // One stale or unavailable Sonarr record must not hide recommendations for
+        // every other show in a large library.
+        this.logger.warn("Skipped show during recommendation refresh", {
+          seriesId: series.id,
+          title: series.title,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { recommendation: null, skipped: true };
+      }
     })));
 
+    const skippedCount = built.filter((item) => item.skipped).length;
+    if (candidates.length > 0 && skippedCount === candidates.length) {
+      this.logger.error("Recommendation refresh failed for every candidate; keeping previous cache", {
+        attempted: candidates.length,
+        skipped: skippedCount,
+      });
+      return;
+    }
+
     const recommendations = built
+      .map((item) => item.recommendation)
       .filter((item): item is ShowRecommendation => item !== null)
       .sort((a, b) => b.projectedSavingsBytes - a.projectedSavingsBytes);
 
     const generatedAt = this.db.saveRecommendationCache(recommendations);
-    this.logger.info("Recommendation cache refreshed", { candidates: recommendations.length, generatedAt });
+    this.logger.info("Recommendation cache refreshed", {
+      attempted: candidates.length,
+      saved: recommendations.length,
+      skipped: skippedCount,
+      generatedAt,
+    });
   }
 
   ignoreRecommendation(seriesId: number, title: string): void {
