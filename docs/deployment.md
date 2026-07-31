@@ -115,6 +115,10 @@ This means no host-side ownership setup step is required: a brand-new, empty hos
 
 The `DATA_DIR`/`/config` validation above is scoped to this root-start path, since that's the only place the image performs the privileged, root-owned `chown -R`. Steps 1–3 only run when the container starts as root (`docker-entrypoint.sh` checks this itself); an unsupported non-root launch (e.g. `docker run --user`) skips straight to `exec` with whatever `DATA_DIR` and UID it was given, with none of the above repair or validation applied.
 
+**Known limitation — hard links.** The symlink protections above (`-h`/`-P`) don't and can't extend to hard links: a hard link inside `/config` sharing an inode with a file elsewhere on the *same host filesystem* would have its ownership changed too when the repair runs, since `chown` operates on the inode itself and a hard link has no separate "target" to distinguish from the link the way a symlink does. This is an inherent property of recursively chowning any directory whose contents aren't fully trusted, not something specific to this script — the same characteristic applies to any comparable container entrypoint that repairs data-directory ownership at startup (including official images that do this for their own data directories). Creating a hard link to a file you don't already have read/write access to is blocked by the Linux kernel's `fs.protected_hardlinks` sysctl, which is enabled by default on essentially every modern distribution specifically to prevent this; deployments should keep `/opt/pacearr` on infrastructure they trust, the same assumption any bind-mounted Docker data directory already carries.
+
+The exact `chown -R -P -h` behavior described here is that of GNU coreutils as shipped in the pinned `node:22-trixie-slim` base image tag; a future rebuild against a different base could in principle ship a different `chown` implementation with different flag semantics.
+
 ## Runtime Config
 
 Environment variables:
