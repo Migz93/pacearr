@@ -1,3 +1,5 @@
+<!-- shared: structure — headings kept in sync across Migz93 self-hosted apps, content is app-specific -->
+
 # Pacearr Architecture Overview
 
 ## What Pacearr Is
@@ -11,7 +13,7 @@ It does not request media and it does not add shows to Sonarr. Instead, it lists
 - Sonarr is the source of truth for the available TV series and episode metadata.
 - Plex is the default source of truth for playback history and live sessions.
 - Tautulli is an optional additional history source.
-- Pacearr is the source of truth for enrollment, normalized watch events, per-user rolling progress, expanded seasons, job state, and audit history.
+- Pacearr is the source of truth for enrollment, normalised watch events, per-user rolling progress, expanded seasons, job state, and audit history.
 - V1 supports one Sonarr instance.
 - V1 supports one rolling mode: all-season pilots.
 
@@ -91,11 +93,11 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled.
 
-Imported rows are normalized into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
+Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
 
 ### Live session monitoring
 
-The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalized into the same watch-event path used by history import.
+The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalised into the same watch-event path used by history import.
 
 Watching SxxE01 for an enrolled show expands that season.
 

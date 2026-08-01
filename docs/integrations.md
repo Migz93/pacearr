@@ -62,7 +62,7 @@ Pacearr imports episode history through:
 /status/sessions/history/all
 ```
 
-Imported episode events are normalized into `watch_events`.
+Imported episode events are normalised into `watch_events`.
 
 ### Live Sessions
 
@@ -80,7 +80,7 @@ Pacearr tries to match Plex/Tautulli events to enrolled Sonarr shows in this ord
 
 1. TVDB id, when Plex show metadata can provide it
 2. IMDB id, when Plex show metadata can provide it
-3. normalized show title fallback
+3. normalised show title fallback
 
 This means Plex events with a show rating key may trigger an extra Plex metadata fetch to read GUIDs.
 
@@ -112,7 +112,7 @@ The Sonarr settings are:
 
 The Shows UI reads Sonarr series, season, episode, and poster metadata through the backend. Posters are downloaded by the server and served from the local image cache under `/images`, so browsers do not need direct Sonarr access. Pacearr prefers Sonarr's poster `remoteUrl` because local `/MediaCover` URLs can return the Sonarr web app HTML on deployments that protect media routes behind UI auth; the local URL remains a fallback when no remote URL is available.
 
-The show detail view combines Sonarr's current library state with Pacearr's normalized `watch_events` table. This lets reviewers see which seasons and episodes have imported viewer activity before deciding whether a show is a good fit for rolling episode enrollment.
+The show detail view combines Sonarr's current library state with Pacearr's normalised `watch_events` table. This lets reviewers see which seasons and episodes have imported viewer activity before deciding whether a show is a good fit for rolling episode enrollment.
 
 ### Non-Goals
 
@@ -134,11 +134,11 @@ When enabled, Pacearr imports episode watch history through Tautulli's API:
 cmd=get_history
 ```
 
-Tautulli events are normalized into the same `watch_events` table as Plex events.
+Tautulli events are normalised into the same `watch_events` table as Plex events.
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 
-## Failure Behavior
+## Failure Behaviour
 
 External API failures should:
 

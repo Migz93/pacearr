@@ -38,7 +38,7 @@ The Dashboard exposes quick actions for session checks and history import.
 
 ## Watch Events
 
-`watch_events` is the normalized record of imported and observed episode activity.
+`watch_events` is the normalised record of imported and observed episode activity.
 
 Sources:
 
