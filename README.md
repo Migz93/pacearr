@@ -1,5 +1,7 @@
 # Pacearr
 
+![Pacearr logo](./public/pacearr-logo.svg)
+
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]][license]
 [![Project Maintainer][maintainer-shield]][user_profile]
@@ -18,6 +20,20 @@ It works with series that already exist in Sonarr: Pacearr imports Plex and opti
 - Polls active Plex sessions so season expansion can happen without waiting for a history import
 - Can progressively return older seasons to pilot-only monitoring after viewers move on
 - Records its actions in a user-visible history and retains structured application logs
+
+## Preview
+
+### Dashboard
+
+Enrolled shows, active viewers, retained seasons, and reclaimed disk space, with recent activity and the next operational signals.
+
+![Pacearr preview](./public/pacearr-preview.png)
+
+### Recommendations
+
+Un-enrolled Sonarr shows ranked by how much disk space enrolling them would free up.
+
+![Recommendations preview](./public/recommendations-preview.png)
 
 ## Key Features
 
@@ -79,6 +95,8 @@ services:
       - "9302:9302"
     volumes:
       - /opt/pacearr:/config
+    environment:
+      - TZ=UTC
 ```
 
 ```bash
@@ -89,8 +107,13 @@ docker compose up -d
 
 Pacearr is configured through its web UI after first run. The two Docker settings you may want to change before starting are:
 
-- **Port** — change the left side of `9302:9302` to expose Pacearr on a different host port, for example `8080:9302`
-- **Data directory** — change the left side of `/opt/pacearr:/config` to store Pacearr's database, artwork backups, image cache, and logs elsewhere on the host
+- **Port** — change the left side of `9302:9302` to expose Pacearr on a different host port (e.g. `8080:9302`)
+- **Data directory** — change the left side of `/opt/pacearr:/config` to store Pacearr's database, artwork backups, image cache, and logs wherever you prefer on your host
+- **Timezone** — set `TZ` to your preferred timezone if you do not want UTC
+
+Pacearr runs as an unprivileged user (UID/GID `1000`), not root. The container starts as root only long enough to take ownership of the data directory, including on a fresh bind mount, then drops privileges. You do not need to `chown` anything on the host.
+
+That fix ships in the image, so upgrading means replacing the container, not restarting it: `docker compose pull && docker compose up -d`, or re-run the `docker pull`/`stop`/`rm`/`run` sequence.
 
 ### First Setup
 
@@ -101,7 +124,7 @@ Pacearr is configured through its web UI after first run. The two Docker setting
 5. Review a show and enrol it while Pacearr remains in dry-run mode
 6. Inspect the planned actions, then disable dry-run mode only when you are ready for Pacearr to update Sonarr
 
-## Important Safety Notes
+## Important Limitations
 
 ### Dry-Run Mode
 
@@ -115,29 +138,56 @@ Pacearr does not add series to Sonarr, choose root folders, change quality profi
 
 Only enabled Plex users can expand seasons or keep them from being cleaned up. Progressive cleanup is conservative: a season stays expanded while it remains relevant to any enabled viewer.
 
-## Documentation
-
-The technical documentation covers the long-lived implementation and operational details:
-
-- [Architecture](docs/architecture.md)
-- [Rolling monitoring behavior](docs/rolling-monitoring.md)
-- [Plex, Sonarr, and Tautulli integrations](docs/integrations.md)
-- [Jobs and audit history](docs/jobs-and-history.md)
-- [Deployment](docs/deployment.md)
-- [Maintenance](docs/maintenance.md)
-- [Security policy](SECURITY.md)
-
 ## AI Transparency
 
 Pacearr was created with heavy AI assistance.
 
-Claude, Codex, and OpenAI Sora were used throughout the project for design exploration, implementation help, refactoring, explanation, and iteration. The intent is not to hide that. Pacearr has been built by combining hands-on product direction with AI-assisted development work.
+Claude, Codex, Leonardo.ai, and CodeRabbit were all used throughout the project for design exploration, implementation help, refactoring, review, explanation, and iteration. The intent is not to hide that. Pacearr has been built by combining hands-on product direction with a lot of AI-assisted development work.
 
 ## Credits And Inspiration
 
 Pacearr was shaped in part by studying projects that solve adjacent problems well, especially Sonarr, Tautulli, Hubarr, and Pulsarr.
 
 Those projects were helpful references for thinking about media automation, background-job design, Plex integration patterns, logging, and operational workflows. Pacearr has its own scope, but it would be unfair not to acknowledge their influence.
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Sonarr/Sonarr">Sonarr</a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Tautulli/Tautulli">Tautulli</a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Migz93/hubarr">Hubarr</a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/jamcalli/pulsarr">Pulsarr</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Sonarr/Sonarr">
+        <img src="https://raw.githubusercontent.com/Sonarr/Sonarr/develop/Logo/512.png" alt="Sonarr logo" width="72" height="72" />
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Tautulli/Tautulli">
+        <img src="https://raw.githubusercontent.com/Tautulli/Tautulli/master/data/interfaces/default/images/logo-circle.png" alt="Tautulli logo" width="72" height="72" />
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Migz93/hubarr">
+        <img src="https://raw.githubusercontent.com/Migz93/hubarr/refs/heads/main/public/logo.png" alt="Hubarr logo" width="72" height="72" />
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/jamcalli/pulsarr">
+        <img src="https://raw.githubusercontent.com/jamcalli/Pulsarr/refs/heads/master/assets/icons/pulsarr.svg" alt="Pulsarr logo" width="72" height="72" />
+      </a>
+    </td>
+  </tr>
+</table>
 
 [buymecoffee]: https://www.buymeacoffee.com/Migz93
 [buymecoffeebadge]: https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg?style=for-the-badge
