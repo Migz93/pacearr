@@ -59,9 +59,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 ## Adding New Tests
 
-Create a `*.test.ts` file under `tests/server/` and it is picked up
-automatically by `npm run test:server`. Tests should build their own temporary
-database rather than sharing state.
+Which layer to reach for — server test or Playwright — is covered in `AGENTS.md`
+under Tests. Mechanically:
+
+- **Server tests:** create a `*.test.ts` file under `tests/server/` and it is
+  picked up by `npm run test:server`. Tests should build their own temporary
+  database rather than sharing state.
+- **Playwright:** not wired up yet — see
+  [#50](https://github.com/Migz93/pacearr/issues/50). Say so rather than
+  substituting a server test for a UI concern.
 
 When a test is agreed and written, add a row for it in the relevant table above.
 
