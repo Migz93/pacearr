@@ -105,15 +105,11 @@ docker compose up -d
 
 ### Configuration
 
-Pacearr is configured through its web UI after first run. The two Docker settings you may want to change before starting are:
+Pacearr is configured through its web UI after first run. The main things you may want to adjust in your Docker setup before starting:
 
 - **Port** — change the left side of `9302:9302` to expose Pacearr on a different host port (e.g. `8080:9302`)
 - **Data directory** — change the left side of `/opt/pacearr:/config` to store Pacearr's database, artwork backups, image cache, and logs wherever you prefer on your host
 - **Timezone** — set `TZ` to your preferred timezone if you do not want UTC
-
-Pacearr runs as an unprivileged user (UID/GID `1000`), not root. The container starts as root only long enough to take ownership of the data directory, including on a fresh bind mount, then drops privileges. You do not need to `chown` anything on the host.
-
-That fix ships in the image, so upgrading means replacing the container, not restarting it: `docker compose pull && docker compose up -d`, or re-run the `docker pull`/`stop`/`rm`/`run` sequence.
 
 ### First Setup
 
