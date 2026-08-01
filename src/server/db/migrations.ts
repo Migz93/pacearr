@@ -210,6 +210,21 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE plex_artwork ADD COLUMN overlay_thumb TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 11,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_season_inactivity (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          inactive_since TEXT NOT NULL,
+          PRIMARY KEY (rolling_show_id, season_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_rolling_season_inactivity_show ON rolling_season_inactivity(rolling_show_id);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger): void {

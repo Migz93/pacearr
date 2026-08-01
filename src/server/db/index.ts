@@ -18,6 +18,7 @@ import type {
   UserRecord,
   WatchEvent,
   ShowRecommendation,
+  ShowUserProgress,
   SonarrLibraryCacheItem,
   DashboardShowActivity,
   PlexArtworkRecord,
@@ -29,7 +30,7 @@ import { runMigrations } from "./migrations.js";
 
 const now = () => new Date().toISOString();
 
-const DEFAULT_APP_SETTINGS: AppSettings = {
+export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
@@ -38,6 +39,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   inactivityResetDays: 7,
   autoResetEnabled: true,
   progressiveCleanupEnabled: true,
+  progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
   recommendationMinimumSavingsGb: 50,
   trustProxy: false,
@@ -498,6 +500,11 @@ export class PacearrDatabase {
       .run(overlaySha256, renderVersion, now(), id);
   }
 
+  updatePlexArtworkPaths(id: number, originalPosterPath: string, overlayPosterPath: string): void {
+    this.db.prepare("UPDATE plex_artwork SET original_poster_path = ?, overlay_poster_path = ?, updated_at = ? WHERE id = ?")
+      .run(originalPosterPath, overlayPosterPath, now(), id);
+  }
+
   listRollingShows(): RollingShowRecord[] {
     return (this.db.prepare("SELECT * FROM rolling_shows ORDER BY title").all() as any[]).map(rollingShowFromRow);
   }
@@ -524,12 +531,20 @@ export class PacearrDatabase {
 
   resetExpandedSeasons(rollingShowId: number): void {
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
+    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
   }
 
   replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): void {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
+    if (expanded.length === 0) {
+      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+    } else {
+      this.db.prepare(`DELETE FROM rolling_season_inactivity
+        WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
+        .run(rollingShowId, ...expanded);
+    }
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
@@ -538,11 +553,33 @@ export class PacearrDatabase {
     const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
+    this.clearSeasonInactivity(rollingShowId, seasonNumber);
   }
 
-  upsertRollingUserProgress(rollingShowId: number, userId: number, season: number, episode: number, watchedAt: string): RollingShowUserRecord {
-    const stamp = now();
+  getSeasonInactiveSince(rollingShowId: number, seasonNumber: number): string | null {
+    const row = this.db.prepare(`
+      SELECT inactive_since AS inactiveSince FROM rolling_season_inactivity
+      WHERE rolling_show_id = ? AND season_number = ?
+    `).get(rollingShowId, seasonNumber) as { inactiveSince: string } | undefined;
+    return row?.inactiveSince ?? null;
+  }
+
+  markSeasonInactive(rollingShowId: number, seasonNumber: number, inactiveSince: string): void {
     this.db.prepare(`
+      INSERT INTO rolling_season_inactivity (rolling_show_id, season_number, inactive_since)
+      VALUES (?, ?, ?)
+      ON CONFLICT(rolling_show_id, season_number) DO NOTHING
+    `).run(rollingShowId, seasonNumber, inactiveSince);
+  }
+
+  clearSeasonInactivity(rollingShowId: number, seasonNumber: number): void {
+    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ? AND season_number = ?")
+      .run(rollingShowId, seasonNumber);
+  }
+
+  upsertRollingUserProgress(rollingShowId: number, userId: number, season: number, episode: number, watchedAt: string): boolean {
+    const stamp = now();
+    return this.db.prepare(`
       INSERT INTO rolling_show_users (rolling_show_id, user_id, last_watched_season, last_watched_episode, last_watched_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(rolling_show_id, user_id) DO UPDATE SET
@@ -550,14 +587,11 @@ export class PacearrDatabase {
         last_watched_episode = excluded.last_watched_episode,
         last_watched_at = excluded.last_watched_at,
         updated_at = excluded.updated_at
-      WHERE excluded.last_watched_season > rolling_show_users.last_watched_season
-        OR (excluded.last_watched_season = rolling_show_users.last_watched_season
-          AND excluded.last_watched_episode > rolling_show_users.last_watched_episode)
-        OR (excluded.last_watched_season = rolling_show_users.last_watched_season
-          AND excluded.last_watched_episode = rolling_show_users.last_watched_episode
-          AND excluded.last_watched_at >= rolling_show_users.last_watched_at)
-    `).run(rollingShowId, userId, season, episode, watchedAt, stamp, stamp);
-    return this.getRollingUserProgress(rollingShowId, userId)!;
+      -- A viewer can restart a show after reaching a later season. Their
+      -- current rolling position is their most recent watch, not their
+      -- numerically furthest historical episode.
+      WHERE excluded.last_watched_at >= rolling_show_users.last_watched_at
+    `).run(rollingShowId, userId, season, episode, watchedAt, stamp, stamp).changes > 0;
   }
 
   listProgressForShow(rollingShowId: number): RollingShowUserRecord[] {
@@ -588,37 +622,7 @@ export class PacearrDatabase {
     `).get(rollingShowId, userId) as RollingShowUserRecord | null;
   }
 
-  listLatestUserProgressForSeries(sonarrSeriesId: number) {
-    return this.db.prepare(`
-      WITH ranked_events AS (
-        SELECT
-          user_id,
-          season_number,
-          episode_number,
-          watched_at,
-          ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY watched_at DESC, id DESC) AS row_number
-        FROM watch_events
-        WHERE sonarr_series_id = ? AND user_id IS NOT NULL
-      )
-      SELECT
-        users.id AS userId,
-        users.display_name AS displayName,
-        users.avatar_url AS avatarUrl,
-        users.enabled AS enabled,
-        ranked_events.season_number AS seasonNumber,
-        ranked_events.episode_number AS episodeNumber,
-        ranked_events.watched_at AS watchedAt
-      FROM ranked_events
-      JOIN users ON users.id = ranked_events.user_id
-      WHERE ranked_events.row_number = 1
-      ORDER BY ranked_events.season_number DESC, ranked_events.episode_number DESC, users.display_name
-    `).all(sonarrSeriesId).map((row: any) => ({
-      ...row,
-      enabled: bool(row.enabled),
-    }));
-  }
-
-  listFurthestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
+  listLatestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
     const filter = since ? "AND we.watched_at >= ?" : "";
     const values = since ? [sonarrSeriesId, since] : [sonarrSeriesId];
     return this.db.prepare(`
@@ -626,7 +630,7 @@ export class PacearrDatabase {
         SELECT we.user_id, we.season_number, we.episode_number, we.watched_at, we.id,
           ROW_NUMBER() OVER (
             PARTITION BY we.user_id
-            ORDER BY we.season_number DESC, we.episode_number DESC, we.watched_at DESC, we.id DESC
+            ORDER BY we.watched_at DESC, we.id DESC
           ) AS row_number
         FROM watch_events we
         WHERE we.sonarr_series_id = ? AND we.user_id IS NOT NULL ${filter}
@@ -637,8 +641,41 @@ export class PacearrDatabase {
       FROM ranked_events
       JOIN users ON users.id = ranked_events.user_id
       WHERE ranked_events.row_number = 1
-      ORDER BY ranked_events.season_number DESC, ranked_events.episode_number DESC, users.display_name
+      ORDER BY ranked_events.watched_at DESC, users.display_name
     `).all(...values).map((row: any) => ({ ...row, enabled: bool(row.enabled) }));
+  }
+
+  /** Batched form of listLatestUserProgressForSeries — avoids one query per series when listing an entire library. */
+  listLatestUserProgressForSeriesBatch(sonarrSeriesIds: number[], since?: string): Map<number, ShowUserProgress[]> {
+    if (sonarrSeriesIds.length === 0) return new Map();
+    const placeholders = sonarrSeriesIds.map(() => "?").join(", ");
+    const filter = since ? "AND we.watched_at >= ?" : "";
+    const values = since ? [...sonarrSeriesIds, since] : [...sonarrSeriesIds];
+    const rows = this.db.prepare(`
+      WITH ranked_events AS (
+        SELECT we.sonarr_series_id AS sonarr_series_id, we.user_id, we.season_number, we.episode_number, we.watched_at, we.id,
+          ROW_NUMBER() OVER (
+            PARTITION BY we.sonarr_series_id, we.user_id
+            ORDER BY we.watched_at DESC, we.id DESC
+          ) AS row_number
+        FROM watch_events we
+        WHERE we.sonarr_series_id IN (${placeholders}) AND we.user_id IS NOT NULL ${filter}
+      )
+      SELECT ranked_events.sonarr_series_id AS sonarrSeriesId, users.id AS userId, users.display_name AS displayName,
+        users.avatar_url AS avatarUrl, users.enabled AS enabled, ranked_events.season_number AS seasonNumber,
+        ranked_events.episode_number AS episodeNumber, ranked_events.watched_at AS watchedAt
+      FROM ranked_events
+      JOIN users ON users.id = ranked_events.user_id
+      WHERE ranked_events.row_number = 1
+      ORDER BY ranked_events.watched_at DESC, users.display_name
+    `).all(...values) as Array<ShowUserProgress & { sonarrSeriesId: number; enabled: number | boolean }>;
+
+    const grouped = new Map<number, ShowUserProgress[]>();
+    for (const { sonarrSeriesId, ...row } of rows) {
+      const progress: ShowUserProgress = { ...row, enabled: bool(row.enabled) };
+      grouped.set(sonarrSeriesId, [...(grouped.get(sonarrSeriesId) ?? []), progress]);
+    }
+    return grouped;
   }
 
   listWatchStatsForSeries(sonarrSeriesId: number) {

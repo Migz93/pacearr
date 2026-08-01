@@ -6,7 +6,7 @@ import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
-import { PacearrDatabase } from "./db/index.js";
+import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration } from "./integrations/tautulli.js";
@@ -311,6 +311,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
+    if (body.progressiveCleanupDelayDays !== undefined) {
+      const delayDays = Number(body.progressiveCleanupDelayDays);
+      patch.progressiveCleanupDelayDays = Math.max(0, Math.floor(Number.isFinite(delayDays) ? delayDays : DEFAULT_APP_SETTINGS.progressiveCleanupDelayDays));
+    }
     if (body.recommendationMinimumSavingsGb !== undefined) {
       patch.recommendationMinimumSavingsGb = Math.max(0, Number(body.recommendationMinimumSavingsGb) || 0);
     }
@@ -444,10 +448,20 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json(await services.getShowDetail(Number(req.params.seriesId)));
   }));
   app.post("/api/shows/:seriesId/enroll", requireAuth, asyncRoute(async (req, res) => {
-    res.json(await services.enrollShow(Number(req.params.seriesId), {
+    const options = {
       applyBaseline: req.body.applyBaseline !== false,
       importHistory: req.body.importHistory !== false,
-    }));
+    };
+    const enrollment = await services.beginEnrollment(Number(req.params.seriesId), options);
+    res.json({ ok: true, message: `Enrolled ${enrollment.rolling.title}. Setup continues in the background.`, rollingShowId: enrollment.rolling.id });
+    void services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, options).catch((error) => {
+      logger.error("Enrollment setup failed after show was enrolled", {
+        seriesId: enrollment.series.id,
+        rollingShowId: enrollment.rolling.id,
+        title: enrollment.rolling.title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }));
   app.get("/api/recommendations", requireAuth, asyncRoute(async (req, res) => {
     const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;

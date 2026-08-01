@@ -14,7 +14,7 @@ function silentLogger(): Logger {
   return { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 }
 
-function createHarness() {
+function createHarness(logger: Logger = silentLogger()) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-recommend-test-"));
   const config: RuntimeConfig = {
     port: 9302,
@@ -24,7 +24,6 @@ function createHarness() {
     logLevel: "error",
   };
   const db = new PacearrDatabase(config);
-  const logger = silentLogger();
   const imageCache = new ImageCacheService(dir, logger);
   const services = new PacearrServices(db, logger, imageCache, dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
@@ -48,10 +47,13 @@ function installFetchStub(routes: {
   seriesById?: Record<number, SonarrSeries>;
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
+  episodeFileErrorsBySeries?: Record<number, string>;
+  requests?: Array<{ method: string; pathname: string }>;
 }) {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") return emptyPlexHistoryXml();
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -65,8 +67,11 @@ function installFetchStub(routes: {
     }
     if (url.pathname === "/api/v3/episodefile") {
       const seriesId = Number(url.searchParams.get("seriesId"));
+      const error = routes.episodeFileErrorsBySeries?.[seriesId];
+      if (error) return new Response(JSON.stringify({ message: error }), { status: 404, headers: { "content-type": "application/json" } });
       return jsonResponse(routes.episodeFilesBySeries?.[seriesId] ?? []);
     }
+    if ((init?.method ?? "GET").toUpperCase() !== "GET") return jsonResponse({});
     throw new Error(`Unhandled fetch in test: ${url.toString()}`);
   }) as typeof fetch;
   return () => { globalThis.fetch = originalFetch; };
@@ -97,6 +102,90 @@ test("watch events for non-enrolled shows are matched against the full Sonarr li
     await services.importHistory();
 
     assert.equal(db.listUnmatchedWatchEvents().length, 0);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+function rollingSeries(id: number): SonarrSeries {
+  return {
+    id,
+    title: "Delay Test",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+}
+
+function rollingEpisodes(id: number): SonarrEpisode[] {
+  return [
+    { id: id * 10 + 1, seriesId: id, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: id * 100 + 1 },
+    { id: id * 10 + 2, seriesId: id, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: id * 100 + 2 },
+  ];
+}
+
+test("rolling reconciliation waits for the default seven-day inactivity delay", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(901);
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 901: series }, episodesBySeries: { 901: rollingEpisodes(901) }, episodeFilesBySeries: { 901: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const rolling = db.upsertRollingShow({ id: 901, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString());
+
+    await services.reconcileRollingShows();
+
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+    assert.equal(requests.some((request) => request.method === "DELETE"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("rolling reconciliation honours a custom delay and immediate cleanup at zero", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(902);
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 902: series }, episodesBySeries: { 902: rollingEpisodes(902) }, episodeFilesBySeries: { 902: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
+    const rolling = db.upsertRollingShow({ id: 902, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString());
+    await services.reconcileRollingShows();
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+
+    db.updateAppSettings({ progressiveCleanupDelayDays: 0 });
+    await services.reconcileRollingShows();
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, []);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90202")), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a returning active viewer clears an inactive season's cleanup timer", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series = rollingSeries(903);
+  const restoreFetch = installFetchStub({ seriesById: { 903: series }, episodesBySeries: { 903: rollingEpisodes(903) }, episodeFilesBySeries: { 903: [] } });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-delay", plexAccountId: "delay", tautulliUserId: null, username: "delay", displayName: "Delay", avatarUrl: null }]);
+    db.updateUser(user.id, { enabled: true, tautulliUserId: null });
+    const rolling = db.upsertRollingShow({ id: 903, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonInactive(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.upsertRollingUserProgress(rolling.id, user.id, 1, 2, new Date().toISOString());
+
+    await services.reconcileRollingShows();
+
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
+    assert.equal(db.getSeasonInactiveSince(rolling.id, 1), null);
   } finally {
     restoreFetch();
     cleanup();
@@ -160,6 +249,31 @@ test("enrolling a show seeds rolling progress from watch history that was alread
     assert.equal(progress[0]?.userId, user.id);
     assert.equal(progress[0]?.lastWatchedSeason, 2);
     assert.equal(progress[0]?.lastWatchedEpisode, 4);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("reset and unenrolment are blocked while asynchronous enrollment setup is pending", async () => {
+  const { services, cleanup } = createHarness();
+  const fringe: SonarrSeries = { id: 801, title: "Fringe", year: 2008, seasons: [] };
+  const restoreFetch = installFetchStub({ seriesById: { 801: fringe } });
+  try {
+    const enrollment = await services.beginEnrollment(801, { applyBaseline: false, importHistory: false });
+    await assert.rejects(() => services.beginEnrollment(801, { applyBaseline: false, importHistory: false }), /already running/);
+    const reconciliation = await services.reconcileRollingShows();
+    const reset = await services.resetShow(enrollment.rolling.id);
+    const remove = await services.removeShow(enrollment.rolling.id);
+
+    assert.equal(reconciliation.ok, true);
+    assert.equal(reconciliation.changed, 0);
+    assert.equal(reset.ok, false);
+    assert.equal(remove.ok, false);
+    assert.match(reset.message, /still running/);
+    assert.match(remove.message, /still running/);
+
+    await services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: false, importHistory: false });
   } finally {
     restoreFetch();
     cleanup();
@@ -290,8 +404,107 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
   }
 });
 
+test("recommendation refresh skips a Sonarr failure and logs it without losing other candidates", async () => {
+  const warnings: Array<{ message: string; meta?: unknown }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn(message: string, meta?: unknown) { warnings.push({ message, meta }); },
+    error() {},
+  } as unknown as Logger;
+  const { services, cleanup } = createHarness(logger);
+  const broken: SonarrSeries = {
+    id: 1000,
+    title: "Broken Episode File Reference",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const healthy: SonarrSeries = {
+    id: 1001,
+    title: "Healthy Recommendation",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const episodes = (seriesId: number): SonarrEpisode[] => [
+    { id: seriesId + 1, seriesId, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: seriesId + 10 },
+    { id: seriesId + 2, seriesId, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: seriesId + 20 },
+  ];
+  const restoreFetch = installFetchStub({
+    series: [broken, healthy],
+    episodesBySeries: { 1000: episodes(1000), 1001: episodes(1001) },
+    episodeFilesBySeries: { 1001: [
+      { id: 1011, seriesId: 1001, seasonNumber: 1, size: 500 },
+      { id: 1021, seriesId: 1001, seasonNumber: 1, size: 1_500 },
+    ] },
+    episodeFileErrorsBySeries: { 1000: "EpisodeFile with ID 258557 does not exist" },
+  });
+
+  try {
+    await services.refreshRecommendations();
+    assert.deepEqual(services.listRecommendations().candidates.map((candidate) => candidate.sonarrSeriesId), [1001]);
+    const skipped = warnings.find((warning) => warning.message === "Skipped show during recommendation refresh");
+    assert.ok(skipped);
+    assert.equal((skipped.meta as { seriesId: number }).seriesId, 1000);
+    assert.equal((skipped.meta as { title: string }).title, "Broken Episode File Reference");
+    assert.match((skipped.meta as { error: string }).error, /EpisodeFile with ID 258557 does not exist/);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("recommendation refresh keeps the previous cache when every candidate fails", async () => {
+  const errors: Array<{ message: string; meta?: unknown }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn() {},
+    error(message: string, meta?: unknown) { errors.push({ message, meta }); },
+  } as unknown as Logger;
+  const { db, services, cleanup } = createHarness(logger);
+  const show: SonarrSeries = {
+    id: 1100,
+    title: "Unavailable Recommendation",
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 2, totalEpisodeCount: 2, sizeOnDisk: 2_000 } }],
+  };
+  const restoreFetch = installFetchStub({
+    series: [show],
+    episodesBySeries: { 1100: [
+      { id: 1101, seriesId: 1100, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 1110 },
+      { id: 1102, seriesId: 1100, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 1120 },
+    ] },
+    episodeFileErrorsBySeries: { 1100: "EpisodeFile with ID 999999 does not exist" },
+  });
+
+  try {
+    db.saveRecommendationCache([{
+      sonarrSeriesId: 9999,
+      title: "Previous Recommendation",
+      year: null,
+      posterUrl: null,
+      status: null,
+      seasonCount: 1,
+      episodeCount: 2,
+      sizeOnDiskBytes: 2_000,
+      retainedSeasons: [],
+      droppedSeasons: [1],
+      watcherCount: 0,
+      watchers: [],
+      projectedSavingsBytes: 1_000,
+      ignored: false,
+    }]);
+
+    await services.refreshRecommendations();
+
+    assert.deepEqual(services.listRecommendations().candidates.map((candidate) => candidate.sonarrSeriesId), [9999]);
+    assert.equal(errors[0]?.message, "Recommendation refresh failed for every candidate; keeping previous cache");
+    assert.deepEqual(errors[0]?.meta, { attempted: 1, skipped: 1 });
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("ignored recommendations are persistent, hidden by default, and can be restored", async () => {
-  const { db, services, cleanup } = createHarness();
+  const { services, cleanup } = createHarness();
   const show: SonarrSeries = {
     id: 900,
     title: "Never Watching",

@@ -86,9 +86,10 @@ Only enabled users can trigger expansion or block cleanup.
 
 The `rolling-reconcile` job checks every enrolled show every six hours. It
 derives retained seasons from enabled viewers active inside the configured
-activity window, then brings Sonarr back to that target state. This covers new
-enrollments with no viewer activity, dry-run-to-live transitions, missed
-playback events, and manual changes made in Sonarr.
+activity window, applies the inactive-season cleanup delay, then brings Sonarr
+back to that target state. This covers new enrollments with no viewer activity,
+dry-run-to-live transitions, missed playback events, manual changes made in
+Sonarr, and orphaned non-pilot files left by an interrupted cleanup.
 
 The job does not repeatedly search healthy pilots. If a newly active viewer
 makes a season required, it monitors that season and starts a Sonarr season
@@ -103,6 +104,14 @@ When a watch event is processed and `progressiveCleanupEnabled` is true:
 - Pacearr checks expanded seasons lower than the user's current season.
 - If no enabled user still has progress at or before a candidate season, that season is reset to pilot-only.
 - Pacearr keeps E01 monitored, unmonitors E02+, disables the season-level flag, and deletes E02+ files when file deletion is enabled.
+
+Before this cleanup runs, an inactive expanded season waits for the configured
+**Inactive-season cleanup delay**, which defaults to seven days. Pacearr records
+the first reconciliation that observes the season has no active viewer; this is
+the start of the timer for legacy seasons whose earlier transition is unknown.
+If a viewer returns before the delay expires, the timer is cleared. A value of
+`0` preserves immediate cleanup. Seasons that were never expanded are already
+pilot-only and need no inactivity timer.
 
 Progressive cleanup is intentionally conservative. Multi-user activity should preserve seasons still relevant to another enabled user.
 

@@ -38,3 +38,23 @@ test("rolling plan retains active viewer seasons and resets only other seasons t
   assert.equal(plan.filesToDelete.length, 6);
   assert.equal(plan.filesToDelete.some((id) => id >= 2000 && id < 4000), false);
 });
+
+test("rolling plan does not search monitored episodes that already have files", () => {
+  const downloadedEpisodes = episodes.map((episode) => ({ ...episode, hasFile: true }));
+  const plan = calculateRollingPlan(series, downloadedEpisodes, [2, 3], true);
+
+  assert.deepEqual(plan.pilotSearches, []);
+  assert.deepEqual(plan.seasonSearches, []);
+});
+
+test("rolling plan deletes an orphaned non-pilot file even when it was already unmonitored", () => {
+  const driftedEpisodes = episodes.map((episode) =>
+    episode.seasonNumber === 4 && episode.episodeNumber === 3
+      ? { ...episode, monitored: false, hasFile: true, episodeFileId: 4003 }
+      : episode
+  );
+  const plan = calculateRollingPlan(series, driftedEpisodes, [5], true);
+
+  assert.equal(plan.episodesToUnmonitor.some((episode) => episode.id === 403), false);
+  assert.deepEqual(plan.filesToDelete, [1002, 1003, 2002, 2003, 3002, 3003, 4002, 4003]);
+});

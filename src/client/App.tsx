@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "./lib/api";
 import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
 import Dashboard from "./pages/Dashboard";
 import Shows from "./pages/Shows";
-import Recommendations from "./pages/Recommendations";
 import Users from "./pages/Users";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
@@ -18,10 +18,10 @@ export default function App() {
   const navigate = useNavigate();
 
   if (window.location.pathname === "/login/plex/loading") {
-    return <div className="centered">Opening Plex...</div>;
+    return <PlexPopupLoading />;
   }
   if (window.location.pathname === "/login/plex/done") {
-    return <div className="centered">Plex authorized. You can close this window.</div>;
+    return <PlexPopupDone />;
   }
 
   async function refresh() {
@@ -66,13 +66,41 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/shows" element={<Shows />} />
         <Route path="/shows/:seriesId" element={<Shows />} />
-        <Route path="/recommendations" element={<Recommendations />} />
+        <Route path="/recommendations" element={<Navigate to="/shows?tab=recommendations" replace />} />
         <Route path="/users" element={<Users />} />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings onSaved={refresh} />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Layout>
+  );
+}
+
+function PlexPopupLoading() {
+  return (
+    <div className="centered" role="status" aria-live="polite" aria-label="Opening Plex...">
+      <RefreshCw size={28} className="spin" aria-hidden="true" />
+    </div>
+  );
+}
+
+function PlexPopupDone() {
+  useEffect(() => {
+    window.close();
+
+    // Some browsers ignore a window.close() call fired before the page has
+    // fully settled — retry once shortly after in case the first call is dropped.
+    const retryId = window.setTimeout(() => {
+      window.close();
+    }, 250);
+
+    return () => window.clearTimeout(retryId);
+  }, []);
+
+  return (
+    <div className="centered" role="status" aria-live="polite">
+      Plex authorized. You can close this window.
+    </div>
   );
 }
 

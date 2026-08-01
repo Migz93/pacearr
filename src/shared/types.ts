@@ -85,6 +85,7 @@ export interface AppSettings {
   inactivityResetDays: number;
   autoResetEnabled: boolean;
   progressiveCleanupEnabled: boolean;
+  progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;
   recommendationMinimumSavingsGb: number;
   trustProxy: boolean;
@@ -214,6 +215,9 @@ export interface ShowListItem {
   status: string | null;
   seasonCount: number;
   episodeCount: number;
+  sizeOnDiskBytes: number;
+  watcherCount: number;
+  watchers: ShowUserProgress[];
 }
 
 export interface ShowSeasonSummary {
@@ -259,6 +263,12 @@ export interface ShowDetailResponse {
   dryRunPreview: {
     enabled: boolean;
   };
+  recommendation: {
+    sizeOnDiskBytes: number;
+    projectedSavingsBytes: number;
+    ignored: boolean;
+    eligible: boolean;
+  } | null;
 }
 
 export interface SonarrLibraryCacheItem {
@@ -414,6 +424,7 @@ export interface ConnectionTestResult {
 export interface RunResult {
   ok: boolean;
   message: string;
+  rollingShowId?: number;
   processed?: number;
   changed?: number;
   fetched?: number;
