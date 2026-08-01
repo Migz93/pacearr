@@ -1,6 +1,6 @@
 # Pacearr
 
-![Pacearr logo](./public/pacearr-logo.svg)
+<img src="./public/logo.png" alt="Pacearr logo" width="256" height="256" />
 
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]][license]
