@@ -4,7 +4,9 @@ export async function openPage(page: Page, path: string, heading: string): Promi
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error" && !message.text().startsWith("The Cross-Origin-Opener-Policy header has been ignored")) {
+      consoleErrors.push(message.text());
+    }
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
 

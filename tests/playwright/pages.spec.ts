@@ -32,7 +32,7 @@ test("sidebar navigation links are present", async ({ page }) => {
 });
 
 test("unauthenticated requests redirect to login", async ({ browser, baseURL }) => {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
   await page.goto(`${baseURL}/dashboard`);
   await expect(page).toHaveURL(/\/login$/);
