@@ -369,6 +369,7 @@ test("dry-run expansion does not clear existing prefetch targets", async () => {
     const rolling = db.upsertRollingShow({ id: 908, title: "Dry Run Expansion" });
     db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z");
     db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+    db.updateAppSettings({ dryRun: true });
 
     const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test");
 
