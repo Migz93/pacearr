@@ -1012,6 +1012,7 @@ export class PacearrServices {
 
   private getStalePrefetchedSeasons(rolling: RollingShowRecord, observedAt = new Date()): number[] {
     const settings = this.db.getAppSettings();
+    if (!settings.progressiveCleanupEnabled) return [];
     const activeCutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const activeProgress = this.db.listProgressForShow(rolling.id).filter((progress) =>
       progress.lastWatchedSeason > 0 &&

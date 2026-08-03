@@ -356,6 +356,43 @@ test("scheduled reconciliation reclaims stale prefetches that no active viewer n
   }
 });
 
+test("scheduled reconciliation leaves stale prefetches alone when progressive cleanup is disabled", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 906,
+    title: "Cleanup Disabled",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9061, seriesId: 906, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90601 },
+    { id: 9062, seriesId: 906, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90602 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 906: series },
+    episodesBySeries: { 906: episodes },
+    episodeFilesBySeries: { 906: [{ id: 90602, seriesId: 906, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupEnabled: false, progressiveCleanupDelayDays: 0 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-disabled", plexAccountId: "disabled", tautulliUserId: null, username: "disabled", displayName: "Disabled", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 906, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-01-01T10:00:00.000Z");
+
+    const result = await services.reconcileRollingShows();
+
+    assert.equal(result.ok, true);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90602")), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("listRecommendations computes precise per-season savings, excludes enrolled/fully-retained shows, and sorts by savings descending", async () => {
   const { db, services, cleanup } = createHarness();
 
