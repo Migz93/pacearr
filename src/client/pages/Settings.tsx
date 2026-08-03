@@ -219,7 +219,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         </Field>
       </div>
       <div className="settings-divider"><span>Cleanup</span></div>
-      <ToggleField label="Progressive cleanup" hint="While processing new watch activity, Pacearr can return older expanded seasons to pilot-only monitoring once every enabled viewer has moved beyond them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
+      <ToggleField label="Progressive cleanup" hint="While processing watch activity and scheduled reconciliation, Pacearr can return older expanded seasons and stale prefetched seasons to pilot-only monitoring once no enabled viewer still needs them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
       <Field label="Inactive-season cleanup delay (days)" hint="Wait this long after an expanded season or stale prefetch has no active viewers before returning it to pilot-only. Set to 0 for immediate cleanup.">
         <input type="number" min={0} step={1} value={form.progressiveCleanupDelayDays} onChange={(event) => setForm({ ...form, progressiveCleanupDelayDays: Number(event.target.value) })} />
       </Field>

@@ -39,7 +39,8 @@ show detail page displays the prefetched episodes and triggering user. During
 scheduled reconciliation, a prefetch is reclaimed after the progressive cleanup
 delay when no active enabled viewer still needs that season (because viewers are
 inactive or have progressed beyond it). Dry-run previews this cleanup without
-clearing persisted prefetch state.
+clearing persisted prefetch state. This reclaim, like expanded-season cleanup,
+is disabled when the **Progressive cleanup** setting is disabled.
 
 The setting is controlled under Settings → Automation:
 
