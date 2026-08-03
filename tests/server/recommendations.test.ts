@@ -318,6 +318,50 @@ test("reset clears prefetch targets before applying the pilot baseline", async (
   }
 });
 
+test("dry-run reset excludes prefetch targets from the projected pilot baseline", async () => {
+  const skippedMutations: Array<{ action?: string; episodes?: Array<{ id: number; monitored: boolean }>; episodeFileIds?: number[] }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn(_message: string, meta?: unknown) {
+      if (meta && typeof meta === "object") skippedMutations.push(meta as typeof skippedMutations[number]);
+    },
+    error() {},
+  } as unknown as Logger;
+  const { db, services, cleanup } = createHarness(logger);
+  const series: SonarrSeries = {
+    id: 907,
+    title: "Dry Run Prefetch Reset",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9071, seriesId: 907, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90701 },
+    { id: 9072, seriesId: 907, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90702 },
+  ];
+  const restoreFetch = installFetchStub({
+    seriesById: { 907: series },
+    episodesBySeries: { 907: episodes },
+    episodeFilesBySeries: { 907: [{ id: 90702, seriesId: 907, seasonNumber: 1, size: 100 }] },
+  });
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-dry-reset", plexAccountId: "dry-reset", tautulliUserId: null, username: "dry-reset", displayName: "Dry Reset", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 907, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+
+    const result = await services.resetShow(rolling.id);
+
+    assert.equal(result.ok, true);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+    assert.equal(skippedMutations.find((mutation) => mutation.action === "update-episodes-monitoring")?.episodes?.some((episode) => episode.id === 9072 && !episode.monitored), true);
+    assert.deepEqual(skippedMutations.find((mutation) => mutation.action === "delete-episode-files")?.episodeFileIds, [90702]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("scheduled reconciliation reclaims stale prefetches that no active viewer needs", async () => {
   const { db, services, cleanup } = createHarness();
   const series: SonarrSeries = {
