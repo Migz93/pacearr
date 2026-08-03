@@ -1,7 +1,16 @@
 import { clientLogger } from "./logger";
 
+function logPath(path: string): string {
+  try {
+    return new URL(path, window.location.origin).pathname;
+  } catch {
+    return "[invalid path]";
+  }
+}
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? "GET";
+  const safePath = logPath(path);
   let response: Response;
   try {
     response = await fetch(path, {
@@ -14,7 +23,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   } catch (caught) {
     clientLogger.error("API request could not be completed", {
       method,
-      path,
+      path: safePath,
       error: caught instanceof Error ? caught.message : String(caught),
     });
     throw caught;
@@ -22,7 +31,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   if (!response.ok) {
     clientLogger.warn("API request returned an error", {
       method,
-      path,
+      path: safePath,
       status: response.status,
       statusText: response.statusText,
     });

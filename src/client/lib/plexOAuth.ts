@@ -77,8 +77,11 @@ export class PlexOAuth {
 
   private async poll(): Promise<string> {
     if (!this.pin || !this.headers) {
-      clientLogger.error("Plex OAuth polling started without an initialized PIN");
-      throw new Error("Plex PIN was not initialized.");
+      clientLogger.error("Plex OAuth polling started without required state", {
+        hasPin: Boolean(this.pin),
+        hasHeaders: Boolean(this.headers),
+      });
+      throw new Error("Plex OAuth state was not initialized.");
     }
     // The user may close the popup manually before the token arrives (or, now that the
     // popup closes itself once Plex confirms auth, the close can simply be observed before

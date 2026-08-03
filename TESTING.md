@@ -46,9 +46,10 @@ it expires. Delete the saved state and provide a fresh cookie to re-authenticate
 rm tests/playwright/.auth/storageState.json
 ```
 
-Generated auth state, test results, and the HTML report are all gitignored. The
-smoke tests also fail on unexpected browser console errors and page errors,
-using the selective client logging convention from #42.
+Generated auth state, test results, and the HTML report are all gitignored and
+must stay local because they can contain authenticated page data. The smoke
+tests also fail on unexpected browser console errors and page errors, using the
+selective client logging convention from #42.
 
 ---
 
@@ -98,7 +99,7 @@ Read-only. Safe to run against a live instance.
 |---|---|
 | Primary pages load | Dashboard, Shows, Users, History, and Settings render their headings without browser console or page errors |
 | Sidebar navigation links are present | The five primary navigation links render inside the app navigation |
-| Unauthenticated requests redirect to login | A fresh browser context is redirected from `/dashboard` to `/login` |
+| Unauthenticated requests redirect to the login page | A fresh browser context is redirected from `/dashboard` to `/login` |
 
 ### `tests/playwright/settings.spec.ts` — Settings navigation
 

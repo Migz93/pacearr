@@ -12,6 +12,7 @@ export async function openPage(page: Page, path: string, heading: string): Promi
 
   await page.goto(path);
   await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
   expect(consoleErrors, `Unexpected browser console errors on ${path}`).toEqual([]);
   expect(pageErrors, `Unexpected page errors on ${path}`).toEqual([]);
 }
