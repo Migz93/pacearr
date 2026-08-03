@@ -24,6 +24,23 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const PIN_REQUEST_TIMEOUT_MS = 15_000;
+const POLL_REQUEST_TIMEOUT_MS = 10_000;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function isAbortError(caught: unknown): boolean {
+  return caught instanceof Error && caught.name === "AbortError";
+}
+
 export class PlexOAuth {
   private headers?: Record<string, string>;
   private pin?: PlexPin;
@@ -58,7 +75,7 @@ export class PlexOAuth {
     };
     let pinResponse: Response;
     try {
-      pinResponse = await fetch("https://plex.tv/api/v2/pins?strong=true", { method: "POST", headers: this.headers });
+      pinResponse = await fetchWithTimeout("https://plex.tv/api/v2/pins?strong=true", { method: "POST", headers: this.headers }, PIN_REQUEST_TIMEOUT_MS);
     } catch (caught) {
       clientLogger.error("Plex OAuth PIN request could not be completed", {
         errorType: caught instanceof Error ? caught.name : typeof caught,
@@ -69,7 +86,15 @@ export class PlexOAuth {
       clientLogger.warn("Plex OAuth PIN request failed", { status: pinResponse.status, statusText: pinResponse.statusText });
       throw new Error(`Failed to get Plex PIN: ${pinResponse.status}`);
     }
-    this.pin = await pinResponse.json() as PlexPin;
+    try {
+      this.pin = await pinResponse.json() as PlexPin;
+    } catch (caught) {
+      clientLogger.error("Plex OAuth PIN response could not be parsed", {
+        stage: "pin_creation",
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+      throw caught;
+    }
     const params = {
       clientID: this.headers["X-Plex-Client-Identifier"],
       "context[device][product]": "Pacearr",
@@ -101,8 +126,13 @@ export class PlexOAuth {
     for (let attempts = 0; attempts < 180; attempts++) {
       let response: Response;
       try {
-        response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
+        response = await fetchWithTimeout(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers }, POLL_REQUEST_TIMEOUT_MS);
       } catch (caught) {
+        if (isAbortError(caught)) {
+          clientLogger.warn("Plex OAuth PIN polling request timed out; retrying");
+          await wait(1000);
+          continue;
+        }
         clientLogger.error("Plex OAuth PIN polling could not be completed", {
           errorType: caught instanceof Error ? caught.name : typeof caught,
         });
@@ -112,7 +142,16 @@ export class PlexOAuth {
         clientLogger.warn("Plex OAuth PIN polling failed", { status: response.status, statusText: response.statusText });
         throw new Error(`Failed to poll Plex PIN: ${response.status}`);
       }
-      const data = await response.json() as { authToken?: string | null };
+      let data: { authToken?: string | null };
+      try {
+        data = await response.json() as { authToken?: string | null };
+      } catch (caught) {
+        clientLogger.error("Plex OAuth PIN response could not be parsed", {
+          stage: "pin_polling",
+          errorType: caught instanceof Error ? caught.name : typeof caught,
+        });
+        throw caught;
+      }
       if (data.authToken) {
         this.popup?.close();
         return data.authToken;

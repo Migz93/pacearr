@@ -4,14 +4,16 @@ import path from "node:path";
 
 const authFile = "tests/playwright/.auth/storageState.json";
 const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
+type StorageState = { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> };
 
 setup("authenticate", async ({ request }) => {
-  if (readStorageState()) {
+  const savedState = readStorageState();
+  if (savedState) {
     const currentHost = new URL(baseURL).hostname;
     const currentSecure = new URL(baseURL).protocol === "https:";
-    const savedDomain = getSavedCookieDomain();
-    if (savedDomain === currentHost && getSavedCookieSecure() === currentSecure) {
-      const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader() } });
+    const savedCookie = savedState.cookies[0];
+    if (savedCookie?.domain === currentHost && savedCookie.secure === currentSecure) {
+      const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader(savedState) } });
       const session = await response.json() as { authenticated: boolean };
       if (session.authenticated) return;
     }
@@ -49,42 +51,51 @@ setup("authenticate", async ({ request }) => {
     }],
     origins: [],
   }, null, 2);
-  const fileDescriptor = fs.openSync(
-    authFile,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
-    0o600,
-  );
+  const temporaryAuthFile = `${authFile}.${process.pid}.${Date.now()}.tmp`;
+  let fileDescriptor: number | undefined;
   try {
+    fileDescriptor = fs.openSync(
+      temporaryAuthFile,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      0o600,
+    );
     fs.writeFileSync(fileDescriptor, storageState);
     fs.fchmodSync(fileDescriptor, 0o600);
-  } finally {
     fs.closeSync(fileDescriptor);
+    fileDescriptor = undefined;
+    fs.renameSync(temporaryAuthFile, authFile);
+  } finally {
+    if (fileDescriptor !== undefined) fs.closeSync(fileDescriptor);
+    try {
+      fs.unlinkSync(temporaryAuthFile);
+    } catch {
+      // The temporary file was renamed successfully or never created.
+    }
   }
 });
 
-function buildCookieHeader(): string {
-  const state = readStorageState();
-  if (!state) return "";
+function buildCookieHeader(state: StorageState): string {
   return state.cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
 }
 
-function getSavedCookieDomain(): string | null {
-  const state = readStorageState();
-  if (!state) return null;
-  return state.cookies[0]?.domain ?? null;
-}
-
-function getSavedCookieSecure(): boolean | null {
-  const state = readStorageState();
-  if (!state) return null;
-  return state.cookies[0]?.secure ?? null;
-}
-
-function readStorageState(): { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> } | null {
+function readStorageState(): StorageState | null {
   try {
-    return JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> };
-  } catch (caught) {
-    if (caught instanceof Error && "code" in caught && caught.code === "ENOENT") return null;
-    throw caught;
+    const parsed: unknown = JSON.parse(fs.readFileSync(authFile, "utf-8"));
+    if (!isStorageState(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
   }
+}
+
+function isStorageState(value: unknown): value is StorageState {
+  if (!value || typeof value !== "object" || !("cookies" in value) || !Array.isArray(value.cookies)) return false;
+  return value.cookies.every((cookie) => {
+    if (!cookie || typeof cookie !== "object") return false;
+    const candidate = cookie as { name?: unknown; value?: unknown; domain?: unknown; secure?: unknown };
+    return typeof candidate.name === "string" &&
+      typeof candidate.value === "string" &&
+      (candidate.domain === undefined || typeof candidate.domain === "string") &&
+      (candidate.secure === undefined || typeof candidate.secure === "boolean");
+  });
 }
