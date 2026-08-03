@@ -47,6 +47,9 @@ test("early-prefetched episodes persist their triggering user and clear on expan
       { seasonNumber: 2, episodeNumber: 2, displayName: "Bob", triggeredAt: "2026-08-03T10:00:00.000Z" },
       { seasonNumber: 2, episodeNumber: 3, displayName: "Bob", triggeredAt: "2026-08-03T10:00:00.000Z" },
     ]);
+    db.clearPrefetchedEpisodes(show.id);
+    assert.deepEqual(db.listPrefetchedEpisodes(show.id), []);
+    assert.equal(db.recordPrefetchedEpisodes(show.id, user.id, 2, [2], "2026-08-03T11:00:00.000Z"), 1);
     db.markSeasonExpanded(show.id, 2, "2026-08-03T12:00:00.000Z");
     assert.deepEqual(db.listPrefetchedEpisodes(show.id), []);
   } finally {

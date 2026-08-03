@@ -657,8 +657,11 @@ export class PacearrServices {
     const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
     if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
     try {
-      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset");
       const dryRun = this.isDryRun();
+      // Remove partial prefetch targets before calculating the pilot-only reset
+      // plan, otherwise reconciliation deliberately protects them as desired state.
+      if (!dryRun) this.db.clearPrefetchedEpisodes(rollingShowId);
+      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset");
       if (!dryRun) this.db.resetExpandedSeasons(rollingShowId);
       this.db.addHistory("info", dryRun ? "dry_run.show.reset" : "show.reset", show.title, { changed, dryRun });
       this.logger.info("Show reset to pilot baseline", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, changed, dryRun });

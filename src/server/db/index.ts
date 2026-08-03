@@ -538,6 +538,10 @@ export class PacearrDatabase {
   resetExpandedSeasons(rollingShowId: number): void {
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
     this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+    this.clearPrefetchedEpisodes(rollingShowId);
+  }
+
+  clearPrefetchedEpisodes(rollingShowId: number): void {
     this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ?").run(rollingShowId);
   }
 
