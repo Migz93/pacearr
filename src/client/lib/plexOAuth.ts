@@ -56,7 +56,15 @@ export class PlexOAuth {
       "X-Plex-Platform": "Web",
       "X-Plex-Language": "en",
     };
-    const pinResponse = await fetch("https://plex.tv/api/v2/pins?strong=true", { method: "POST", headers: this.headers });
+    let pinResponse: Response;
+    try {
+      pinResponse = await fetch("https://plex.tv/api/v2/pins?strong=true", { method: "POST", headers: this.headers });
+    } catch (caught) {
+      clientLogger.error("Plex OAuth PIN request could not be completed", {
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+      throw caught;
+    }
     if (!pinResponse.ok) {
       clientLogger.warn("Plex OAuth PIN request failed", { status: pinResponse.status, statusText: pinResponse.statusText });
       throw new Error(`Failed to get Plex PIN: ${pinResponse.status}`);
@@ -91,7 +99,15 @@ export class PlexOAuth {
     // period instead of being cut off by the outer timeout.
     let gracePollsLeft = 5;
     for (let attempts = 0; attempts < 180; attempts++) {
-      const response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
+      let response: Response;
+      try {
+        response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
+      } catch (caught) {
+        clientLogger.error("Plex OAuth PIN polling could not be completed", {
+          errorType: caught instanceof Error ? caught.name : typeof caught,
+        });
+        throw caught;
+      }
       if (!response.ok) {
         clientLogger.warn("Plex OAuth PIN polling failed", { status: response.status, statusText: response.statusText });
         throw new Error(`Failed to poll Plex PIN: ${response.status}`);

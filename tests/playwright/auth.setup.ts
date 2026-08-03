@@ -6,8 +6,7 @@ const authFile = "tests/playwright/.auth/storageState.json";
 const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
 
 setup("authenticate", async ({ request }) => {
-  if (fs.existsSync(authFile)) {
-    fs.chmodSync(authFile, 0o600);
+  if (readStorageState()) {
     const currentHost = new URL(baseURL).hostname;
     const currentSecure = new URL(baseURL).protocol === "https:";
     const savedDomain = getSavedCookieDomain();
@@ -37,7 +36,7 @@ setup("authenticate", async ({ request }) => {
 
   fs.mkdirSync(path.dirname(authFile), { recursive: true });
   const url = new URL(baseURL);
-  fs.writeFileSync(authFile, JSON.stringify({
+  const storageState = JSON.stringify({
     cookies: [{
       name: "pacearr_session",
       value: encodeURIComponent(cookie),
@@ -49,24 +48,43 @@ setup("authenticate", async ({ request }) => {
       sameSite: "Strict",
     }],
     origins: [],
-  }, null, 2), { mode: 0o600 });
-  fs.chmodSync(authFile, 0o600);
+  }, null, 2);
+  const fileDescriptor = fs.openSync(
+    authFile,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    fs.writeFileSync(fileDescriptor, storageState);
+    fs.fchmodSync(fileDescriptor, 0o600);
+  } finally {
+    fs.closeSync(fileDescriptor);
+  }
 });
 
 function buildCookieHeader(): string {
-  if (!fs.existsSync(authFile)) return "";
-  const state = JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ name: string; value: string }> };
+  const state = readStorageState();
+  if (!state) return "";
   return state.cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
 }
 
 function getSavedCookieDomain(): string | null {
-  if (!fs.existsSync(authFile)) return null;
-  const state = JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ domain?: string }> };
+  const state = readStorageState();
+  if (!state) return null;
   return state.cookies[0]?.domain ?? null;
 }
 
 function getSavedCookieSecure(): boolean | null {
-  if (!fs.existsSync(authFile)) return null;
-  const state = JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ secure?: boolean }> };
+  const state = readStorageState();
+  if (!state) return null;
   return state.cookies[0]?.secure ?? null;
+}
+
+function readStorageState(): { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> } | null {
+  try {
+    return JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> };
+  } catch (caught) {
+    if (caught instanceof Error && "code" in caught && caught.code === "ENOENT") return null;
+    throw caught;
+  }
 }

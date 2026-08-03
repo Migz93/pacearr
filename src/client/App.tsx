@@ -16,7 +16,6 @@ export default function App() {
   const [boot, setBoot] = useState<BootstrapStatus | null>(null);
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   if (window.location.pathname === "/login/plex/loading") {
@@ -34,12 +33,12 @@ export default function App() {
       ]);
       setUser(session.authenticated ? session.user : null);
       setBoot(status);
-      setBootstrapError(null);
     } catch (caught) {
-      clientLogger.error("Application bootstrap request failed", { error: caught instanceof Error ? caught.message : String(caught) });
+      clientLogger.error("Application bootstrap request failed", {
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
       setUser(null);
       setBoot(null);
-      setBootstrapError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
     }
@@ -60,7 +59,7 @@ export default function App() {
   if (!boot) {
     return (
       <div className="centered">
-        <p>{bootstrapError ? `Unable to load Pacearr: ${bootstrapError}` : "Unable to load Pacearr."}</p>
+        <p>Unable to load Pacearr. Please try again.</p>
         <button type="button" className="primary-button" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
       </div>
     );
@@ -135,8 +134,10 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
       await apiPost("/api/auth/plex", { authToken });
       await onLogin();
     } catch (caught) {
-      clientLogger.warn("Plex login flow failed", { error: caught instanceof Error ? caught.message : String(caught) });
-      setError(caught instanceof Error ? caught.message : String(caught));
+      clientLogger.warn("Plex login flow failed", {
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+      setError("Unable to complete Plex login. Please try again.");
     } finally {
       setBusy(false);
     }
