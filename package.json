@@ -11,7 +11,7 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/server/index.js",
-    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.playwright.json",
     "test": "node --test dist-server-tests/**/*.test.js",
     "test:server": "npm run build:server && tsc -p tsconfig.server-tests.json && node --test dist-server-tests/**/*.test.js",
     "test:e2e": "playwright test",
