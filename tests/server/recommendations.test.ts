@@ -362,6 +362,23 @@ test("dry-run reset excludes prefetch targets from the projected pilot baseline"
   }
 });
 
+test("dry-run expansion does not clear existing prefetch targets", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-dry-expand", plexAccountId: "dry-expand", tautulliUserId: null, username: "dry-expand", displayName: "Dry Expand", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 908, title: "Dry Run Expansion" });
+    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z");
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+
+    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test");
+
+    assert.equal(result, false);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("scheduled reconciliation reclaims stale prefetches that no active viewer needs", async () => {
   const { db, services, cleanup } = createHarness();
   const series: SonarrSeries = {

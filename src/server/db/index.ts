@@ -530,8 +530,7 @@ export class PacearrDatabase {
     const expanded = [...show.expandedSeasons, seasonNumber].sort((a, b) => a - b);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), watchedAt, now(), rollingShowId);
-    this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ?")
-      .run(rollingShowId, seasonNumber);
+    this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
     return true;
   }
 
