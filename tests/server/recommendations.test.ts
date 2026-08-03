@@ -318,6 +318,44 @@ test("reset clears prefetch targets before applying the pilot baseline", async (
   }
 });
 
+test("scheduled reconciliation reclaims stale prefetches that no active viewer needs", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 905,
+    title: "Stale Prefetch",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9051, seriesId: 905, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90501 },
+    { id: 9052, seriesId: 905, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90502 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 905: series },
+    episodesBySeries: { 905: episodes },
+    episodeFilesBySeries: { 905: [{ id: 90502, seriesId: 905, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-stale", plexAccountId: "stale", tautulliUserId: null, username: "stale", displayName: "Stale", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 905, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-01-01T10:00:00.000Z");
+
+    const result = await services.reconcileRollingShows();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9052)), true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90502")), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("listRecommendations computes precise per-season savings, excludes enrolled/fully-retained shows, and sorts by savings descending", async () => {
   const { db, services, cleanup } = createHarness();
 

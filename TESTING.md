@@ -62,6 +62,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
+| Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
 
 
 ## Adding New Tests

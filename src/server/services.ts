@@ -742,13 +742,15 @@ export class PacearrServices {
     return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : []);
   }
 
-  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true): Promise<number> {
+  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
     const sonarr = this.getSonarr();
     const series = await sonarr.getSeriesById(seriesId);
     const episodes = await sonarr.getEpisodes(seriesId);
     const settings = this.db.getAppSettings();
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)) : [];
+    const excludedPrefetched = new Set(excludedPrefetchedSeasons);
+    const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
+      .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
     const prefetchedIds = new Set(prefetchedEpisodeIds);
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles, prefetchedEpisodeIds);
     this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
@@ -1008,6 +1010,29 @@ export class PacearrServices {
     }
   }
 
+  private getStalePrefetchedSeasons(rolling: RollingShowRecord, observedAt = new Date()): number[] {
+    const settings = this.db.getAppSettings();
+    const activeCutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    const activeProgress = this.db.listProgressForShow(rolling.id).filter((progress) =>
+      progress.lastWatchedSeason > 0 &&
+      this.db.getUser(progress.userId)?.enabled &&
+      new Date(progress.lastWatchedAt).getTime() >= activeCutoff
+    );
+    const records = this.db.listPrefetchedEpisodes(rolling.id);
+    const bySeason = new Map<number, typeof records>();
+    for (const record of records) bySeason.set(record.seasonNumber, [...(bySeason.get(record.seasonNumber) ?? []), record]);
+    const delayMs = settings.progressiveCleanupDelayDays * 24 * 60 * 60 * 1000;
+
+    return [...bySeason.entries()]
+      .filter(([seasonNumber, seasonRecords]) =>
+        !rolling.expandedSeasons.includes(seasonNumber) &&
+        !activeProgress.some((progress) => progress.lastWatchedSeason <= seasonNumber) &&
+        Math.max(...seasonRecords.map((record) => new Date(record.triggeredAt).getTime())) + delayMs <= observedAt.getTime()
+      )
+      .map(([seasonNumber]) => seasonNumber)
+      .sort((a, b) => a - b);
+  }
+
   async importHistory(options: { full?: boolean } = {}): Promise<RunResult> {
     const full = options.full === true;
     this.logger.info(full ? "Full history reconciliation started" : "History import started");
@@ -1175,7 +1200,25 @@ export class PacearrServices {
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
         const { retainedSeasons, eligibleForCleanup } = this.getCleanupRetention(show);
-        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false);
+        const stalePrefetchedSeasons = this.getStalePrefetchedSeasons(show);
+        if (stalePrefetchedSeasons.length > 0) {
+          if (!settings.dryRun) {
+            for (const seasonNumber of stalePrefetchedSeasons) this.db.clearPrefetchedEpisodesForSeason(show.id, seasonNumber);
+          }
+          this.db.addHistory("info", settings.dryRun ? "dry_run.cleanup.prefetch" : "cleanup.prefetch", show.title, {
+            seasonNumbers: stalePrefetchedSeasons,
+            dryRun: settings.dryRun,
+            reason: "inactive-or-skipped-season",
+          });
+          this.logger.info("Stale prefetched seasons scheduled for pilot cleanup", {
+            rollingShowId: show.id,
+            seriesId: show.sonarrSeriesId,
+            title: show.title,
+            seasonNumbers: stalePrefetchedSeasons,
+            dryRun: settings.dryRun,
+          });
+        }
+        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false, stalePrefetchedSeasons);
         if (eligibleForCleanup.length > 0) {
           this.logger.info("Scheduled reconciliation applied inactive-season cleanup", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, eligibleForCleanup });
         }
