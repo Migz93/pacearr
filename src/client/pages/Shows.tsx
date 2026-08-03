@@ -630,7 +630,7 @@ function EpisodeTable({ episodes, prefetchedEpisodes, viewersByEpisode, dryRunEn
                 <span>{episode.title ?? "Untitled"}</span>
                 <AvatarStack viewers={viewers} size={22} />
               </div>
-              <div className="monitor-state">
+              <div className="episode-status">
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
                 {prefetchedByEpisode.has(`${episode.seasonNumber}:${episode.episodeNumber}`) && (() => {
                   const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`)!;

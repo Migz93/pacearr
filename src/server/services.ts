@@ -35,6 +35,10 @@ function realEpisodeId(episodes: SonarrEpisode[], seasonNumber: number, episodeN
   return episodes.find((episode) => episode.seasonNumber === seasonNumber && episode.episodeNumber === episodeNumber)?.id;
 }
 
+function prefetchedEpisodeIdsForEpisodes(episodes: SonarrEpisode[], records: Array<{ seasonNumber: number; episodeNumber: number }>): number[] {
+  return records.map((record) => realEpisodeId(episodes, record.seasonNumber, record.episodeNumber)).filter((id): id is number => id !== undefined);
+}
+
 export function selectEarlyPrefetchEpisodes(
   episodes: SonarrEpisode[],
   currentSeasonNumber: number,
@@ -53,6 +57,7 @@ export function selectEarlyPrefetchEpisodes(
   return {
     episodesRemaining,
     nextSeasonNumber,
+    // Episode 1 (the pilot) is excluded, so the upper bound includes its offset.
     episodes: realEpisodes
       .filter((episode) => episode.seasonNumber === nextSeasonNumber && episode.episodeNumber > 1 && episode.episodeNumber <= episodeCount + 1)
       .sort((a, b) => a.episodeNumber - b.episodeNumber),
@@ -317,9 +322,8 @@ export class PacearrServices {
 
     const retainedSeasons = [...new Set(progress.filter((item) => item.enabled).map((item) => item.seasonNumber))]
       .filter((seasonNumber) => seasonNumber > 0);
-    const prefetched = rolling ? this.db.listPrefetchedEpisodes(rolling.id) : [];
     const prefetchedWithUsers = rolling ? this.db.listPrefetchedEpisodesWithUsers(rolling.id) : [];
-    const prefetchedEpisodeIds = prefetched.map((item) => realEpisodeId(episodes, item.seasonNumber, item.episodeNumber)).filter((id): id is number => id !== undefined);
+    const prefetchedEpisodeIds = prefetchedEpisodeIdsForEpisodes(episodes, prefetchedWithUsers);
     const prefetchedIds = new Set(prefetchedEpisodeIds);
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds);
     const retained = new Set(plan.retainedSeasons);
@@ -741,9 +745,7 @@ export class PacearrServices {
     const episodes = await sonarr.getEpisodes(seriesId);
     const settings = this.db.getAppSettings();
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    const prefetchedEpisodeIds = rolling ? this.db.listPrefetchedEpisodes(rolling.id).map((prefetched) =>
-      episodes.find((episode) => episode.seasonNumber === prefetched.seasonNumber && episode.episodeNumber === prefetched.episodeNumber)?.id
-    ).filter((id): id is number => id !== undefined) : [];
+    const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)) : [];
     const prefetchedIds = new Set(prefetchedEpisodeIds);
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles, prefetchedEpisodeIds);
     this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });

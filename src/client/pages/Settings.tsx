@@ -116,14 +116,27 @@ function SectionCard({ title, description, children }: { title: string; descript
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, hint, id, children }: { label: string; hint?: string; id?: string; children: React.ReactNode }) {
   return (
     <div className="field">
-      <label>{label}</label>
+      <label htmlFor={id}>{label}</label>
       {hint && <p className="field-hint">{hint}</p>}
       {children}
     </div>
   );
+}
+
+type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount"> & {
+  earlyPrefetchTriggerEpisodesRemaining: string;
+  earlyPrefetchEpisodeCount: string;
+};
+
+function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
+  return {
+    ...app,
+    earlyPrefetchTriggerEpisodesRemaining: String(app.earlyPrefetchTriggerEpisodesRemaining),
+    earlyPrefetchEpisodeCount: String(app.earlyPrefetchEpisodeCount),
+  };
 }
 
 function ToggleField({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
@@ -152,19 +165,25 @@ function SaveBar({ saving, success, error, label, onSave }: { saving: boolean; s
 }
 
 function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const [form, setForm] = useState({ ...settings.app });
+  const [form, setForm] = useState<GeneralForm>(() => generalFormFromSettings(settings.app));
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => setForm({ ...settings.app }), [settings.app]);
+  useEffect(() => setForm(generalFormFromSettings(settings.app)), [settings.app]);
 
   async function save() {
     setSaving(true);
     setSuccess(false);
     setError(null);
     try {
-      await apiPatch("/api/settings/app", form);
+      const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
+      const count = Number(form.earlyPrefetchEpisodeCount);
+      if (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1) {
+        setError("Early prefetch values must be positive whole numbers.");
+        return;
+      }
+      await apiPatch("/api/settings/app", { ...form, earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count });
       setSuccess(true);
       await onSave();
     } catch (caught) {
@@ -192,11 +211,11 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       <div className="settings-divider"><span>Early season prefetch</span></div>
       <ToggleField label="Early season prefetch" hint="Before a season ends, monitor and search the next season's first episodes so Plex can build a longer playback queue." checked={form.earlyPrefetchEnabled} onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })} />
       <div className="settings-form-grid">
-        <Field label="Episodes remaining trigger" hint="Start prefetching when this many episodes remain after the watched episode.">
-          <input type="number" min={1} value={form.earlyPrefetchTriggerEpisodesRemaining} onChange={(event) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: Number(event.target.value) })} />
+        <Field id="early-prefetch-trigger" label="Episodes remaining trigger" hint="Start prefetching when this many episodes remain after the watched episode.">
+          <input id="early-prefetch-trigger" type="number" min={1} value={form.earlyPrefetchTriggerEpisodesRemaining} onChange={(event) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: event.target.value })} />
         </Field>
-        <Field label="Episodes to prefetch" hint="Number of episodes after E01 to monitor and search in the next season.">
-          <input type="number" min={1} value={form.earlyPrefetchEpisodeCount} onChange={(event) => setForm({ ...form, earlyPrefetchEpisodeCount: Number(event.target.value) })} />
+        <Field id="early-prefetch-count" label="Episodes to prefetch" hint="Number of episodes after E01 to monitor and search in the next season.">
+          <input id="early-prefetch-count" type="number" min={1} value={form.earlyPrefetchEpisodeCount} onChange={(event) => setForm({ ...form, earlyPrefetchEpisodeCount: event.target.value })} />
         </Field>
       </div>
       <div className="settings-divider"><span>Cleanup</span></div>
