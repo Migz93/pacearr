@@ -320,7 +320,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     if (body.trustProxy !== undefined) patch.trustProxy = Boolean(body.trustProxy);
     if (body.onboardingComplete !== undefined) patch.onboardingComplete = Boolean(body.onboardingComplete);
-    if (body.earlyPrefetchEnabled !== undefined) patch.earlyPrefetchEnabled = Boolean(body.earlyPrefetchEnabled);
+    if (body.earlyPrefetchEnabled !== undefined) {
+      if (typeof body.earlyPrefetchEnabled !== "boolean") {
+        res.status(400).json({ error: "earlyPrefetchEnabled must be a boolean." });
+        return;
+      }
+      patch.earlyPrefetchEnabled = body.earlyPrefetchEnabled;
+    }
     if (body.earlyPrefetchTriggerEpisodesRemaining !== undefined) {
       const trigger = Number(body.earlyPrefetchTriggerEpisodesRemaining);
       patch.earlyPrefetchTriggerEpisodesRemaining = Math.max(1, Math.floor(Number.isFinite(trigger) ? trigger : DEFAULT_APP_SETTINGS.earlyPrefetchTriggerEpisodesRemaining));

@@ -322,7 +322,9 @@ export class PacearrServices {
 
     const retainedSeasons = [...new Set(progress.filter((item) => item.enabled).map((item) => item.seasonNumber))]
       .filter((seasonNumber) => seasonNumber > 0);
-    const prefetchedWithUsers = rolling ? this.db.listPrefetchedEpisodesWithUsers(rolling.id) : [];
+    const episodeKeys = new Set(realEpisodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
+    const prefetchedWithUsers = rolling ? this.db.listPrefetchedEpisodesWithUsers(rolling.id)
+      .filter((item) => episodeKeys.has(`${item.seasonNumber}:${item.episodeNumber}`)) : [];
     const prefetchedEpisodeIds = prefetchedEpisodeIdsForEpisodes(episodes, prefetchedWithUsers);
     const prefetchedIds = new Set(prefetchedEpisodeIds);
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds);
@@ -658,10 +660,13 @@ export class PacearrServices {
     if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
     try {
       const dryRun = this.isDryRun();
+      const excludedPrefetchedSeasons = dryRun
+        ? [...new Set(this.db.listPrefetchedEpisodes(rollingShowId).map((episode) => episode.seasonNumber))]
+        : [];
       // Remove partial prefetch targets before calculating the pilot-only reset
       // plan, otherwise reconciliation deliberately protects them as desired state.
       if (!dryRun) this.db.clearPrefetchedEpisodes(rollingShowId);
-      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset");
+      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset", excludedPrefetchedSeasons);
       if (!dryRun) this.db.resetExpandedSeasons(rollingShowId);
       this.db.addHistory("info", dryRun ? "dry_run.show.reset" : "show.reset", show.title, { changed, dryRun });
       this.logger.info("Show reset to pilot baseline", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, changed, dryRun });
@@ -669,8 +674,8 @@ export class PacearrServices {
     } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
   }
 
-  async applyAllSeasonPilotBaseline(seriesId: number, reason: string): Promise<number> {
-    return this.applyMonitoringPlan(seriesId, reason, []);
+  async applyAllSeasonPilotBaseline(seriesId: number, reason: string, excludedPrefetchedSeasons: number[] = []): Promise<number> {
+    return this.applyMonitoringPlan(seriesId, reason, [], true, excludedPrefetchedSeasons);
   }
 
   private getActiveRetainedSeasons(rollingShowId: number): number[] {

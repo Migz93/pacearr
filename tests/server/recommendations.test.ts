@@ -386,6 +386,7 @@ test("scheduled reconciliation leaves stale prefetches alone when progressive cl
 
     assert.equal(result.ok, true);
     assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9062)), false);
     assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90602")), false);
   } finally {
     restoreFetch();
