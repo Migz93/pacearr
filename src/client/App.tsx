@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "./lib/api";
 import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
+import { clientLogger } from "./lib/logger";
 import Dashboard from "./pages/Dashboard";
 import Shows from "./pages/Shows";
 import Users from "./pages/Users";
@@ -32,8 +33,12 @@ export default function App() {
       ]);
       setUser(session.authenticated ? session.user : null);
       setBoot(status);
-    } catch {
+    } catch (caught) {
+      clientLogger.error("Application bootstrap request failed", {
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
       setUser(null);
+      setBoot(null);
     } finally {
       setLoading(false);
     }
@@ -49,7 +54,16 @@ export default function App() {
     navigate("/login");
   }
 
-  if (loading || !boot) return <div className="centered">Loading Pacearr...</div>;
+  if (loading) return <div className="centered">Loading Pacearr...</div>;
+
+  if (!boot) {
+    return (
+      <div className="centered">
+        <p>Unable to load Pacearr. Please try again.</p>
+        <button type="button" className="primary-button" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -86,11 +100,13 @@ function PlexPopupLoading() {
 
 function PlexPopupDone() {
   useEffect(() => {
+    clientLogger.debug("Plex OAuth completion popup closing");
     window.close();
 
     // Some browsers ignore a window.close() call fired before the page has
     // fully settled — retry once shortly after in case the first call is dropped.
     const retryId = window.setTimeout(() => {
+      clientLogger.debug("Retrying Plex OAuth completion popup close");
       window.close();
     }, 250);
 
@@ -118,7 +134,10 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
       await apiPost("/api/auth/plex", { authToken });
       await onLogin();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      clientLogger.warn("Plex login flow failed", {
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+      setError("Unable to complete Plex login. Please try again.");
     } finally {
       setBusy(false);
     }

@@ -12,8 +12,10 @@ SQLite database with no external services involved.
 |---|---|
 | `npm run test:server` | Builds the server, compiles server tests, and runs Node's test runner |
 | `npm test` | Runs already-compiled server tests |
-| `npm run check` | Runs TypeScript checks for the client, shared types, and server |
+| `npm run check` | Runs TypeScript checks for the client, shared types, server, and Playwright config/tests |
 | `npm run build` | Builds the Vite client and TypeScript server |
+| `npm run test:e2e` | Runs Playwright auth setup and the live-instance browser suite |
+| `npm run test:e2e:auth` | Runs only the Playwright session-cookie setup |
 
 ## Server Tests
 
@@ -23,15 +25,32 @@ calls.
 
 ## Playwright End-To-End Tests
 
-Not implemented yet. Tracked in
-[#50](https://github.com/Migz93/pacearr/issues/50).
+Playwright tests run against a live, fully configured Pacearr instance. They do
+not mock the API or use the server test database. Auth uses a real
+`pacearr_session` cookie because the devcontainer has no display for driving
+Plex OAuth.
 
-When Playwright is added, copy the setup from
-[hubarr](https://github.com/Migz93/hubarr) — `playwright.config.ts`,
-`.env.playwright.example`, `tests/playwright/auth.setup.ts`, and the `test:e2e`
-scripts — and adjust for Pacearr: the session cookie is `pacearr_session` and
-`BASE_URL` points at port `9302`. Then replace this section with hubarr's
-Playwright section, modified to suit.
+### First-Time Setup
+
+1. Install Chromium with `npx playwright install chromium`.
+2. Copy `.env.playwright.example` to `.env.playwright`.
+3. Set `BASE_URL` to the running Pacearr instance and paste the value of the
+   `pacearr_session` cookie from the browser into `SESSION_COOKIE`.
+4. Run `npm run test:e2e`.
+
+The auth setup validates the cookie and saves it to
+`tests/playwright/.auth/storageState.json`. Later runs reuse that session until
+it expires. Delete the saved state and provide a fresh cookie to re-authenticate:
+
+```bash
+rm tests/playwright/.auth/storageState.json
+```
+
+`.env.playwright`, generated auth state, test results, and the HTML report are
+all gitignored and must stay local because they contain the active session
+cookie or authenticated page data. The smoke
+tests also fail on unexpected browser console errors and page errors, using the
+selective client logging convention from #42.
 
 ---
 
@@ -73,6 +92,43 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Early prefetch selection skips the pilot and caps the candidate count | Episodes selected from the next season start after E01 and respect the configured count |
 | Rolling plans preserve prefetched episodes individually | Prefetched episode targets remain monitored without retaining the entire season |
 
+### `tests/playwright/pages.spec.ts` — Page smoke tests
+
+Read-only. Safe to run against a live instance.
+
+| Test | What it checks |
+|---|---|
+| Primary pages load | Dashboard, Shows, Users, History, and Settings render their headings without browser console or page errors |
+| Sidebar navigation links are present | The five primary navigation links render inside the app navigation |
+| Unauthenticated requests redirect to the login page | A fresh browser context is redirected from `/dashboard` to `/login` |
+
+### `tests/playwright/settings.spec.ts` — Settings navigation
+
+Read-only. Safe to run against a live instance.
+
+| Test | What it checks |
+|---|---|
+| All settings tabs are visible | General, Plex, Sonarr, Tautulli, Logs, Jobs, and About render |
+| Clicking settings tabs updates the URL | Each tab writes its expected `?tab=` query parameter |
+
+### `tests/playwright/shows.spec.ts` — Shows navigation and filters
+
+Read-only. Safe to run against a live instance.
+
+| Test | What it checks |
+|---|---|
+| Shows tabs and filters render | Enrolled, Recommendations, Ignored, Sonarr, and the sort control render |
+| Shows tab updates the URL | Selecting Recommendations writes `?tab=recommendations` |
+
+### `tests/playwright/history.spec.ts` — History filters
+
+Read-only. Safe to run against a live instance.
+
+| Test | What it checks |
+|---|---|
+| History filters and page size render | Level filters and the rows-per-page control render |
+| History level filter updates the URL | Selecting Warning writes `?level=warn` |
+
 ## Adding New Tests
 
 Which layer to reach for — server test or Playwright — is covered in `AGENTS.md`
@@ -81,9 +137,9 @@ under Tests. Mechanically:
 - **Server tests:** create a `*.test.ts` file under `tests/server/` and it is
   picked up by `npm run test:server`. Tests should build their own temporary
   database rather than sharing state.
-- **Playwright:** not wired up yet — see
-  [#50](https://github.com/Migz93/pacearr/issues/50). Say so rather than
-  substituting a server test for a UI concern.
+- **Playwright:** create a `*.spec.ts` file under `tests/playwright/`; the saved
+  session is loaded for each Chromium test. Use the live instance only and keep
+  generated artifacts under the existing ignored `tests/` paths.
 
 When a test is agreed and written, add a row for it in the relevant table above.
 
