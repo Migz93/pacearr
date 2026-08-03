@@ -4,6 +4,7 @@ import { RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "./lib/api";
 import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
+import { clientLogger } from "./lib/logger";
 import Dashboard from "./pages/Dashboard";
 import Shows from "./pages/Shows";
 import Users from "./pages/Users";
@@ -32,7 +33,8 @@ export default function App() {
       ]);
       setUser(session.authenticated ? session.user : null);
       setBoot(status);
-    } catch {
+    } catch (caught) {
+      clientLogger.error("Application bootstrap request failed", { error: caught instanceof Error ? caught.message : String(caught) });
       setUser(null);
     } finally {
       setLoading(false);
@@ -86,11 +88,13 @@ function PlexPopupLoading() {
 
 function PlexPopupDone() {
   useEffect(() => {
+    clientLogger.debug("Plex OAuth completion popup closing");
     window.close();
 
     // Some browsers ignore a window.close() call fired before the page has
     // fully settled — retry once shortly after in case the first call is dropped.
     const retryId = window.setTimeout(() => {
+      clientLogger.debug("Retrying Plex OAuth completion popup close");
       window.close();
     }, 250);
 
@@ -118,6 +122,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
       await apiPost("/api/auth/plex", { authToken });
       await onLogin();
     } catch (caught) {
+      clientLogger.warn("Plex login flow failed", { error: caught instanceof Error ? caught.message : String(caught) });
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setBusy(false);

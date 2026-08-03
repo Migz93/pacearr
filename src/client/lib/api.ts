@@ -1,12 +1,31 @@
+import { clientLogger } from "./logger";
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
-  });
+  const method = options.method ?? "GET";
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+    });
+  } catch (caught) {
+    clientLogger.error("API request could not be completed", {
+      method,
+      path,
+      error: caught instanceof Error ? caught.message : String(caught),
+    });
+    throw caught;
+  }
   if (!response.ok) {
+    clientLogger.warn("API request returned an error", {
+      method,
+      path,
+      status: response.status,
+      statusText: response.statusText,
+    });
     const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
     throw new Error(body.error || body.message || `${response.status} ${response.statusText}`);
   }

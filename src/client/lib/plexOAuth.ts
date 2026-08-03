@@ -1,3 +1,5 @@
+import { clientLogger } from "./logger";
+
 declare const __APP_VERSION__: string;
 
 interface PlexPin {
@@ -33,11 +35,15 @@ export class PlexOAuth {
     const left = (window.screenLeft ?? window.screenX) + window.innerWidth / 2 - width / 2;
     const top = (window.screenTop ?? window.screenY) + window.innerHeight / 2 - height / 2;
     this.popup = window.open("/login/plex/loading", "Plex Auth", `scrollbars=yes,width=${width},height=${height},top=${top},left=${left}`);
+    clientLogger.debug("Plex OAuth popup prepared", { opened: Boolean(this.popup && !this.popup.closed) });
     this.popup?.focus();
   }
 
   async login(): Promise<string> {
-    if (!this.popup || this.popup.closed) throw new Error("Plex login popup could not be opened.");
+    if (!this.popup || this.popup.closed) {
+      clientLogger.warn("Plex OAuth popup was unavailable before login started");
+      throw new Error("Plex login popup could not be opened.");
+    }
     // Give mobile browsers a moment to commit the user-opened same-origin popup
     // before redirecting it to the cross-origin Plex auth page.
     await wait(1500);
@@ -51,7 +57,10 @@ export class PlexOAuth {
       "X-Plex-Language": "en",
     };
     const pinResponse = await fetch("https://plex.tv/api/v2/pins?strong=true", { method: "POST", headers: this.headers });
-    if (!pinResponse.ok) throw new Error(`Failed to get Plex PIN: ${pinResponse.status}`);
+    if (!pinResponse.ok) {
+      clientLogger.warn("Plex OAuth PIN request failed", { status: pinResponse.status, statusText: pinResponse.statusText });
+      throw new Error(`Failed to get Plex PIN: ${pinResponse.status}`);
+    }
     this.pin = await pinResponse.json() as PlexPin;
     const params = {
       clientID: this.headers["X-Plex-Client-Identifier"],
@@ -67,7 +76,10 @@ export class PlexOAuth {
   }
 
   private async poll(): Promise<string> {
-    if (!this.pin || !this.headers) throw new Error("Plex PIN was not initialized.");
+    if (!this.pin || !this.headers) {
+      clientLogger.error("Plex OAuth polling started without an initialized PIN");
+      throw new Error("Plex PIN was not initialized.");
+    }
     // The user may close the popup manually before the token arrives (or, now that the
     // popup closes itself once Plex confirms auth, the close can simply be observed before
     // this loop's next tick). Allow a few extra polls after detecting closure before giving
@@ -77,19 +89,27 @@ export class PlexOAuth {
     let gracePollsLeft = 5;
     for (let attempts = 0; attempts < 180; attempts++) {
       const response = await fetch(`https://plex.tv/api/v2/pins/${this.pin.id}`, { headers: this.headers });
-      if (!response.ok) throw new Error(`Failed to poll Plex PIN: ${response.status}`);
+      if (!response.ok) {
+        clientLogger.warn("Plex OAuth PIN polling failed", { status: response.status, statusText: response.statusText });
+        throw new Error(`Failed to poll Plex PIN: ${response.status}`);
+      }
       const data = await response.json() as { authToken?: string | null };
       if (data.authToken) {
         this.popup?.close();
         return data.authToken;
       }
       if (this.popup?.closed) {
-        if (gracePollsLeft <= 0) throw new Error("Plex login popup was closed before authorization completed.");
+        if (gracePollsLeft <= 0) {
+          clientLogger.warn("Plex OAuth popup closed before authorization completed");
+          throw new Error("Plex login popup was closed before authorization completed.");
+        }
+        clientLogger.debug("Plex OAuth popup closed; retrying authorization poll", { gracePollsLeft });
         gracePollsLeft -= 1;
         attempts -= 1;
       }
       await wait(1000);
     }
+    clientLogger.warn("Plex OAuth authorization timed out");
     throw new Error("Timed out waiting for Plex authorization.");
   }
 }
