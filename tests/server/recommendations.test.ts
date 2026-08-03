@@ -48,12 +48,12 @@ function installFetchStub(routes: {
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
   episodeFileErrorsBySeries?: Record<number, string>;
-  requests?: Array<{ method: string; pathname: string }>;
+  requests?: Array<{ method: string; pathname: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
-    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname });
+    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") return emptyPlexHistoryXml();
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -274,6 +274,44 @@ test("reset and unenrolment are blocked while asynchronous enrollment setup is p
     assert.match(remove.message, /still running/);
 
     await services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: false, importHistory: false });
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("reset clears prefetch targets before applying the pilot baseline", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 904,
+    title: "Prefetch Reset",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9041, seriesId: 904, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90401 },
+    { id: 9042, seriesId: 904, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90402 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 904: series },
+    episodesBySeries: { 904: episodes },
+    episodeFilesBySeries: { 904: [{ id: 90402, seriesId: 904, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-reset", plexAccountId: "reset", tautulliUserId: null, username: "reset", displayName: "Reset", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 904, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+
+    const result = await services.resetShow(rolling.id);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9042)), true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90402")), true);
   } finally {
     restoreFetch();
     cleanup();

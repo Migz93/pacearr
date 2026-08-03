@@ -57,6 +57,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 ---
 
+### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior
+
+| Test | What it checks |
+|---|---|
+| Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
+
+
 ## Adding New Tests
 
 Which layer to reach for — server test or Playwright — is covered in `AGENTS.md`
