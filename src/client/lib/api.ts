@@ -40,7 +40,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
       clientLogger.error("API request could not be completed", {
         method,
         path: safePath,
-        error: caught instanceof Error ? caught.message : String(caught),
+        errorType: caught instanceof Error ? caught.name : typeof caught,
       });
     }
     throw caught;
@@ -66,7 +66,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
       clientLogger.error("API response could not be parsed", {
         method,
         path: safePath,
-        error: caught instanceof Error ? caught.message : String(caught),
+        errorType: caught instanceof Error ? caught.name : typeof caught,
       });
     }
     throw caught;
