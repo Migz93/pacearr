@@ -22,6 +22,7 @@ import type {
   SonarrLibraryCacheItem,
   DashboardShowActivity,
   PlexArtworkRecord,
+  PrefetchedEpisodeRecord,
 } from "../../shared/types.js";
 import type { RuntimeConfig } from "../config.js";
 import { createSecret } from "../auth.js";
@@ -44,6 +45,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   recommendationMinimumSavingsGb: 50,
   trustProxy: false,
   onboardingComplete: false,
+  earlyPrefetchEnabled: false,
+  earlyPrefetchTriggerEpisodesRemaining: 3,
+  earlyPrefetchEpisodeCount: 2,
 };
 
 export interface NormalizedWatchEventInput {
@@ -526,12 +530,61 @@ export class PacearrDatabase {
     const expanded = [...show.expandedSeasons, seasonNumber].sort((a, b) => a - b);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), watchedAt, now(), rollingShowId);
+    this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
     return true;
   }
 
   resetExpandedSeasons(rollingShowId: number): void {
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
     this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+    this.clearPrefetchedEpisodes(rollingShowId);
+  }
+
+  clearPrefetchedEpisodes(rollingShowId: number): void {
+    this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ?").run(rollingShowId);
+  }
+
+  listPrefetchedEpisodes(rollingShowId: number): PrefetchedEpisodeRecord[] {
+    return (this.db.prepare(`
+      SELECT id, rolling_show_id AS rollingShowId, user_id AS userId,
+        season_number AS seasonNumber, episode_number AS episodeNumber, triggered_at AS triggeredAt
+      FROM rolling_prefetched_episodes
+      WHERE rolling_show_id = ?
+      ORDER BY season_number, episode_number
+    `).all(rollingShowId) as PrefetchedEpisodeRecord[]);
+  }
+
+  listPrefetchedEpisodesWithUsers(rollingShowId: number): Array<PrefetchedEpisodeRecord & { displayName: string; avatarUrl: string | null }> {
+    return this.db.prepare(`
+      SELECT rpe.id, rpe.rolling_show_id AS rollingShowId, rpe.user_id AS userId,
+        rpe.season_number AS seasonNumber, rpe.episode_number AS episodeNumber,
+        rpe.triggered_at AS triggeredAt, u.display_name AS displayName, u.avatar_url AS avatarUrl
+      FROM rolling_prefetched_episodes rpe
+      JOIN users u ON u.id = rpe.user_id
+      WHERE rpe.rolling_show_id = ?
+      ORDER BY rpe.season_number, rpe.episode_number
+    `).all(rollingShowId) as Array<PrefetchedEpisodeRecord & { displayName: string; avatarUrl: string | null }>;
+  }
+
+  recordPrefetchedEpisodes(rollingShowId: number, userId: number, seasonNumber: number, episodeNumbers: number[], triggeredAt: string): number {
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO rolling_prefetched_episodes
+        (rolling_show_id, user_id, season_number, episode_number, triggered_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const transaction = this.db.transaction(() => {
+      let inserted = 0;
+      for (const episodeNumber of episodeNumbers) {
+        inserted += Number(insert.run(rollingShowId, userId, seasonNumber, episodeNumber, triggeredAt, now()).changes > 0);
+      }
+      return inserted;
+    });
+    return transaction();
+  }
+
+  clearPrefetchedEpisodesForSeason(rollingShowId: number, seasonNumber: number): void {
+    this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ?")
+      .run(rollingShowId, seasonNumber);
   }
 
   replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): void {

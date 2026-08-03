@@ -47,6 +47,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Watch event import is idempotent | Duplicate source events are ignored and do not inflate watch history |
 | Expanded seasons are monotonic and not duplicated | Expansion state is sorted and duplicate-safe |
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
+| Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
@@ -56,6 +57,21 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Dry-run blocks Sonarr mutations | Monitoring updates, searches, and file deletions send no HTTP requests while dry-run mode is enabled |
 
 ---
+
+### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior
+
+| Test | What it checks |
+|---|---|
+| Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
+| Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
+| Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |
+| Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
+| Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
+
+### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
+
+| Early prefetch selection skips the pilot and caps the candidate count | Episodes selected from the next season start after E01 and respect the configured count |
+| Rolling plans preserve prefetched episodes individually | Prefetched episode targets remain monitored without retaining the entire season |
 
 ## Adding New Tests
 

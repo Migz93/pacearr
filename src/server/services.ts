@@ -31,10 +31,46 @@ function isRealSeasonEpisode(episode: SonarrEpisode) {
   return episode.seasonNumber > 0 && episode.episodeNumber > 0;
 }
 
-export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean) {
-  const retained = new Set(retainedSeasons);
+function realEpisodeId(episodes: SonarrEpisode[], seasonNumber: number, episodeNumber: number): number | undefined {
+  return episodes.find((episode) => episode.seasonNumber === seasonNumber && episode.episodeNumber === episodeNumber)?.id;
+}
+
+function prefetchedEpisodeIdsForEpisodes(episodes: SonarrEpisode[], records: Array<{ seasonNumber: number; episodeNumber: number }>): number[] {
+  return records.map((record) => realEpisodeId(episodes, record.seasonNumber, record.episodeNumber)).filter((id): id is number => id !== undefined);
+}
+
+type EpisodeCache = Map<number, Promise<SonarrEpisode[]>>;
+
+export function selectEarlyPrefetchEpisodes(
+  episodes: SonarrEpisode[],
+  currentSeasonNumber: number,
+  currentEpisodeNumber: number,
+  triggerEpisodesRemaining: number,
+  episodeCount: number,
+): { episodesRemaining: number; nextSeasonNumber: number | null; episodes: SonarrEpisode[] } {
   const realEpisodes = episodes.filter(isRealSeasonEpisode);
-  const targetMonitored = (episode: SonarrEpisode) => episode.episodeNumber === 1 || retained.has(episode.seasonNumber);
+  const currentSeasonEpisodes = realEpisodes.filter((episode) => episode.seasonNumber === currentSeasonNumber);
+  const episodesRemaining = currentSeasonEpisodes.filter((episode) => episode.episodeNumber > currentEpisodeNumber).length;
+  if (episodesRemaining > triggerEpisodesRemaining) return { episodesRemaining, nextSeasonNumber: null, episodes: [] };
+  const nextSeasonNumber = [...new Set(realEpisodes.map((episode) => episode.seasonNumber))]
+    .filter((seasonNumber) => seasonNumber > currentSeasonNumber)
+    .sort((a, b) => a - b)[0] ?? null;
+  if (nextSeasonNumber === null) return { episodesRemaining, nextSeasonNumber: null, episodes: [] };
+  return {
+    episodesRemaining,
+    nextSeasonNumber,
+    // Episode 1 (the pilot) is excluded, so the upper bound includes its offset.
+    episodes: realEpisodes
+      .filter((episode) => episode.seasonNumber === nextSeasonNumber && episode.episodeNumber > 1 && episode.episodeNumber <= episodeCount + 1)
+      .sort((a, b) => a.episodeNumber - b.episodeNumber),
+  };
+}
+
+export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = []) {
+  const retained = new Set(retainedSeasons);
+  const prefetched = new Set(prefetchedEpisodeIds);
+  const realEpisodes = episodes.filter(isRealSeasonEpisode);
+  const targetMonitored = (episode: SonarrEpisode) => episode.episodeNumber === 1 || retained.has(episode.seasonNumber) || prefetched.has(episode.id);
   const episodesToMonitor = realEpisodes.filter((episode) => targetMonitored(episode) && !episode.monitored);
   const episodesToUnmonitor = realEpisodes.filter((episode) => !targetMonitored(episode) && episode.monitored);
   // Sonarr search commands are only for files that are actually missing. A
@@ -115,6 +151,15 @@ export class PacearrServices {
 
   private isDryRun() {
     return this.db.getAppSettings().dryRun;
+  }
+
+  private getCachedEpisodes(seriesId: number, cache?: EpisodeCache): Promise<SonarrEpisode[]> {
+    if (!cache) return this.getSonarr().getEpisodes(seriesId);
+    const cached = cache.get(seriesId);
+    if (cached) return cached;
+    const episodes = this.getSonarr().getEpisodes(seriesId);
+    cache.set(seriesId, episodes);
+    return episodes;
   }
 
   private acquireSeriesOperation(seriesId: number): number | null {
@@ -288,7 +333,12 @@ export class PacearrServices {
 
     const retainedSeasons = [...new Set(progress.filter((item) => item.enabled).map((item) => item.seasonNumber))]
       .filter((seasonNumber) => seasonNumber > 0);
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles);
+    const episodeKeys = new Set(realEpisodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
+    const prefetchedWithUsers = rolling ? this.db.listPrefetchedEpisodesWithUsers(rolling.id)
+      .filter((item) => episodeKeys.has(`${item.seasonNumber}:${item.episodeNumber}`)) : [];
+    const prefetchedEpisodeIds = prefetchedEpisodeIdsForEpisodes(episodes, prefetchedWithUsers);
+    const prefetchedIds = new Set(prefetchedEpisodeIds);
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds);
     const retained = new Set(plan.retainedSeasons);
 
     const seasons: ShowSeasonSummary[] = (series.seasons ?? [])
@@ -306,6 +356,9 @@ export class PacearrServices {
           watchedUsers: seasonStats?.watchedUsers ?? 0,
           latestWatchedAt: seasonStats?.latestWatchedAt ?? null,
           isExpanded: rolling?.expandedSeasons.includes(season.seasonNumber) ?? false,
+          prefetchedEpisodes: rolling ? prefetchedWithUsers
+            .filter((item) => item.seasonNumber === season.seasonNumber)
+            .map((item) => ({ seasonNumber: item.seasonNumber, episodeNumber: item.episodeNumber, userId: item.userId, displayName: item.displayName, avatarUrl: item.avatarUrl, triggeredAt: item.triggeredAt })) : [],
         };
       });
 
@@ -321,7 +374,7 @@ export class PacearrServices {
           title: episode.title ?? null,
           airDate: episode.airDate ?? episode.airDateUtc ?? null,
           monitored: episode.monitored,
-          targetMonitored: episode.episodeNumber === 1 || retained.has(episode.seasonNumber),
+          targetMonitored: episode.episodeNumber === 1 || retained.has(episode.seasonNumber) || prefetchedIds.has(episode.id),
           hasFile: Boolean(episode.hasFile),
           watchedUsers: stats?.watchedUsers ?? 0,
           latestWatchedAt: stats?.latestWatchedAt ?? null,
@@ -617,8 +670,14 @@ export class PacearrServices {
     const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
     if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
     try {
-      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset");
       const dryRun = this.isDryRun();
+      const excludedPrefetchedSeasons = dryRun
+        ? [...new Set(this.db.listPrefetchedEpisodes(rollingShowId).map((episode) => episode.seasonNumber))]
+        : [];
+      // Remove partial prefetch targets before calculating the pilot-only reset
+      // plan, otherwise reconciliation deliberately protects them as desired state.
+      if (!dryRun) this.db.clearPrefetchedEpisodes(rollingShowId);
+      const changed = await this.applyAllSeasonPilotBaseline(show.sonarrSeriesId, "reset", excludedPrefetchedSeasons);
       if (!dryRun) this.db.resetExpandedSeasons(rollingShowId);
       this.db.addHistory("info", dryRun ? "dry_run.show.reset" : "show.reset", show.title, { changed, dryRun });
       this.logger.info("Show reset to pilot baseline", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, changed, dryRun });
@@ -626,20 +685,22 @@ export class PacearrServices {
     } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
   }
 
-  async applyAllSeasonPilotBaseline(seriesId: number, reason: string): Promise<number> {
-    return this.applyMonitoringPlan(seriesId, reason, []);
+  async applyAllSeasonPilotBaseline(seriesId: number, reason: string, excludedPrefetchedSeasons: number[] = []): Promise<number> {
+    return this.applyMonitoringPlan(seriesId, reason, [], true, excludedPrefetchedSeasons);
+  }
+
+  private getActiveProgress(rollingShowId: number, cutoffMs: number) {
+    return this.db.listProgressForShow(rollingShowId).filter((progress) =>
+      progress.lastWatchedSeason > 0 &&
+      this.db.getUser(progress.userId)?.enabled &&
+      new Date(progress.lastWatchedAt).getTime() >= cutoffMs
+    );
   }
 
   private getActiveRetainedSeasons(rollingShowId: number): number[] {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
-    return [...new Set(this.db.listProgressForShow(rollingShowId)
-      .filter((progress) =>
-        progress.lastWatchedSeason > 0 &&
-        this.db.getUser(progress.userId)?.enabled &&
-        new Date(progress.lastWatchedAt).getTime() >= cutoff
-      )
-      .map((progress) => progress.lastWatchedSeason))]
+    return [...new Set(this.getActiveProgress(rollingShowId, cutoff).map((progress) => progress.lastWatchedSeason))]
       .sort((a, b) => a - b);
   }
 
@@ -652,11 +713,7 @@ export class PacearrServices {
   private getCleanupRetention(rolling: RollingShowRecord, inactiveSince = new Date()): { retainedSeasons: number[]; eligibleForCleanup: number[] } {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
-    const activeProgress = this.db.listProgressForShow(rolling.id).filter((progress) =>
-      progress.lastWatchedSeason > 0 &&
-      this.db.getUser(progress.userId)?.enabled &&
-      new Date(progress.lastWatchedAt).getTime() >= cutoff
-    );
+    const activeProgress = this.getActiveProgress(rolling.id, cutoff);
     const retained = new Set(this.getActiveRetainedSeasons(rolling.id));
     const eligibleForCleanup: number[] = [];
     const delayMs = settings.progressiveCleanupDelayDays * 24 * 60 * 60 * 1000;
@@ -699,12 +756,17 @@ export class PacearrServices {
     return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : []);
   }
 
-  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true): Promise<number> {
+  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
     const sonarr = this.getSonarr();
     const series = await sonarr.getSeriesById(seriesId);
     const episodes = await sonarr.getEpisodes(seriesId);
     const settings = this.db.getAppSettings();
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles);
+    const rolling = this.db.getRollingShowBySeriesId(seriesId);
+    const excludedPrefetched = new Set(excludedPrefetchedSeasons);
+    const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
+      .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
+    const prefetchedIds = new Set(prefetchedEpisodeIds);
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles, prefetchedEpisodeIds);
     this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
@@ -728,7 +790,7 @@ export class PacearrServices {
       // flag changes. Reassert the target state afterwards so E01 is kept.
       ...episodes
         .filter((episode) => isRealSeasonEpisode(episode) && seasonsWithMonitoringChanges.has(episode.seasonNumber))
-        .map((episode) => ({ id: episode.id, monitored: episode.episodeNumber === 1 || plan.retainedSeasons.includes(episode.seasonNumber) })),
+        .map((episode) => ({ id: episode.id, monitored: episode.episodeNumber === 1 || plan.retainedSeasons.includes(episode.seasonNumber) || prefetchedIds.has(episode.id) })),
     ].reduce<Array<{ id: number; monitored: boolean }>>((deduplicated, update) => {
       const index = deduplicated.findIndex((item) => item.id === update.id);
       if (index === -1) deduplicated.push(update);
@@ -737,7 +799,6 @@ export class PacearrServices {
     }, []);
     if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
 
-    const rolling = this.db.getRollingShowBySeriesId(seriesId);
     const reclaimedBytes = await this.deleteEpisodeFilesAndRecord({
       sonarr,
       seriesId,
@@ -787,11 +848,15 @@ export class PacearrServices {
     return updates.length + plan.filesToDelete.length;
   }
 
-  async expandSeason(seriesId: number, seasonNumber: number, watchedAt: string, source: string): Promise<boolean> {
+  async expandSeason(seriesId: number, seasonNumber: number, watchedAt: string, source: string, episodeCache?: EpisodeCache): Promise<boolean> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    if (!rolling || rolling.expandedSeasons.includes(seasonNumber)) return false;
+    if (!rolling) return false;
+    if (rolling.expandedSeasons.includes(seasonNumber)) {
+      if (!this.isDryRun()) this.db.clearPrefetchedEpisodesForSeason(rolling.id, seasonNumber);
+      return false;
+    }
     const sonarr = this.getSonarr();
-    const episodes = (await sonarr.getEpisodes(seriesId)).filter((episode) => episode.seasonNumber === seasonNumber);
+    const episodes = (await this.getCachedEpisodes(seriesId, episodeCache)).filter((episode) => episode.seasonNumber === seasonNumber);
     const updates = episodes.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
     await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
     await sonarr.updateEpisodesMonitoring(updates);
@@ -838,7 +903,56 @@ export class PacearrServices {
     return null;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true): Promise<{ inserted: boolean; changed: boolean }> {
+  private async prefetchNextSeason(input: NormalizedWatchEventInput, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
+    const settings = this.db.getAppSettings();
+    if (!settings.earlyPrefetchEnabled || input.seasonNumber <= 0 || input.episodeNumber <= 0) return false;
+
+    const sonarr = this.getSonarr();
+    const episodes = (await this.getCachedEpisodes(input.sonarrSeriesId!, episodeCache)).filter(isRealSeasonEpisode);
+    const selection = selectEarlyPrefetchEpisodes(episodes, input.seasonNumber, input.episodeNumber, settings.earlyPrefetchTriggerEpisodesRemaining, settings.earlyPrefetchEpisodeCount);
+    const { episodesRemaining, nextSeasonNumber } = selection;
+    if (nextSeasonNumber === null) return false;
+    const rolling = this.db.getRollingShow(rollingShowId);
+    if (!rolling || rolling.expandedSeasons.includes(nextSeasonNumber)) return false;
+
+    const alreadyPrefetched = new Set(this.db.listPrefetchedEpisodes(rollingShowId)
+      .filter((episode) => episode.seasonNumber === nextSeasonNumber)
+      .map((episode) => episode.episodeNumber));
+    const candidates = selection.episodes
+      .filter((episode) => !alreadyPrefetched.has(episode.episodeNumber))
+      .sort((a, b) => a.episodeNumber - b.episodeNumber);
+    if (candidates.length === 0) return false;
+
+    const updates = candidates.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
+    if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
+    await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
+
+    const dryRun = this.isDryRun();
+    if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, input.userId!, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), input.watchedAt);
+    this.db.addHistory("info", dryRun ? "dry_run.sonarr.early_prefetch" : "sonarr.early_prefetch", rolling.title, {
+      source: input.source,
+      userId: input.userId,
+      triggerSeasonNumber: input.seasonNumber,
+      triggerEpisodeNumber: input.episodeNumber,
+      episodesRemaining,
+      nextSeasonNumber,
+      prefetchedEpisodes: candidates.map((episode) => episode.episodeNumber),
+      dryRun,
+    });
+    this.logger.info("Next season episodes prefetched from watch activity", {
+      seriesId: input.sonarrSeriesId,
+      title: rolling.title,
+      userId: input.userId,
+      triggerSeasonNumber: input.seasonNumber,
+      triggerEpisodeNumber: input.episodeNumber,
+      nextSeasonNumber,
+      prefetchedEpisodes: candidates.map((episode) => episode.episodeNumber),
+      dryRun,
+    });
+    return true;
+  }
+
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     if (!stored.inserted) return { inserted: false, changed: false };
     // Complete history is retained for audit and the History tab, but replaying
@@ -858,9 +972,9 @@ export class PacearrServices {
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       if (input.episodeNumber === 1 && input.seasonNumber > 0) {
-        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel) };
+        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache) };
       }
-      return { inserted: true, changed: false };
+      return { inserted: true, changed: await this.prefetchNextSeason(input, rolling.id, episodeCache) };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
@@ -910,6 +1024,26 @@ export class PacearrServices {
     }
   }
 
+  private getStalePrefetchedSeasons(rolling: RollingShowRecord, observedAt = new Date()): number[] {
+    const settings = this.db.getAppSettings();
+    if (!settings.progressiveCleanupEnabled) return [];
+    const activeCutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    const activeProgress = this.getActiveProgress(rolling.id, activeCutoff);
+    const records = this.db.listPrefetchedEpisodes(rolling.id);
+    const bySeason = new Map<number, typeof records>();
+    for (const record of records) bySeason.set(record.seasonNumber, [...(bySeason.get(record.seasonNumber) ?? []), record]);
+    const delayMs = settings.progressiveCleanupDelayDays * 24 * 60 * 60 * 1000;
+
+    return [...bySeason.entries()]
+      .filter(([seasonNumber, seasonRecords]) =>
+        !rolling.expandedSeasons.includes(seasonNumber) &&
+        !activeProgress.some((progress) => progress.lastWatchedSeason <= seasonNumber) &&
+        Math.max(...seasonRecords.map((record) => new Date(record.triggeredAt).getTime())) + delayMs <= observedAt.getTime()
+      )
+      .map(([seasonNumber]) => seasonNumber)
+      .sort((a, b) => a - b);
+  }
+
   async importHistory(options: { full?: boolean } = {}): Promise<RunResult> {
     const full = options.full === true;
     this.logger.info(full ? "Full history reconciliation started" : "History import started");
@@ -926,6 +1060,7 @@ export class PacearrServices {
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    const episodeCache: EpisodeCache = new Map();
 
     try {
       const plexEvents = await plex.getPlaybackHistory(full ? undefined : syncState.plex.backfillComplete ? withOverlap(syncState.plex.cursor) : undefined);
@@ -945,7 +1080,7 @@ export class PacearrServices {
           episodeNumber: event.episodeNumber,
           watchedAt: event.watchedAt,
           rawPayload: event.raw,
-        }, "plex-history", !full && new Date(event.watchedAt).getTime() >= activityCutoff);
+        }, "plex-history", !full && new Date(event.watchedAt).getTime() >= activityCutoff, episodeCache);
         if (result.inserted) {
           imported++;
           if (series) matched++; else unmatched++;
@@ -982,7 +1117,7 @@ export class PacearrServices {
             episodeNumber: event.episodeNumber,
             watchedAt: event.watchedAt,
             rawPayload: event.raw,
-          }, "tautulli", !full && new Date(event.watchedAt).getTime() >= activityCutoff);
+          }, "tautulli", !full && new Date(event.watchedAt).getTime() >= activityCutoff, episodeCache);
           if (result.inserted) {
             imported++;
             if (series) matched++; else unmatched++;
@@ -1012,7 +1147,7 @@ export class PacearrServices {
           const progress = this.db.listProgressForShow(rolling.id)
             .filter((item) => item.lastWatchedSeason === seasonNumber)
             .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt))[0];
-          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile")) changed++;
+          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile", episodeCache)) changed++;
         }
       } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
     }
@@ -1033,6 +1168,7 @@ export class PacearrServices {
     const sonarrSeries = await this.getSonarr().getSeries();
     const plex = this.getPlex();
     const events = await plex.getActiveSessions();
+    const episodeCache: EpisodeCache = new Map();
     let changed = 0;
     for (const event of events) {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
@@ -1049,7 +1185,7 @@ export class PacearrServices {
         episodeNumber: event.episodeNumber,
         watchedAt: event.watchedAt,
         rawPayload: event.raw,
-      }, "plex-session");
+      }, "plex-session", true, episodeCache);
       if (result.changed) changed++;
     }
     this.db.addHistory("info", "sessions.check", "Plex sessions", { processed: events.length, changed });
@@ -1077,7 +1213,25 @@ export class PacearrServices {
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
         const { retainedSeasons, eligibleForCleanup } = this.getCleanupRetention(show);
-        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false);
+        const stalePrefetchedSeasons = this.getStalePrefetchedSeasons(show);
+        if (stalePrefetchedSeasons.length > 0) {
+          if (!settings.dryRun) {
+            for (const seasonNumber of stalePrefetchedSeasons) this.db.clearPrefetchedEpisodesForSeason(show.id, seasonNumber);
+          }
+          this.db.addHistory("info", settings.dryRun ? "dry_run.cleanup.prefetch" : "cleanup.prefetch", show.title, {
+            seasonNumbers: stalePrefetchedSeasons,
+            dryRun: settings.dryRun,
+            reason: "inactive-or-skipped-season",
+          });
+          this.logger.info("Stale prefetched seasons scheduled for pilot cleanup", {
+            rollingShowId: show.id,
+            seriesId: show.sonarrSeriesId,
+            title: show.title,
+            seasonNumbers: stalePrefetchedSeasons,
+            dryRun: settings.dryRun,
+          });
+        }
+        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false, stalePrefetchedSeasons);
         if (eligibleForCleanup.length > 0) {
           this.logger.info("Scheduled reconciliation applied inactive-season cleanup", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, eligibleForCleanup });
         }

@@ -168,6 +168,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .season-panel .episode-table { border: 0; border-radius: 0; border-top: 1px solid var(--line); }
 .season-signals { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; text-align: right; }
 .monitor-state { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.episode-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .episode-section { margin-bottom: 28px; }
 .episode-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .episode-toolbar select { width: 180px; margin: 0; }
@@ -177,6 +178,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .episode-row:last-child { border-bottom: 0; }
 .episode-row span, .episode-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .episode-row span { color: var(--muted); font-size: 13px; }
+.episode-row .badge { white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: clip; }
 .episode-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .episode-title > span { flex: 0 1 auto; }
 .episode-title .avatar-stack { flex: 0 0 auto; }

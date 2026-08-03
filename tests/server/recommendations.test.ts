@@ -48,12 +48,12 @@ function installFetchStub(routes: {
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
   episodeFileErrorsBySeries?: Record<number, string>;
-  requests?: Array<{ method: string; pathname: string }>;
+  requests?: Array<{ method: string; pathname: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
-    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname });
+    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") return emptyPlexHistoryXml();
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -274,6 +274,182 @@ test("reset and unenrolment are blocked while asynchronous enrollment setup is p
     assert.match(remove.message, /still running/);
 
     await services.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: false, importHistory: false });
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("reset clears prefetch targets before applying the pilot baseline", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 904,
+    title: "Prefetch Reset",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9041, seriesId: 904, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90401 },
+    { id: 9042, seriesId: 904, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90402 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 904: series },
+    episodesBySeries: { 904: episodes },
+    episodeFilesBySeries: { 904: [{ id: 90402, seriesId: 904, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-reset", plexAccountId: "reset", tautulliUserId: null, username: "reset", displayName: "Reset", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 904, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+
+    const result = await services.resetShow(rolling.id);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9042)), true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90402")), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("dry-run reset excludes prefetch targets from the projected pilot baseline", async () => {
+  const skippedMutations: Array<{ action?: string; episodes?: Array<{ id: number; monitored: boolean }>; episodeFileIds?: number[] }> = [];
+  const logger = {
+    debug() {},
+    info() {},
+    warn(_message: string, meta?: unknown) {
+      if (meta && typeof meta === "object") skippedMutations.push(meta as typeof skippedMutations[number]);
+    },
+    error() {},
+  } as unknown as Logger;
+  const { db, services, cleanup } = createHarness(logger);
+  const series: SonarrSeries = {
+    id: 907,
+    title: "Dry Run Prefetch Reset",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9071, seriesId: 907, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90701 },
+    { id: 9072, seriesId: 907, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90702 },
+  ];
+  const restoreFetch = installFetchStub({
+    seriesById: { 907: series },
+    episodesBySeries: { 907: episodes },
+    episodeFilesBySeries: { 907: [{ id: 90702, seriesId: 907, seasonNumber: 1, size: 100 }] },
+  });
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-dry-reset", plexAccountId: "dry-reset", tautulliUserId: null, username: "dry-reset", displayName: "Dry Reset", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 907, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+
+    const result = await services.resetShow(rolling.id);
+
+    assert.equal(result.ok, true);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+    assert.equal(skippedMutations.find((mutation) => mutation.action === "update-episodes-monitoring")?.episodes?.some((episode) => episode.id === 9072 && !episode.monitored), true);
+    assert.deepEqual(skippedMutations.find((mutation) => mutation.action === "delete-episode-files")?.episodeFileIds, [90702]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("dry-run expansion does not clear existing prefetch targets", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-dry-expand", plexAccountId: "dry-expand", tautulliUserId: null, username: "dry-expand", displayName: "Dry Expand", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 908, title: "Dry Run Expansion" });
+    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z");
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
+    db.updateAppSettings({ dryRun: true });
+
+    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test");
+
+    assert.equal(result, false);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("scheduled reconciliation reclaims stale prefetches that no active viewer needs", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 905,
+    title: "Stale Prefetch",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9051, seriesId: 905, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90501 },
+    { id: 9052, seriesId: 905, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90502 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 905: series },
+    episodesBySeries: { 905: episodes },
+    episodeFilesBySeries: { 905: [{ id: 90502, seriesId: 905, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-stale", plexAccountId: "stale", tautulliUserId: null, username: "stale", displayName: "Stale", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 905, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-01-01T10:00:00.000Z");
+
+    const result = await services.reconcileRollingShows();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9052)), true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90502")), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("scheduled reconciliation leaves stale prefetches alone when progressive cleanup is disabled", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 906,
+    title: "Cleanup Disabled",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9061, seriesId: 906, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90601 },
+    { id: 9062, seriesId: 906, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90602 },
+  ];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    seriesById: { 906: series },
+    episodesBySeries: { 906: episodes },
+    episodeFilesBySeries: { 906: [{ id: 90602, seriesId: 906, seasonNumber: 1, size: 100 }] },
+    requests,
+  });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupEnabled: false, progressiveCleanupDelayDays: 0 });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-disabled", plexAccountId: "disabled", tautulliUserId: null, username: "disabled", displayName: "Disabled", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 906, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-01-01T10:00:00.000Z");
+
+    const result = await services.reconcileRollingShows();
+
+    assert.equal(result.ok, true);
+    assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
+    assert.equal(requests.some((request) => request.method === "PUT" && request.pathname.endsWith("/episode/monitor") && JSON.parse(request.body ?? "{}").monitored === false && JSON.parse(request.body ?? "{}").episodeIds?.includes(9062)), false);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname.endsWith("/90602")), false);
   } finally {
     restoreFetch();
     cleanup();

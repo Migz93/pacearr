@@ -597,19 +597,22 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
       <AvatarStack viewers={viewers} />
       <div className="season-signals">
         {season.isExpanded && <span className="badge good">Expanded</span>}
+        {season.prefetchedEpisodes.length > 0 && <span className="badge warn" title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
       </div>
       </button>
-      {open && <EpisodeTable episodes={episodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
+      {open && <EpisodeTable episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
     </div>
   );
 }
 
-function EpisodeTable({ episodes, viewersByEpisode, dryRunEnabled }: {
+function EpisodeTable({ episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
   episodes: ShowEpisodeSummary[];
+  prefetchedEpisodes: ShowSeasonSummary["prefetchedEpisodes"];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
 }) {
+  const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
   return (
       <div className="episode-table">
         <div className="episode-head">
@@ -627,7 +630,13 @@ function EpisodeTable({ episodes, viewersByEpisode, dryRunEnabled }: {
                 <span>{episode.title ?? "Untitled"}</span>
                 <AvatarStack viewers={viewers} size={22} />
               </div>
-              <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
+              <div className="episode-status">
+                <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
+                {prefetchedByEpisode.has(`${episode.seasonNumber}:${episode.episodeNumber}`) && (() => {
+                  const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`)!;
+                  return <span className="badge warn" title={`Triggered by ${prefetch.displayName} on ${formatDate(prefetch.triggeredAt)}`}>Prefetched · {prefetch.displayName}</span>;
+                })()}
+              </div>
               <span>{formatDate(episode.airDate)}</span>
             </div>
           );
