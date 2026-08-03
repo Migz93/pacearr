@@ -90,6 +90,9 @@ export interface AppSettings {
   recommendationMinimumSavingsGb: number;
   trustProxy: boolean;
   onboardingComplete: boolean;
+  earlyPrefetchEnabled: boolean;
+  earlyPrefetchTriggerEpisodesRemaining: number;
+  earlyPrefetchEpisodeCount: number;
 }
 
 export interface PlexArtworkRecord {
@@ -229,6 +232,25 @@ export interface ShowSeasonSummary {
   watchedUsers: number;
   latestWatchedAt: string | null;
   isExpanded: boolean;
+  prefetchedEpisodes: PrefetchedEpisodeSummary[];
+}
+
+export interface PrefetchedEpisodeSummary {
+  seasonNumber: number;
+  episodeNumber: number;
+  userId: number;
+  displayName: string;
+  avatarUrl: string | null;
+  triggeredAt: string;
+}
+
+export interface PrefetchedEpisodeRecord {
+  id: number;
+  rollingShowId: number;
+  userId: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  triggeredAt: string;
 }
 
 export interface ShowEpisodeSummary {

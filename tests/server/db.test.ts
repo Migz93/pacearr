@@ -31,6 +31,29 @@ test("rolling show enrollment is idempotent by Sonarr series id", () => {
   }
 });
 
+test("early-prefetched episodes persist their triggering user and clear on expansion", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [user] = db.upsertUsers([{ plexUserId: "plex-prefetch", plexAccountId: "2", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: "avatar" }]);
+    const show = db.upsertRollingShow({ id: 43, title: "The Expanse" });
+    assert.equal(db.recordPrefetchedEpisodes(show.id, user.id, 2, [2, 3], "2026-08-03T10:00:00.000Z"), 2);
+    assert.equal(db.recordPrefetchedEpisodes(show.id, user.id, 2, [2, 3], "2026-08-03T11:00:00.000Z"), 0);
+    assert.deepEqual(db.listPrefetchedEpisodesWithUsers(show.id).map((episode) => ({
+      seasonNumber: episode.seasonNumber,
+      episodeNumber: episode.episodeNumber,
+      displayName: episode.displayName,
+      triggeredAt: episode.triggeredAt,
+    })), [
+      { seasonNumber: 2, episodeNumber: 2, displayName: "Bob", triggeredAt: "2026-08-03T10:00:00.000Z" },
+      { seasonNumber: 2, episodeNumber: 3, displayName: "Bob", triggeredAt: "2026-08-03T10:00:00.000Z" },
+    ]);
+    db.markSeasonExpanded(show.id, 2, "2026-08-03T12:00:00.000Z");
+    assert.deepEqual(db.listPrefetchedEpisodes(show.id), []);
+  } finally {
+    cleanup();
+  }
+});
+
 test("rolling progress follows a viewer's most recent watch, even after a rewatch starts in an earlier season", () => {
   const { db, cleanup } = createDb();
   try {
@@ -71,6 +94,9 @@ test("dry-run mode is enabled by default and live cleanup deletion cannot be dis
     assert.equal(db.getAppSettings().dryRun, true);
     assert.equal(db.getAppSettings().cleanupDeletesFiles, true);
     assert.equal(db.getAppSettings().progressiveCleanupDelayDays, 7);
+    assert.equal(db.getAppSettings().earlyPrefetchEnabled, false);
+    assert.equal(db.getAppSettings().earlyPrefetchTriggerEpisodesRemaining, 3);
+    assert.equal(db.getAppSettings().earlyPrefetchEpisodeCount, 2);
     assert.equal(db.updateAppSettings({ cleanupDeletesFiles: false }).cleanupDeletesFiles, true);
     assert.equal(db.updateAppSettings({ progressiveCleanupDelayDays: 3 }).progressiveCleanupDelayDays, 3);
   } finally {

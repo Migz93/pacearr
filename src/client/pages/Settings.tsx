@@ -189,6 +189,16 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           <input type="number" min={0} step={1} value={form.recommendationMinimumSavingsGb} onChange={(event) => setForm({ ...form, recommendationMinimumSavingsGb: Number(event.target.value) })} />
         </Field>
       </div>
+      <div className="settings-divider"><span>Early season prefetch</span></div>
+      <ToggleField label="Early season prefetch" hint="Before a season ends, monitor and search the next season's first episodes so Plex can build a longer playback queue." checked={form.earlyPrefetchEnabled} onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })} />
+      <div className="settings-form-grid">
+        <Field label="Episodes remaining trigger" hint="Start prefetching when this many episodes remain after the watched episode.">
+          <input type="number" min={1} value={form.earlyPrefetchTriggerEpisodesRemaining} onChange={(event) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: Number(event.target.value) })} />
+        </Field>
+        <Field label="Episodes to prefetch" hint="Number of episodes after E01 to monitor and search in the next season.">
+          <input type="number" min={1} value={form.earlyPrefetchEpisodeCount} onChange={(event) => setForm({ ...form, earlyPrefetchEpisodeCount: Number(event.target.value) })} />
+        </Field>
+      </div>
       <div className="settings-divider"><span>Cleanup</span></div>
       <ToggleField label="Progressive cleanup" hint="While processing new watch activity, Pacearr can return older expanded seasons to pilot-only monitoring once every enabled viewer has moved beyond them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
       <Field label="Inactive-season cleanup delay (days)" hint="Wait this long after an expanded season has no active viewers before returning it to pilot-only. Set to 0 for immediate cleanup.">

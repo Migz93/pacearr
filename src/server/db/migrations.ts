@@ -225,6 +225,26 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 12,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_prefetched_episodes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rolling_show_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          triggered_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(rolling_show_id, season_number, episode_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_rolling_prefetched_episodes_show ON rolling_prefetched_episodes(rolling_show_id);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger): void {
