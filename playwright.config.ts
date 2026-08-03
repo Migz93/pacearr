@@ -3,7 +3,7 @@ import { config } from "dotenv";
 
 config({ path: ".env.playwright" });
 
-const baseURL = process.env.BASE_URL ?? "http://localhost:9302";
+const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
 
 export default defineConfig({
   testDir: "./tests/playwright",

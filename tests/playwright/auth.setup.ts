@@ -3,13 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 
 const authFile = "tests/playwright/.auth/storageState.json";
-const baseURL = process.env.BASE_URL ?? "http://localhost:9302";
+const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
 
 setup("authenticate", async ({ request }) => {
   if (fs.existsSync(authFile)) {
+    fs.chmodSync(authFile, 0o600);
     const currentHost = new URL(baseURL).hostname;
+    const currentSecure = new URL(baseURL).protocol === "https:";
     const savedDomain = getSavedCookieDomain();
-    if (savedDomain === currentHost) {
+    if (savedDomain === currentHost && getSavedCookieSecure() === currentSecure) {
       const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader() } });
       const session = await response.json() as { authenticated: boolean };
       if (session.authenticated) return;
@@ -47,7 +49,8 @@ setup("authenticate", async ({ request }) => {
       sameSite: "Strict",
     }],
     origins: [],
-  }, null, 2));
+  }, null, 2), { mode: 0o600 });
+  fs.chmodSync(authFile, 0o600);
 });
 
 function buildCookieHeader(): string {
@@ -60,4 +63,10 @@ function getSavedCookieDomain(): string | null {
   if (!fs.existsSync(authFile)) return null;
   const state = JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ domain?: string }> };
   return state.cookies[0]?.domain ?? null;
+}
+
+function getSavedCookieSecure(): boolean | null {
+  if (!fs.existsSync(authFile)) return null;
+  const state = JSON.parse(fs.readFileSync(authFile, "utf-8")) as { cookies: Array<{ secure?: boolean }> };
+  return state.cookies[0]?.secure ?? null;
 }

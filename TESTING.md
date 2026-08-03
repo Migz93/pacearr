@@ -12,7 +12,7 @@ SQLite database with no external services involved.
 |---|---|
 | `npm run test:server` | Builds the server, compiles server tests, and runs Node's test runner |
 | `npm test` | Runs already-compiled server tests |
-| `npm run check` | Runs TypeScript checks for the client, shared types, and server |
+| `npm run check` | Runs TypeScript checks for the client, shared types, server, and Playwright config/tests |
 | `npm run build` | Builds the Vite client and TypeScript server |
 | `npm run test:e2e` | Runs Playwright auth setup and the live-instance browser suite |
 | `npm run test:e2e:auth` | Runs only the Playwright session-cookie setup |
@@ -46,8 +46,9 @@ it expires. Delete the saved state and provide a fresh cookie to re-authenticate
 rm tests/playwright/.auth/storageState.json
 ```
 
-Generated auth state, test results, and the HTML report are all gitignored and
-must stay local because they can contain authenticated page data. The smoke
+`.env.playwright`, generated auth state, test results, and the HTML report are
+all gitignored and must stay local because they contain the active session
+cookie or authenticated page data. The smoke
 tests also fail on unexpected browser console errors and page errors, using the
 selective client logging convention from #42.
 
