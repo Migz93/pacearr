@@ -1,5 +1,7 @@
 import { clientLogger } from "./logger";
 
+const apiFailureStreaks = new Map<string, number>();
+
 function logPath(path: string): string {
   try {
     return new URL(path, window.location.origin).pathname;
@@ -11,6 +13,7 @@ function logPath(path: string): string {
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? "GET";
   const safePath = logPath(path);
+  const failureKey = `${method} ${safePath}`;
   let response: Response;
   try {
     response = await fetch(path, {
@@ -21,23 +24,32 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
       },
     });
   } catch (caught) {
-    clientLogger.error("API request could not be completed", {
-      method,
-      path: safePath,
-      error: caught instanceof Error ? caught.message : String(caught),
-    });
+    const failures = (apiFailureStreaks.get(failureKey) ?? 0) + 1;
+    apiFailureStreaks.set(failureKey, failures);
+    if (failures === 1) {
+      clientLogger.error("API request could not be completed", {
+        method,
+        path: safePath,
+        error: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
     throw caught;
   }
   if (!response.ok) {
-    clientLogger.warn("API request returned an error", {
-      method,
-      path: safePath,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    const failures = (apiFailureStreaks.get(failureKey) ?? 0) + 1;
+    apiFailureStreaks.set(failureKey, failures);
+    if (failures === 1) {
+      clientLogger.warn("API request returned an error", {
+        method,
+        path: safePath,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
     const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
     throw new Error(body.error || body.message || `${response.status} ${response.statusText}`);
   }
+  apiFailureStreaks.delete(failureKey);
   return response.json() as Promise<T>;
 }
 
