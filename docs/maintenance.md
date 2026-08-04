@@ -10,7 +10,7 @@ the jobs that own the relevant state.
 
 | Where | What it does |
 |---|---|
-| `rolling-reconcile` job | Brings enrolled shows back to the monitoring state implied by enabled viewers' progress |
+| `rolling-reconcile` job | Brings enrolled shows back to the monitoring state implied by enabled viewers' progress; also prunes `history_events` past `historyRetentionDays` |
 | Watch-event processing | Progressive cleanup shrinks older expanded seasons back to pilot-only |
 | `job_run_state` | Durable job state across restarts |
 | `history_events` | Audit history of what Pacearr did |
@@ -27,10 +27,21 @@ authoritative behaviour and safety boundary.
 |---|---|---|
 | `/config/logs/pacearr.log` | 14 days, compressed after rotation | Log rotation config |
 | `watch_events` | Never pruned | — |
-| `history_events` | Never pruned | — |
+| `history_events` | Configurable, default 90 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
+| `reclaimed_storage_events` | Never pruned | — |
 
-**Settings → Logs** combines the active in-memory log stream with the retained
-files, so recent logs remain available after an application or container restart.
+**Settings → Logs** reads the in-memory ring of recent entries, falling back
+to today's active log file if the ring doesn't cover the requested range, so
+recent logs remain available immediately after an application or container
+restart.
+
+`history_events` pruning deletes rows older than `historyRetentionDays` on
+every `rolling-reconcile` run rather than running as its own job — see
+[Adding New Maintenance Work](#adding-new-maintenance-work) below for the
+reasoning. `watch_events` (core viewer-progress state) and
+`reclaimed_storage_events` (the Dashboard's lifetime "Space reclaimed" total)
+are deliberately excluded: pruning either would corrupt state other features
+depend on, not just shrink an audit trail.
 
 ## Adding New Maintenance Work
 

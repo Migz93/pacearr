@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import type { AppSettings, JobInfo, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
+import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
 import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
@@ -34,6 +35,36 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res).catch(next);
   };
+}
+
+/**
+ * Reads today's active log file directly rather than merging every retained rotated
+ * file: the log viewer only needs a bounded, restart-surviving fallback for whatever
+ * the in-memory ring hasn't kept, not the app's full retention history. Returns null
+ * (falling back to the in-memory ring) if the file is missing or unreadable, which is
+ * normal right after the very first log write of a fresh install.
+ */
+function readTodaysLogEntries(logger: Logger): LogEntry[] | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+  } catch {
+    return null;
+  }
+  const entries: LogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<LogEntry>;
+      if (typeof parsed.timestamp === "string" && typeof parsed.message === "string" &&
+        (parsed.level === "debug" || parsed.level === "info" || parsed.level === "warn" || parsed.level === "error")) {
+        entries.push({ timestamp: parsed.timestamp, level: parsed.level, message: parsed.message, ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}) });
+      }
+    } catch {
+      // A partially written final line must not make the log viewer unavailable.
+    }
+  }
+  return entries;
 }
 
 function requiredString(value: unknown, name: string) {
@@ -307,6 +338,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
+    if (body.historyRetentionDays !== undefined) patch.historyRetentionDays = Math.max(1, Math.floor(Number(body.historyRetentionDays) || DEFAULT_APP_SETTINGS.historyRetentionDays));
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
@@ -359,6 +391,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   });
 
+  app.use("/api/settings/logs", rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+  }));
   app.get("/api/settings/logs", requireAuth, (req, res) => {
     const rawPage = Number(req.query.page ?? 1);
     const rawPageSize = Number(req.query.pageSize ?? 25);
@@ -368,7 +406,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const filter = levels.includes(req.query.filter as typeof levels[number]) ? req.query.filter as typeof levels[number] : "debug";
     const allowed = new Set(levels.slice(levels.indexOf(filter)));
     const search = typeof req.query.search === "string" ? req.query.search.toLowerCase().slice(0, 200) : "";
-    const filtered = logger.getRecentLogs(500)
+    const entries = readTodaysLogEntries(logger) ?? logger.getRecentLogs(500);
+    const filtered = entries
       .filter((entry) => allowed.has(entry.level))
       .filter((entry) => !search || entry.message.toLowerCase().includes(search) || JSON.stringify(entry.meta ?? "").toLowerCase().includes(search))
       .reverse();
@@ -563,6 +602,11 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   const clientDir = path.resolve(process.cwd(), "dist/client");
   app.use("/images", express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
   app.use("/images", (_req, res) => res.sendStatus(404));
+  // Vite content-hashes every filename under /assets, so a build's output never collides
+  // with a previous one — safe to cache for as long as a browser will keep it. Everything
+  // else in dist/client (notably index.html, which names the current asset hashes and must
+  // always revalidate) keeps the conservative default below.
+  app.use("/assets", express.static(path.join(clientDir, "assets"), { maxAge: "1y", immutable: true }));
   app.use(express.static(clientDir, { maxAge: "1h" }));
   app.get(/.*/, (_req, res) => res.sendFile(path.join(clientDir, "index.html")));
 

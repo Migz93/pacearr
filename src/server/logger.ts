@@ -1,13 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import type { LogEntry } from "../shared/types.js";
 
 const LOG_RING_SIZE = 500;
-const LOG_FILE_PREFIX = "pacearr-";
-const LOG_FILE_SUFFIX = ".log";
 
 export class Logger {
   private readonly ring: LogEntry[] = [];
@@ -68,45 +65,19 @@ export class Logger {
   }
 
   getRecentLogs(limit = 200): LogEntry[] {
-    // The ring makes live entries immediately available. Reading retained JSON
-    // files as well means Settings → Logs survives restarts and container updates.
-    const persisted = this.readPersistedLogs();
-    const merged = new Map<string, LogEntry>();
-    for (const entry of [...persisted, ...this.ring]) {
-      merged.set(`${entry.timestamp}\u0000${entry.level}\u0000${entry.message}\u0000${JSON.stringify(entry.meta)}`, entry);
-    }
-    return [...merged.values()]
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-      .slice(-Math.max(1, limit));
+    return this.ring.slice(-Math.max(1, limit));
   }
 
-  private readPersistedLogs(): LogEntry[] {
-    try {
-      const files = fs.readdirSync(this.logDir)
-        .filter((file) => file.startsWith(LOG_FILE_PREFIX) && (file.endsWith(LOG_FILE_SUFFIX) || file.endsWith(`${LOG_FILE_SUFFIX}.gz`)))
-        .sort()
-        .slice(-14);
-      const entries: LogEntry[] = [];
-      for (const file of files) {
-        const contents = fs.readFileSync(path.join(this.logDir, file));
-        const text = file.endsWith(".gz") ? zlib.gunzipSync(contents).toString("utf8") : contents.toString("utf8");
-        for (const line of text.split("\n")) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line) as Partial<LogEntry>;
-            if (typeof parsed.timestamp === "string" && typeof parsed.message === "string" &&
-              (parsed.level === "debug" || parsed.level === "info" || parsed.level === "warn" || parsed.level === "error")) {
-              entries.push({ timestamp: parsed.timestamp, level: parsed.level, message: parsed.message, ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}) });
-            }
-          } catch {
-            // A partially written final line must not make the log viewer unavailable.
-          }
-        }
-      }
-      return entries;
-    } catch {
-      return [];
-    }
+  /**
+   * The rotating file transport always symlinks its active file to this fixed name,
+   * regardless of date. Settings -> Logs reads it directly as a bounded, restart-surviving
+   * fallback for whatever the in-memory ring hasn't retained (see readTodaysLogEntries in
+   * app.ts). Deliberately just today's file, not every retained rotated file: reading and
+   * merging all of them, including gzip decompression for the older ones, blocked the
+   * event loop on every concurrent request while Settings -> Logs was open with auto-refresh.
+   */
+  get currentLogFilePath(): string {
+    return path.join(this.logDir, "pacearr.log");
   }
 
   debug(message: string, meta?: unknown) {

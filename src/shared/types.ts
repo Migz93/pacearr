@@ -80,6 +80,7 @@ export interface AppSettings {
   dryRun: boolean;
   artworkEnabled: boolean;
   viewerActivityWindowDays: number;
+  historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
   inactivityResetDays: number;
