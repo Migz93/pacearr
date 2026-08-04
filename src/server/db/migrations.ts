@@ -246,26 +246,18 @@ const migrations: Migration[] = [
     },
   },
   {
-    // Lets listLatestUserProgressForSeries(Batch) resolve each series/user's most
-    // recent watch event directly from the index instead of sorting matching rows
-    // in a temp b-tree. Measured on a 932-show library / ~96k watch_events: this
-    // took the Shows-page progress query from ~150ms to ~8ms (see issue #59).
+    // Two indexes for the same watch_events window-function shape, covering it in both
+    // directions: listLatestUserProgressForSeries(Batch) leads with sonarr_series_id (the
+    // Dashboard and Shows-page queries fixed in #59 — measured on a 932-show library /
+    // ~96k watch_events, this took the Shows-page progress query from ~150ms to ~8ms).
+    // listLatestWatchProgressForUser leads with user_id instead, for the rarer path that
+    // runs during Plex user discovery. Both let SQLite resolve the most recent watch event
+    // directly from the index instead of sorting matching rows in a temp b-tree.
     version: 13,
     up(db) {
       db.exec(`
         CREATE INDEX idx_watch_events_series_user_watched
         ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
-      `);
-    },
-  },
-  {
-    // Lets listLatestWatchProgressForUser resolve each series' most recent watch event
-    // for a user directly from the index instead of sorting matching rows in a temp
-    // b-tree — same shape as the dashboard/Shows-page fixes in #59, on the rarer path
-    // that runs during Plex user discovery.
-    version: 14,
-    up(db) {
-      db.exec(`
         CREATE INDEX idx_watch_events_user_series_watched
         ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
       `);
