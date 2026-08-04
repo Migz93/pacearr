@@ -54,13 +54,15 @@ export default function App() {
     navigate("/login");
   }
 
-  if (loading) return <div className="centered">Loading Pacearr...</div>;
+  if (loading) return <div className="grid min-h-screen place-items-center p-6">Loading Pacearr...</div>;
 
   if (!boot) {
     return (
-      <div className="centered">
-        <p>Unable to load Pacearr. Please try again.</p>
-        <button type="button" className="primary-button" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+      <div className="grid min-h-screen place-items-center p-6">
+        <div className="grid justify-items-center gap-4 text-center">
+          <p>Unable to load Pacearr. Please try again.</p>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+        </div>
       </div>
     );
   }
@@ -92,8 +94,8 @@ export default function App() {
 
 function PlexPopupLoading() {
   return (
-    <div className="centered" role="status" aria-live="polite" aria-label="Opening Plex...">
-      <RefreshCw size={28} className="spin" aria-hidden="true" />
+    <div className="grid min-h-screen place-items-center p-6" role="status" aria-live="polite" aria-label="Opening Plex...">
+      <RefreshCw size={28} className="animate-spin" aria-hidden="true" />
     </div>
   );
 }
@@ -114,7 +116,7 @@ function PlexPopupDone() {
   }, []);
 
   return (
-    <div className="centered" role="status" aria-live="polite">
+    <div className="grid min-h-screen place-items-center p-6" role="status" aria-live="polite">
       Plex authorized. You can close this window.
     </div>
   );
@@ -145,16 +147,16 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
 
 
   return (
-    <main className="login-page">
-      <div className="login-content">
-        <div className="login-brand">
-          <div className="login-brand-mark"><img className="login-brand-logo" src="/pacearr-logo.svg" alt="Pacearr" /></div>
-          <h1>Pacearr</h1>
+    <main className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_50%_0%,rgba(229,9,20,.18),transparent_35%),linear-gradient(180deg,var(--color-background)_0%,var(--color-background-container-low)_100%)] px-6 py-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 grid justify-items-center text-center">
+          <img className="mb-5 block size-28" src="/pacearr-logo.svg" alt="Pacearr" />
+          <h1 className="font-headline text-[42px] font-bold leading-none tracking-[-.04em]">Pacearr</h1>
         </div>
-        <section className="login-card" aria-labelledby="login-title">
-          <h2 id="login-title">Sign in to continue</h2>
-          {error && <div className="error">{error}</div>}
-          <button type="button" className="plex-login-button" disabled={busy} onClick={() => void plexLogin()}>
+        <section className="grid gap-5 rounded-2xl border border-outline-variant/30 bg-background-container p-6 shadow-2xl" aria-labelledby="login-title">
+          <h2 id="login-title" className="font-headline m-0 text-center text-lg font-semibold">Sign in to continue</h2>
+          {error && <div className="rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+          <button type="button" className="inline-flex min-h-[50px] w-full items-center justify-center gap-2.5 rounded-xl border-0 bg-primary-dim font-extrabold text-on-surface transition-[background-color,transform] hover:enabled:-translate-y-px hover:enabled:bg-primary [&_svg]:h-[23px] [&_svg]:w-[52px]" disabled={busy} onClick={() => void plexLogin()}>
             {busy ? <span>Waiting for Plex...</span> : <><span>Login with</span><PlexLogo /></>}
           </button>
         </section>
