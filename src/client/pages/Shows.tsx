@@ -445,7 +445,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   if (!detail) {
     return (
       <div className="mx-auto max-w-[1280px] p-7">
-        <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
         {error ? <div className="mt-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div> : <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading show...</div>}
       </div>
     );
@@ -456,15 +456,15 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   return (
     <div className="mx-auto max-w-[1360px] p-7">
       <div className="mb-[18px] flex justify-between gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
-        <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
+        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButton} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
       <section className="mb-[22px] grid grid-cols-[220px_minmax(0,1fr)] items-end gap-6 max-[820px]:grid-cols-1">
         <Poster show={show} className="max-w-[220px] rounded-lg object-cover max-[820px]:max-w-[180px]" />
         <div className="grid justify-items-start gap-3 pb-1">
           <div className="flex items-center gap-2">
-            <div className={`inline-flex min-h-6 items-center rounded-md px-2 text-[11px] font-extrabold uppercase ${show.enrolled ? "bg-success/18 text-success" : "bg-background-container-high text-on-surface-variant"}`}>{show.enrolled ? "Enrolled" : "Not enrolled"}</div>
+            <span className={badgeClass(show.enrolled ? "success" : undefined)}>{show.enrolled ? "Enrolled" : "Not enrolled"}</span>
             <span
               className={badgeClass(detail.dryRunPreview.enabled ? "warning" : "success")}
               title={detail.dryRunPreview.enabled
@@ -584,9 +584,10 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
   dryRunEnabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>
@@ -603,12 +604,13 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
       </span>
       </button>
-      {open && <EpisodeTable episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
+      {open && <EpisodeTable id={episodeTableId} episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
     </div>
   );
 }
 
-function EpisodeTable({ episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
+function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
+  id: string;
   episodes: ShowEpisodeSummary[];
   prefetchedEpisodes: ShowSeasonSummary["prefetchedEpisodes"];
   viewersByEpisode: Map<string, ViewerBadge[]>;
@@ -616,7 +618,7 @@ function EpisodeTable({ episodes, prefetchedEpisodes, viewersByEpisode, dryRunEn
 }) {
   const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
   return (
-      <div className="overflow-hidden border-t border-outline-variant/30">
+      <div id={id} className="overflow-hidden border-t border-outline-variant/30">
         <div className="grid grid-cols-[90px_minmax(180px,1fr)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
           <span>Episode</span>
           <span>Title</span>
