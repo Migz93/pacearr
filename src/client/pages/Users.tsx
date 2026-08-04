@@ -118,7 +118,7 @@ export default function Users() {
       </UserSection>
 
       <div className="mb-6">
-        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" onClick={() => setDisabledOpen((open) => !open)}>
+        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={disabledOpen} onClick={() => setDisabledOpen((open) => !open)}>
           {disabledOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Disabled ({disabledUsers.length})
         </button>
@@ -168,7 +168,7 @@ function UserCard({
     <article className={`relative grid min-h-[92px] grid-cols-[36px_minmax(0,1fr)_18px] grid-rows-[38px_auto] items-center gap-x-2.5 gap-y-2 rounded-lg border p-2.5 transition-colors hover:bg-background-container-high ${selected ? "border-primary/55 bg-background-container-high" : "border-outline-variant/30 bg-background-container"} ${!user.enabled ? "opacity-[.62]" : ""}`}>
       <label className="relative col-start-3 row-start-1 block size-[18px] cursor-pointer self-start justify-self-end" title={selected ? "Deselect user" : "Select user"}>
         <input className="peer absolute inset-0 m-0 size-[18px] cursor-pointer opacity-0" type="checkbox" aria-label={`Select ${user.username}`} checked={selected} onChange={onToggleSelected} />
-        <span className="grid size-[18px] place-items-center rounded-[5px] border border-on-surface/28 bg-background text-on-surface transition-colors peer-checked:border-primary peer-checked:bg-primary-dim">{selected && <Check size={12} />}</span>
+        <span className="grid size-[18px] place-items-center rounded-[5px] border border-on-surface/28 bg-background text-on-surface transition-colors peer-checked:border-primary peer-checked:bg-primary-dim peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary">{selected && <Check size={12} />}</span>
       </label>
 
       <Avatar avatarUrl={user.avatarUrl} displayName={user.displayName} />

@@ -4,9 +4,9 @@ import type { ShowListItem, ShowUserProgress } from "../../shared/types";
 export type ViewerBadge = ShowUserProgress & { isHistory: boolean };
 
 export function Poster({ show, className = "" }: { show: Pick<ShowListItem, "title" | "posterUrl">; className?: string }) {
-  if (show.posterUrl) return <img className={`block aspect-[2/3] rounded-lg bg-background-container object-cover ${className}`} src={show.posterUrl} alt={`${show.title} poster`} loading="lazy" />;
+  if (show.posterUrl) return <img className={`block aspect-[2/3] bg-background-container object-cover ${className}`} src={show.posterUrl} alt={`${show.title} poster`} loading="lazy" />;
   return (
-    <div className={`grid aspect-[2/3] place-items-center rounded-lg bg-background-container text-on-surface-variant ${className}`} aria-label={`${show.title} poster unavailable`}>
+    <div className={`grid aspect-[2/3] place-items-center bg-background-container text-on-surface-variant ${className}`} aria-label={`${show.title} poster unavailable`}>
       <span className="grid size-14 place-items-center rounded-full bg-background-container-high text-2xl font-black">{show.title.slice(0, 1).toUpperCase()}</span>
     </div>
   );

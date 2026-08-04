@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import { Children, cloneElement, isValidElement, useId, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes } from "react";
 import { ChevronRight } from "lucide-react";
 
 export function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
@@ -14,11 +14,17 @@ export function SectionCard({ title, description, children }: { title: string; d
 }
 
 export function Field({ label, hint, id, children }: { label: string; hint?: string; id?: string; children: ReactNode }) {
+  const generatedId = useId();
+  const resolvedId = id ?? generatedId;
+  const child = Children.only(children);
+  const childWithId = isValidElement(child) && !(child.props as { id?: string }).id
+    ? cloneElement(child as ReactElement<{ id?: string }>, { id: resolvedId })
+    : child;
   return (
     <div>
-      <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor={id}>{label}</label>
+      <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor={resolvedId}>{label}</label>
       {hint && <p className="mb-2 text-xs leading-relaxed text-on-surface-variant">{hint}</p>}
-      {children}
+      {childWithId}
     </div>
   );
 }
@@ -61,8 +67,8 @@ export function SelectInput({ value, onChange, className = "", children, ...rest
 export function ToggleField({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <label className="flex cursor-pointer items-start gap-3">
-      <input className="sr-only" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span className={`relative mt-0.5 h-6 w-[42px] shrink-0 rounded-full transition-colors ${checked ? "bg-primary-dim" : "bg-background-container-highest"}`}><span className={`absolute top-[3px] left-[3px] size-[18px] rounded-full bg-on-surface transition-transform ${checked ? "translate-x-[18px]" : ""}`} /></span>
+      <input className="peer sr-only" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span className={`relative mt-0.5 h-6 w-[42px] shrink-0 rounded-full transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary ${checked ? "bg-primary-dim" : "bg-background-container-highest"}`}><span className={`absolute top-[3px] left-[3px] size-[18px] rounded-full bg-on-surface transition-transform ${checked ? "translate-x-[18px]" : ""}`} /></span>
       <span>
         <strong className="block text-sm text-on-surface">{label}</strong>
         {hint && <small className="mt-0.5 block text-xs leading-relaxed text-on-surface-variant">{hint}</small>}
@@ -74,8 +80,8 @@ export function ToggleField({ label, hint, checked, onChange }: { label: string;
 export function SaveBar({ saving, success, error, label, onSave }: { saving: boolean; success: boolean; error: string | null; label: string; onSave: () => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-      <div>{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</div>
-      <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={onSave}>
+      <div aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</div>
+      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={onSave}>
         {saving ? "Saving..." : label}
         {!saving && <ChevronRight size={15} />}
       </button>

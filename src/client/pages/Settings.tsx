@@ -75,7 +75,7 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         </div>
       </div>
 
-      <SelectInput className="hidden max-[820px]:block" value={activeTab} onChange={(value) => setTab(value as Tab)}>
+      <SelectInput className="hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
       </SelectInput>
 

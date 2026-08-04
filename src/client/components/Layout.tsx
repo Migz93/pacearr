@@ -27,10 +27,19 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [accountOpen]);
 
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [mobileOpen]);
+
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
       {mobileOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      <aside id="mobile-sidebar" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center gap-3 border-b border-outline-variant/30 px-6 py-5">
           <div className="grid size-8 shrink-0 place-items-center"><img className="block size-8" src="/pacearr-logo.svg" alt="Pacearr" /></div>
           <div className="min-w-0">
@@ -74,7 +83,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
       </aside>
       <div className="flex-1 md:ml-64">
         <div className="flex items-center gap-3 border-b border-outline-variant/30 bg-background-container-low px-4 py-3 md:hidden">
-          <button type="button" className="rounded-lg p-1.5 text-on-surface-variant hover:bg-background-container-high hover:text-on-surface" onClick={() => setMobileOpen((open) => !open)} aria-label="Toggle navigation">
+          <button type="button" className="rounded-lg p-1.5 text-on-surface-variant hover:bg-background-container-high hover:text-on-surface" onClick={() => setMobileOpen((open) => !open)} aria-label="Toggle navigation" aria-expanded={mobileOpen} aria-controls="mobile-sidebar">
             <Menu size={20} />
           </button>
           <img className="size-6 shrink-0" src="/pacearr-logo.svg" alt="Pacearr" />

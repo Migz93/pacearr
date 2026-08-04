@@ -59,8 +59,10 @@ export default function App() {
   if (!boot) {
     return (
       <div className="grid min-h-screen place-items-center p-6">
-        <p>Unable to load Pacearr. Please try again.</p>
-        <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+        <div className="grid justify-items-center gap-4 text-center">
+          <p>Unable to load Pacearr. Please try again.</p>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+        </div>
       </div>
     );
   }

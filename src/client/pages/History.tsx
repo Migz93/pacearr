@@ -127,6 +127,7 @@ export default function History() {
               type="button"
               key={item}
               className={`min-h-8 whitespace-nowrap border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${level === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`}
+              aria-pressed={level === item}
               onClick={() => setParam("level", item, true)}
             >
               {item === "all" ? "All levels" : item === "warn" ? "Warning" : item.charAt(0).toUpperCase() + item.slice(1)}
@@ -134,9 +135,9 @@ export default function History() {
           ))}
         </div>
         <div className="flex flex-wrap overflow-hidden rounded-lg border border-outline-variant/30" aria-label="Job type">
-          <button type="button" className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold ${action === "all" ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} onClick={() => setParam("action", "all", true)}>All types</button>
+          <button type="button" className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold ${action === "all" ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === "all"} onClick={() => setParam("action", "all", true)}>All types</button>
           {(data?.actions ?? []).map((item) => (
-            <button type="button" key={item} className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${action === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} onClick={() => setParam("action", item, true)}>
+            <button type="button" key={item} className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${action === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === item} onClick={() => setParam("action", item, true)}>
               {actionLabel(item)}
             </button>
           ))}
