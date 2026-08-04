@@ -80,7 +80,12 @@ function readTodaysLogEntries(logger: Logger): LogEntry[] {
 function readRecentLogEntries(logger: Logger): LogEntry[] {
   const merged = new Map<string, LogEntry>();
   for (const entry of [...readTodaysLogEntries(logger), ...logger.getRecentLogs(500)]) {
-    merged.set(`${entry.timestamp} ${entry.message}`, entry);
+    // timestamp+message alone isn't a safe dedup key: a synchronous loop can log the same
+    // message text for several different items within the same millisecond (e.g.
+    // reconcileRollingShows's per-show skip log), varying only in meta — collapsing those
+    // would silently drop all but one. Include level and meta, matching the key this
+    // replaced before the ring/file merge existed.
+    merged.set(`${entry.timestamp} ${entry.level} ${entry.message} ${JSON.stringify(entry.meta)}`, entry);
   }
   return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
