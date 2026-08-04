@@ -6,8 +6,9 @@ import {
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
-import { ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
+import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
 import { ToggleField } from "../components/FormControls";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
 } from "../../shared/types";
@@ -135,6 +136,7 @@ function ShowsBrowser() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const addTriggerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
   const [sort, setSort] = useState<SortMode>(() => loadStoredSort(tab));
 
@@ -259,7 +261,7 @@ function ShowsBrowser() {
           <p className="text-on-surface-variant">{TAB_SUBTITLES[tab]}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className={primaryButton} onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
+          <button type="button" className={primaryButton} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
           <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
             <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
           </button>
@@ -340,12 +342,12 @@ function ShowsBrowser() {
           </div>
         </div>
       )}
-      {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} />}
+      {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} trigger={addTriggerRef.current} />}
     </div>
   );
 }
 
-function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => Promise<void> }) {
+function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAdded: () => Promise<void>; trigger: HTMLElement | null }) {
   const [query, setQuery] = useState("");
   const [shows, setShows] = useState<ShowListItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -378,9 +380,12 @@ function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
     }
   }
 
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" onClick={onClose}>
-    <div className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-      <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+  const dialogRef = useDialogA11y<HTMLDivElement>(true, onClose, trigger);
+
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+    <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close enroll show dialog" onClick={onClose} />
+    <div ref={dialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="enroll-show-title" tabIndex={-1}>
+      <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 id="enroll-show-title" className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
       <div className="mb-[18px] flex h-10 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant"><Search size={17} /><input className="m-0 h-full border-0 bg-transparent p-0" aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
       {query.trim().length < 2 ? <div className="p-6 text-center text-on-surface-variant">Enter at least two characters to search Sonarr.</div> : loading ? <div className="p-6 text-center text-on-surface-variant">Searching Sonarr...</div> : <div className="grid gap-2">{shows.map((show) => <div className="flex items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container-low p-3" key={show.sonarrSeriesId}><div><strong className="block">{show.title}</strong><span className="mt-1 block text-xs text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className="inline-flex min-h-8 items-center justify-center rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="p-6 text-center text-on-surface-variant">No available Sonarr shows match this search.</div>}</div>}
@@ -635,13 +640,14 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
                 <AvatarStack viewers={viewers} size={22} />
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
+                <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
                 {prefetchedByEpisode.has(`${episode.seasonNumber}:${episode.episodeNumber}`) && (() => {
                   const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`)!;
                   return <span className={badgeClass("warning")} title={`Triggered by ${prefetch.displayName} on ${formatDate(prefetch.triggeredAt)}`}>Prefetched · {prefetch.displayName}</span>;
                 })()}
               </div>
-              <span className="text-on-surface-variant">{formatDate(episode.airDate)}</span>
+              <span className="text-on-surface-variant"><RowLabel className="hidden max-[820px]:inline">Air date</RowLabel>{formatDate(episode.airDate)}</span>
             </div>
           );
         })}

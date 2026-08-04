@@ -3,6 +3,7 @@ import { Link, NavLink } from "react-router-dom";
 import { Beaker, Code2, History, LayoutDashboard, ListVideo, LogOut, Menu, Server, Settings, Users } from "lucide-react";
 import { apiGet } from "../lib/api";
 import { getPlexImageSrc } from "../lib/plexImage";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type { AboutInfo, SessionUser } from "../../shared/types";
 
 const nav = [
@@ -27,19 +28,40 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [accountOpen]);
 
+  // Below the md breakpoint the sidebar is only ever a dialog when open — it's
+  // translated off-screen otherwise, but without `inert` its links stay in
+  // the Tab order, so a keyboard user has to tab through the whole hidden
+  // nav before reaching visible page content.
+  const [belowMdBreakpoint, setBelowMdBreakpoint] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
   useEffect(() => {
-    if (!mobileOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileOpen(false);
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [mobileOpen]);
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const updateBreakpoint = () => setBelowMdBreakpoint(mediaQuery.matches);
+    updateBreakpoint();
+    mediaQuery.addEventListener("change", updateBreakpoint);
+    return () => mediaQuery.removeEventListener("change", updateBreakpoint);
+  }, []);
+
+  // Above md the sidebar is the permanent desktop nav, never a dialog, even if
+  // it was opened as a mobile drawer right before the viewport crossed the
+  // breakpoint (e.g. a tablet rotation) — without this check it would keep
+  // trapping Tab focus and announcing role="dialog" at a width where it isn't
+  // presented as one.
+  const drawerIsDialog = mobileOpen && belowMdBreakpoint;
+  const sidebarRef = useDialogA11y<HTMLElement>(drawerIsDialog, () => setMobileOpen(false));
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
       {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-      <aside id="mobile-sidebar" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      <aside
+        id="mobile-sidebar"
+        ref={sidebarRef}
+        role={drawerIsDialog ? "dialog" : undefined}
+        aria-modal={drawerIsDialog ? true : undefined}
+        aria-label={drawerIsDialog ? "Navigation menu" : undefined}
+        inert={belowMdBreakpoint && !mobileOpen}
+        tabIndex={-1}
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <div className="flex items-center gap-3 border-b border-outline-variant/30 px-6 py-5">
           <div className="grid size-8 shrink-0 place-items-center"><img className="block size-8" src="/pacearr-logo.svg" alt="Pacearr" /></div>
           <div className="min-w-0">
@@ -106,13 +128,18 @@ function getChannelConfig(buildChannel: string) {
 }
 
 function VersionFooter({ onNavigate }: { onNavigate: () => void }) {
+  const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [info, setInfo] = useState<AboutInfo | null>(null);
-  useEffect(() => { void apiGet<AboutInfo>("/api/settings/about").then(setInfo).catch(() => undefined); }, []);
+  useEffect(() => {
+    void apiGet<AboutInfo>("/api/settings/about")
+      .then((result) => { setInfo(result); setStatus("loaded"); })
+      .catch(() => setStatus("error"));
+  }, []);
 
   // Don't render a channel label until the API has responded — any guess
   // before that point could misrepresent the build (e.g. showing "Stable"
   // for a develop image during the load window).
-  if (!info) {
+  if (status === "loading") {
     return (
       <div className="px-3 pb-3">
         <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
@@ -120,6 +147,20 @@ function VersionFooter({ onNavigate }: { onNavigate: () => void }) {
           <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold leading-tight text-on-surface-variant">Pacearr</div>
             <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "error" || !info) {
+    return (
+      <div className="px-3 pb-3">
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
+          <div className="size-8 shrink-0 rounded-lg bg-background-container-highest" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold leading-tight text-on-surface-variant">Pacearr</div>
+            <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">Version unavailable</div>
           </div>
         </div>
       </div>

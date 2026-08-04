@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 import { config } from "dotenv";
 
-config({ path: ".env.playwright" });
+// quiet: true suppresses dotenv's own promotional "tip" banner (e.g. it
+// advertises a third-party auth product) that it otherwise prints on load.
+config({ path: ".env.playwright", quiet: true });
 
 const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
 
