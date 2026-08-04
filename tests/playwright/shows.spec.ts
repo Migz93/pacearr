@@ -3,9 +3,13 @@ import { openPage } from "./support";
 
 test("shows tabs and filters render", async ({ page }) => {
   await openPage(page, "/shows", "Shows");
-  for (const tab of ["Enrolled", "Recommendations", "Ignored", "Sonarr"]) {
+  for (const tab of ["Enrolled", "Recommendations", "Sonarr"]) {
     await expect(page.getByRole("button", { name: tab, exact: true })).toBeVisible();
   }
+  // Shows.tsx appends a live " (N)" count to the Ignored button once
+  // ignoredCount > 0, so match with or without that suffix rather than
+  // pinning the assertion to whatever the count happens to be right now.
+  await expect(page.getByRole("button", { name: /^Ignored( \(\d+\))?$/ })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Sort shows" })).toBeVisible();
 });
 
