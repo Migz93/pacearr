@@ -842,11 +842,17 @@ export class PacearrDatabase {
   }
 
   listDashboardShowActivity(activeSince: string): Omit<DashboardShowActivity, "posterUrl">[] {
+    // Restricting latest_watch to currently-enrolled series avoids ranking every watch
+    // event ever recorded (including for shows that were later unenrolled) just to find
+    // the newest one per enrolled show — on a large history table this was the dominant
+    // cost of loading the dashboard (see issue #59).
     return (this.db.prepare(`
       WITH latest_watch AS (
         SELECT we.sonarr_series_id, we.season_number, we.episode_number, we.watched_at, we.user_id,
           ROW_NUMBER() OVER (PARTITION BY we.sonarr_series_id ORDER BY we.watched_at DESC, we.id DESC) AS row_number
-        FROM watch_events we WHERE we.sonarr_series_id IS NOT NULL
+        FROM watch_events we
+        WHERE we.sonarr_series_id IS NOT NULL
+          AND we.sonarr_series_id IN (SELECT sonarr_series_id FROM rolling_shows)
       ), active_viewers AS (
         SELECT rsu.rolling_show_id, COUNT(DISTINCT rsu.user_id) AS active_viewer_count
         FROM rolling_show_users rsu JOIN users ON users.id = rsu.user_id
