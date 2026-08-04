@@ -315,11 +315,11 @@ function ShowsBrowser() {
       ) : (
         <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
           {isRecommendationTab ? (
-            <div className="grid grid-cols-[minmax(220px,1.6fr)_110px_170px_140px_140px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
+            <div className="grid grid-cols-[minmax(220px,1.6fr)_110px_170px_140px_140px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[1170px]:hidden">
               <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Watchers</span><span>Projected savings</span>
             </div>
           ) : (
-            <div className="grid grid-cols-[minmax(220px,1.6fr)_170px_220px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
+            <div className="grid grid-cols-[minmax(220px,1.6fr)_170px_220px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[970px]:hidden">
               <span>Show</span><span>Seasons</span><span>Watchers</span>
             </div>
           )}
