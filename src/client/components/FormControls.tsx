@@ -15,9 +15,10 @@ export function SectionCard({ title, description, children }: { title: string; d
 
 export function Field({ label, hint, id, children }: { label: string; hint?: string; id?: string; children: ReactNode }) {
   const generatedId = useId();
-  const resolvedId = id ?? generatedId;
   const child = Children.only(children);
-  const childWithId = isValidElement(child) && !(child.props as { id?: string }).id
+  const childId = isValidElement(child) ? (child.props as { id?: string }).id : undefined;
+  const resolvedId = id ?? childId ?? generatedId;
+  const childWithId = isValidElement(child) && !childId
     ? cloneElement(child as ReactElement<{ id?: string }>, { id: resolvedId })
     : child;
   return (
@@ -40,7 +41,7 @@ export function TextInput({ value, onChange, className = "", ...rest }: TextInpu
       {...rest}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface ${className}`}
+      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${className}`}
     />
   );
 }
@@ -57,7 +58,7 @@ export function SelectInput({ value, onChange, className = "", children, ...rest
       {...rest}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface ${className}`}
+      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${className}`}
     >
       {children}
     </select>
@@ -68,7 +69,7 @@ export function ToggleField({ label, hint, checked, onChange }: { label: string;
   return (
     <label className="flex cursor-pointer items-start gap-3">
       <input className="peer sr-only" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span className={`relative mt-0.5 h-6 w-[42px] shrink-0 rounded-full transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary ${checked ? "bg-primary-dim" : "bg-background-container-highest"}`}><span className={`absolute top-[3px] left-[3px] size-[18px] rounded-full bg-on-surface transition-transform ${checked ? "translate-x-[18px]" : ""}`} /></span>
+      <span className={`relative mt-0.5 h-6 w-[42px] shrink-0 rounded-full border border-on-surface-variant/50 transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary ${checked ? "bg-primary-dim" : "bg-background-container-highest"}`}><span className={`absolute top-[3px] left-[3px] size-[18px] rounded-full bg-on-surface transition-transform ${checked ? "translate-x-[18px]" : ""}`} /></span>
       <span>
         <strong className="block text-sm text-on-surface">{label}</strong>
         {hint && <small className="mt-0.5 block text-xs leading-relaxed text-on-surface-variant">{hint}</small>}
@@ -81,7 +82,7 @@ export function SaveBar({ saving, success, error, label, onSave }: { saving: boo
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
       <div aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</div>
-      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={onSave}>
+      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving} aria-busy={saving} onClick={onSave}>
         {saving ? "Saving..." : label}
         {!saving && <ChevronRight size={15} />}
       </button>

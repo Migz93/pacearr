@@ -505,14 +505,14 @@ function LogsTab() {
       {activeLog && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" onClick={() => setActiveLog(null)}>
           <div className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Log Details</h2><button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)}><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Log Details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
             <div className="grid gap-2.5">
               <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
               <InfoRow label="Level"><span className={LEVEL_BADGE[activeLog.level]}>{activeLog.level}</span></InfoRow>
               <InfoRow label="Message"><span>{activeLog.message}</span></InfoRow>
               {activeLog.meta !== undefined && <InfoRow label="Meta"><pre className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{JSON.stringify(activeLog.meta, null, 2)}</pre></InfoRow>}
             </div>
-            <div className="mt-4 flex justify-end"><button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
+            <div className="mt-4 flex justify-end"><button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
           </div>
         </div>
       )}
@@ -622,15 +622,15 @@ function JobsTab() {
       {editingJob && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <div className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Edit Schedule</h2><button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)}><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Edit Schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)} aria-label="Close"><X size={18} /></button></div>
             <Field label="New Frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
               <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
               </SelectInput>
             </Field>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => setEditingJob(null)}>Cancel</button>
-              <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
+              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => setEditingJob(null)}>Cancel</button>
+              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>
         </div>
@@ -762,7 +762,7 @@ function AboutTab() {
         <div className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-center justify-between gap-3.5">
             <div><h2 id="changelog-title" className="font-headline text-lg font-semibold">{releaseTitle(changelogRelease)} changelog</h2></div>
-            <button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
+            <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
           </div>
           {changelogRelease.body ? <pre className="m-0 max-h-[52vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-outline-variant/30 bg-background p-3 font-mono text-[13px] leading-relaxed text-on-surface">{changelogRelease.body}</pre> : <p className="text-on-surface-variant">No changelog is available for this release.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2">

@@ -10,8 +10,10 @@ rules are Tailwind utility classes directly in component JSX; `styles.css`
 holds only the theme tokens and a small `@layer base` reset for bare
 elements (`body`, `button`, `h1`/`h2`). Form controls (`TextInput`,
 `SelectInput`, `Field`, `ToggleField`, `SectionCard`, `SaveBar`) are shared
-components in `src/client/components/FormControls.tsx`, not global CSS. Raw
-colour values in component JSX are not permitted.
+components in `src/client/components/FormControls.tsx`, not global CSS.
+Status badges use the shared `badgeClass()` helper in `src/client/lib/utils.ts`
+instead of inline colour classes. Raw colour values in component JSX are not
+permitted.
 
 ## The Palette
 
@@ -71,6 +73,9 @@ All text/background pairings in active use pass WCAG AA (4.5:1 for normal text).
 | `on-surface-variant` on any background step | worst case `background-bright` | 6.1:1 |
 | `on-surface` on `primary-dim` | Buttons, badges | 7.0:1 (AAA) |
 | `on-surface` on `primary` | Hover state | 4.6:1 (AA) |
+| `success` on tinted `success/18` badge fill | Status badges, worst case `background-container-high` | 5.2:1 (AA) |
+| `warning` on tinted `warning/16` badge fill | Status badges, worst case `background-container-high` | 5.7:1 (AA) |
+| `error` on tinted `error/15` badge fill | Status badges, worst case `background-container-high` | 4.6:1 (AA) |
 
 ## Rules
 

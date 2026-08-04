@@ -121,7 +121,7 @@ export default function History() {
       </div>
 
       <div className="mb-3.5 flex flex-wrap items-center gap-2 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div className="flex overflow-hidden rounded-lg border border-outline-variant/30" aria-label="Logging level">
+        <div className="flex overflow-hidden rounded-lg border border-outline-variant/30" role="group" aria-label="Logging level">
           {LEVELS.map((item) => (
             <button
               type="button"
@@ -134,7 +134,7 @@ export default function History() {
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap overflow-hidden rounded-lg border border-outline-variant/30" aria-label="Job type">
+        <div className="flex flex-wrap overflow-hidden rounded-lg border border-outline-variant/30" role="group" aria-label="Job type">
           <button type="button" className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold ${action === "all" ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === "all"} onClick={() => setParam("action", "all", true)}>All types</button>
           {(data?.actions ?? []).map((item) => (
             <button type="button" key={item} className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${action === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === item} onClick={() => setParam("action", item, true)}>

@@ -265,13 +265,12 @@ function ShowsBrowser() {
         </div>
       </div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
-      <div className="mb-[18px] flex gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" role="tablist">
+      <div className="mb-[18px] flex gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" role="group" aria-label="Show category">
         {TABS.map((entry) => (
           <button
             type="button"
             key={entry.id}
-            role="tab"
-            aria-selected={tab === entry.id}
+            aria-pressed={tab === entry.id}
             className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
             onClick={() => setTab(entry.id)}
           >
