@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { apiGet } from "../lib/api";
-import { formatRelativeTime } from "../lib/utils";
+import { badgeClass, formatRelativeTime } from "../lib/utils";
 import { SelectInput } from "../components/FormControls";
 import type { HistoryEvent, HistoryPageResponse } from "../../shared/types";
 
@@ -10,6 +10,12 @@ type LevelFilter = "all" | HistoryEvent["level"];
 
 const LEVELS: LevelFilter[] = ["all", "info", "warn", "error"];
 const PAGE_SIZES = [10, 25, 50, 100];
+
+const LEVEL_BADGE: Record<HistoryEvent["level"], string> = {
+  info: badgeClass("success"),
+  warn: badgeClass("warning"),
+  error: badgeClass("error"),
+};
 
 const ACTION_LABELS: Record<string, string> = {
   "history.import": "History import",
@@ -170,7 +176,7 @@ function HistoryRow({ event }: { event: HistoryEvent }) {
   return (
     <article className="border-b border-outline-variant/30 last:border-b-0">
       <button type="button" className="grid w-full grid-cols-[58px_minmax(0,1fr)_auto_16px] items-center gap-3 border-0 bg-transparent p-3.5 text-left text-on-surface hover:bg-background-container-high max-[820px]:grid-cols-[58px_minmax(0,1fr)_16px]" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-        <span className={`badge ${event.level === "info" ? "success" : event.level === "warn" ? "warning" : "error"}`}>{event.level}</span>
+        <span className={LEVEL_BADGE[event.level]}>{event.level}</span>
         <span className="grid min-w-0 gap-1">
           <span className="flex min-w-0 items-baseline gap-2.5">
             <strong className="overflow-hidden text-ellipsis whitespace-nowrap">{event.title}</strong>
