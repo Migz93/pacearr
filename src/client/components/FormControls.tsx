@@ -19,7 +19,7 @@ export function Field({ label, hint, id, children }: { label: string; hint?: str
   const child = Children.only(children);
   const childId = isValidElement(child) ? (child.props as { id?: string }).id : undefined;
   const resolvedId = id ?? childId ?? generatedId;
-  const childWithId = isValidElement(child) && !childId
+  const childWithId = isValidElement(child) && childId !== resolvedId
     ? cloneElement(child as ReactElement<{ id?: string }>, { id: resolvedId })
     : child;
   return (

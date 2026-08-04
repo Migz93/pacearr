@@ -73,6 +73,7 @@ const PAGE_SIZE = 24;
 
 const primaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface";
 const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
+const dangerButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-error";
 const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
 
 function isShowsTab(value: string | null): value is ShowsTab {
@@ -258,14 +259,15 @@ function ShowsBrowser() {
           <p className="text-on-surface-variant">{TAB_SUBTITLES[tab]}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => void refresh()} disabled={loading || refreshing}>
+          <button type="button" className={primaryButton} onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
+          <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
             <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
           </button>
         </div>
       </div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
-      <div className="mb-[18px] flex gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" role="group" aria-label="Show category">
+      <fieldset className="m-0 mb-[18px] flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+        <legend className="sr-only">Show category</legend>
         {TABS.map((entry) => (
           <button
             type="button"
@@ -277,7 +279,7 @@ function ShowsBrowser() {
             {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
           </button>
         ))}
-      </div>
+      </fieldset>
       <div className="mb-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />
@@ -486,7 +488,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               <>
                 <button
                   type="button"
-                  className={`${secondaryButton} text-error`}
+                  className={dangerButton}
                   disabled={busy}
                   title={detail.dryRunPreview.enabled
                     ? "Dry run: previews resetting the show to first-episode-only monitoring for every season. No Sonarr changes or file deletions are made."
@@ -497,7 +499,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 </button>
                 <button
                   type="button"
-                  className={`${secondaryButton} text-error`}
+                  className={dangerButton}
                   disabled={busy}
                   title="Stops Pacearr from managing this show and removes its stored rolling progress. It does not delete media or undo the show's current Sonarr monitoring state."
                   onClick={() => runAction(() => apiDelete(`/api/rolling-shows/${show.rollingShowId}`))}

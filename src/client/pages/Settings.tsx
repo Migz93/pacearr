@@ -81,13 +81,13 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
 
       <div className="mb-[22px] flex gap-1 rounded-xl border border-outline-variant/30 bg-background-container-high p-1 max-[820px]:hidden">
         {TABS.map((tab) => (
-          <button key={tab.id} className={`min-h-10 flex-1 rounded-lg border-0 font-bold ${activeTab === tab.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`} onClick={() => setTab(tab.id)}>
+          <button type="button" key={tab.id} className={`min-h-10 flex-1 rounded-lg border-0 font-bold ${activeTab === tab.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`} onClick={() => setTab(tab.id)}>
             {tab.label}
           </button>
         ))}
       </div>
 
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error" role="alert">{error}</div>}
       {loading ? (
         <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading settings...</div>
       ) : (
@@ -262,9 +262,11 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
 
   return (
     <SectionCard title="Plex Settings" description="Connect Pacearr to your Plex server. Load available servers or enter the host manually.">
-      <Field label="Server" hint="Press the button to load available Plex servers.">
+      <div>
+        <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-server-select">Server</label>
+        <p className="mb-2 text-xs leading-relaxed text-on-surface-variant">Press the button to load available Plex servers.</p>
         <div className="grid grid-cols-[minmax(0,1fr)_42px] items-end gap-2">
-          <SelectInput value={selectedServerUri} onChange={(value) => {
+          <SelectInput id="plex-server-select" value={selectedServerUri} onChange={(value) => {
             const match = groupedServers.find((entry) => entry.value === value)?.option;
             if (!match) {
               switchToManual();
@@ -279,18 +281,19 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
             <option value="">Press the button to load available servers</option>
             {groupedServers.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
           </SelectInput>
-          <button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers">
+          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
             <RefreshCw size={15} className={loadingServers ? "animate-spin" : ""} />
           </button>
         </div>
-      </Field>
+      </div>
       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-[18px] max-[820px]:grid-cols-1">
-        <Field label="Hostname or IP Address">
+        <div>
+          <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-hostname">Hostname or IP Address</label>
           <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background">
             <span className="border-r border-outline-variant/30 bg-background-container-high px-3 py-2.5 text-[13px] text-on-surface-variant">{useSsl ? "https://" : "http://"}</span>
-            <input className="w-full border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
+            <input id="plex-hostname" className="w-full border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
           </div>
-        </Field>
+        </div>
         <Field label="Port">
           <TextInput type="number" value={port} onChange={(value) => { switchToManual(); setPort(value); }} placeholder="32400" />
         </Field>
@@ -302,15 +305,14 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
       </Field>
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || (!selectedServerUri && !hostname.trim())} onClick={() => void testConnection()}>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || (!selectedServerUri && !hostname.trim())} onClick={() => void testConnection()}>
             {testing ? "Testing..." : "Test Connection"}
           </button>
-          {testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}
+          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {success && <span className="text-[13px] font-bold text-success">Saved</span>}
-          {error && <span className="text-[13px] font-bold text-error">{error}</span>}
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Plex"} {!saving && <ChevronRight size={15} />}</button>
+          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Plex"} {!saving && <ChevronRight size={15} />}</button>
         </div>
       </div>
     </SectionCard>
@@ -372,13 +374,12 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
       </Field>
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          {testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
+          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {success && <span className="text-[13px] font-bold text-success">Saved</span>}
-          {error && <span className="text-[13px] font-bold text-error">{error}</span>}
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void save()}>{saving ? "Saving..." : "Save Sonarr"}</button>
+          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void save()}>{saving ? "Saving..." : "Save Sonarr"}</button>
         </div>
       </div>
     </SectionCard>
@@ -441,13 +442,12 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
       </Field>
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          {testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
+          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {success && <span className="text-[13px] font-bold text-success">Saved</span>}
-          {error && <span className="text-[13px] font-bold text-error">{error}</span>}
-          <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
+          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
         </div>
       </div>
     </SectionCard>
@@ -530,10 +530,10 @@ function LogsTab() {
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
           </SelectInput>
-          <button className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 px-3.5 text-on-surface ${autoRefresh ? "bg-primary-dim" : "bg-background-container-high"}`} onClick={() => setAutoRefresh((value) => !value)}>
+          <button type="button" className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 px-3.5 text-on-surface ${autoRefresh ? "bg-primary-dim" : "bg-background-container-high"}`} onClick={() => setAutoRefresh((value) => !value)}>
             {autoRefresh ? <Pause size={14} /> : <Play size={14} />} {autoRefresh ? "Pause" : "Resume"}
           </button>
-          <button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>
+          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>
         </div>
         <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
           {loading && !data ? <div className="p-6 text-center text-on-surface-variant">Loading logs...</div> : results.length === 0 ? <div className="p-6 text-center text-on-surface-variant">No log entries match the current filter.</div> : results.map((entry, index) => (
@@ -542,8 +542,8 @@ function LogsTab() {
               <span className={LEVEL_BADGE[entry.level]}>{entry.level}</span>
               <span className="break-words leading-relaxed">{entry.message}</span>
               <span className="flex gap-1 opacity-70">
-                {entry.meta !== undefined && <button className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(entry)} title="View details"><Eye size={13} /></button>}
-                <button className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => copyLog(entry)} title="Copy"><ClipboardCopy size={13} /></button>
+                {entry.meta !== undefined && <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(entry)} title="View details" aria-label="View details"><Eye size={13} /></button>}
+                <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => copyLog(entry)} title="Copy" aria-label="Copy"><ClipboardCopy size={13} /></button>
               </span>
             </div>
           ))}
@@ -552,9 +552,9 @@ function LogsTab() {
           <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant max-[820px]:flex-col max-[820px]:items-stretch">
             <span>{(pageInfo.page - 1) * pageInfo.pageSize + 1}-{Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)} of {pageInfo.total}</span>
             <div className="flex items-center gap-2">
-              <button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
+              <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
               <span>Page {page} / {pageInfo.pages}</span>
-              <button className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
+              <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
             </div>
           </div>
         )}
@@ -647,8 +647,8 @@ function JobsTab() {
                   <span>{job.nextRunAt ? formatFutureTime(job.nextRunAt) : job.nextRunLabel ?? "-"}</span>
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    {JOB_PRESETS[job.id] && <button className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run Now"}</button>
+                    {JOB_PRESETS[job.id] && <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
+                    <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run Now"}</button>
                   </div>
                 </div>
               );
@@ -753,7 +753,7 @@ function AboutTab() {
                 </div>
                 {release.published_at && <small className="text-xs text-on-surface-variant">{new Date(release.published_at).toLocaleDateString()}</small>}
               </div>
-              <button className={compactSecondaryButton} onClick={() => setChangelogRelease(release)}>View changelog</button>
+              <button type="button" className={compactSecondaryButton} onClick={() => setChangelogRelease(release)}>View changelog</button>
             </div>
           ))}
         </div>}

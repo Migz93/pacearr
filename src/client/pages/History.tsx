@@ -121,7 +121,8 @@ export default function History() {
       </div>
 
       <div className="mb-3.5 flex flex-wrap items-center gap-2 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div className="flex overflow-hidden rounded-lg border border-outline-variant/30" role="group" aria-label="Logging level">
+        <fieldset className="m-0 flex min-w-0 overflow-hidden rounded-lg border border-outline-variant/30 p-0">
+          <legend className="sr-only">Logging level</legend>
           {LEVELS.map((item) => (
             <button
               type="button"
@@ -133,15 +134,16 @@ export default function History() {
               {item === "all" ? "All levels" : item === "warn" ? "Warning" : item.charAt(0).toUpperCase() + item.slice(1)}
             </button>
           ))}
-        </div>
-        <div className="flex flex-wrap overflow-hidden rounded-lg border border-outline-variant/30" role="group" aria-label="Job type">
+        </fieldset>
+        <fieldset className="m-0 flex min-w-0 flex-wrap overflow-hidden rounded-lg border border-outline-variant/30 p-0">
+          <legend className="sr-only">Job type</legend>
           <button type="button" className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold ${action === "all" ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === "all"} onClick={() => setParam("action", "all", true)}>All types</button>
           {(data?.actions ?? []).map((item) => (
             <button type="button" key={item} className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${action === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === item} onClick={() => setParam("action", item, true)}>
               {actionLabel(item)}
             </button>
           ))}
-        </div>
+        </fieldset>
         <SelectInput className="ml-auto w-auto min-w-[120px] max-[820px]:ml-0 max-[820px]:w-full" aria-label="Rows per page" value={pageSize} onChange={(value) => setParam("pageSize", value, true)}>
           {PAGE_SIZES.map((size) => <option value={size} key={size}>{size} / page</option>)}
         </SelectInput>
