@@ -1,3 +1,9 @@
+import { twMerge } from "tailwind-merge";
+
+export function cn(...classes: Array<string | undefined | false | null>): string {
+  return twMerge(classes.filter(Boolean).join(" "));
+}
+
 export function formatRelativeTime(value: string | null | undefined) {
   if (!value) return "never";
   const diff = Date.now() - new Date(value).getTime();

@@ -1,5 +1,6 @@
 import { Children, cloneElement, isValidElement, useId, type InputHTMLAttributes, type ReactElement, type ReactNode, type SelectHTMLAttributes } from "react";
 import { ChevronRight } from "lucide-react";
+import { cn } from "../lib/utils";
 
 export function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
@@ -41,7 +42,7 @@ export function TextInput({ value, onChange, className = "", ...rest }: TextInpu
       {...rest}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${className}`}
+      className={cn("w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary", className)}
     />
   );
 }
@@ -58,7 +59,7 @@ export function SelectInput({ value, onChange, className = "", children, ...rest
       {...rest}
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${className}`}
+      className={cn("w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary", className)}
     >
       {children}
     </select>
