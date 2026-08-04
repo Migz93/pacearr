@@ -289,7 +289,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-[18px] max-[820px]:grid-cols-1">
         <div>
           <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-hostname">Hostname or IP Address</label>
-          <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background">
+          <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
             <span className="border-r border-outline-variant/30 bg-background-container-high px-3 py-2.5 text-[13px] text-on-surface-variant">{useSsl ? "https://" : "http://"}</span>
             <input id="plex-hostname" className="w-full border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
           </div>
@@ -447,7 +447,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
+          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving || (form.enabled && (!form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)))} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
         </div>
       </div>
     </SectionCard>

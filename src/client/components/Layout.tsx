@@ -38,7 +38,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
-      {mobileOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <aside id="mobile-sidebar" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex items-center gap-3 border-b border-outline-variant/30 px-6 py-5">
           <div className="grid size-8 shrink-0 place-items-center"><img className="block size-8" src="/pacearr-logo.svg" alt="Pacearr" /></div>
@@ -68,10 +68,10 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
                   <div>{user.username}</div>
                   {user.email && <small className="mt-0.5 block overflow-hidden text-ellipsis text-xs font-normal text-on-surface-variant">{user.email}</small>}
                 </div>
-                <button className="flex w-full items-center gap-3 border-0 bg-transparent px-4 py-2.5 text-left text-sm font-medium text-on-surface-variant hover:bg-background-bright hover:text-on-surface" onClick={() => { setAccountOpen(false); onLogout(); }}><LogOut size={16} strokeWidth={1.75} /> Sign out</button>
+                <button type="button" className="flex w-full items-center gap-3 border-0 bg-transparent px-4 py-2.5 text-left text-sm font-medium text-on-surface-variant hover:bg-background-bright hover:text-on-surface" onClick={() => { setAccountOpen(false); onLogout(); }}><LogOut size={16} strokeWidth={1.75} /> Sign out</button>
               </div>
             )}
-            <button className="flex w-full min-w-0 items-center gap-3 rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm font-medium text-on-surface hover:bg-background-container-high" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>
+            <button type="button" className="flex w-full min-w-0 items-center gap-3 rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm font-medium text-on-surface hover:bg-background-container-high" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>
               {getPlexImageSrc(user.avatarUrl)
                 ? <img src={getPlexImageSrc(user.avatarUrl)!} alt={user.displayName} className="size-8 shrink-0 rounded-full object-cover" />
                 : <span className="grid size-8 shrink-0 place-items-center rounded-full bg-background-bright text-xs font-semibold text-on-surface-variant">{user.displayName.charAt(0).toUpperCase()}</span>}

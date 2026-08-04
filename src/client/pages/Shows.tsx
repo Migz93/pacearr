@@ -558,7 +558,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
 function MonitorState({ current, target, dryRunEnabled }: { current: boolean; target: boolean; dryRunEnabled: boolean }) {
   const mismatch = current !== target;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <span className="flex flex-wrap items-center gap-1.5">
       <span className={badgeClass(current ? "success" : undefined)}>
         {current ? <Eye size={12} /> : <EyeOff size={12} />} {current ? "Monitored" : "Not monitored"}
       </span>
@@ -572,7 +572,7 @@ function MonitorState({ current, target, dryRunEnabled }: { current: boolean; ta
           <ArrowRight size={12} /> {target ? "Monitored" : "Not monitored"}
         </span>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -588,20 +588,20 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
       <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-      <div className="flex-1">
+      <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>
         <span className="mt-1 block text-xs text-on-surface-variant">
           {season.episodeCount || season.totalEpisodeCount} episodes
           {season.watchedUsers > 0 ? ` · ${season.watchedUsers} watched` : ""}
           {season.latestWatchedAt ? ` · last ${formatDate(season.latestWatchedAt)}` : ""}
         </span>
-      </div>
+      </span>
       <AvatarStack viewers={viewers} />
-      <div className="flex flex-wrap items-center justify-end gap-1.5 text-right">
+      <span className="flex flex-wrap items-center justify-end gap-1.5 text-right">
         {season.isExpanded && <span className={badgeClass("success")}>Expanded</span>}
         {season.prefetchedEpisodes.length > 0 && <span className={badgeClass("warning")} title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
-      </div>
+      </span>
       </button>
       {open && <EpisodeTable episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
     </div>

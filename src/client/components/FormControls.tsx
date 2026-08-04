@@ -19,13 +19,16 @@ export function Field({ label, hint, id, children }: { label: string; hint?: str
   const child = Children.only(children);
   const childId = isValidElement(child) ? (child.props as { id?: string }).id : undefined;
   const resolvedId = id ?? childId ?? generatedId;
-  const childWithId = isValidElement(child) && childId !== resolvedId
-    ? cloneElement(child as ReactElement<{ id?: string }>, { id: resolvedId })
+  const hintId = hint ? `${resolvedId}-hint` : undefined;
+  const existingDescribedBy = isValidElement(child) ? (child.props as { "aria-describedby"?: string })["aria-describedby"] : undefined;
+  const describedBy = [existingDescribedBy, hintId].filter(Boolean).join(" ") || undefined;
+  const childWithId = isValidElement(child)
+    ? cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, { id: resolvedId, "aria-describedby": describedBy })
     : child;
   return (
     <div>
       <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor={resolvedId}>{label}</label>
-      {hint && <p className="mb-2 text-xs leading-relaxed text-on-surface-variant">{hint}</p>}
+      {hint && <p id={hintId} className="mb-2 text-xs leading-relaxed text-on-surface-variant">{hint}</p>}
       {childWithId}
     </div>
   );
