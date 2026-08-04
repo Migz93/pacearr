@@ -15,6 +15,21 @@ export function titleCaseJob(id: string) {
   return id.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
 }
 
+const BADGE_BASE = "inline-flex min-w-12 items-center justify-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[10px] font-black uppercase";
+
+export function badgeClass(variant?: "success" | "warning" | "error"): string {
+  switch (variant) {
+    case "success":
+      return `${BADGE_BASE} bg-success/18 text-success`;
+    case "warning":
+      return `${BADGE_BASE} bg-warning/16 text-warning`;
+    case "error":
+      return `${BADGE_BASE} bg-error/15 text-error`;
+    default:
+      return `${BADGE_BASE} bg-background-container-high text-on-surface-variant`;
+  }
+}
+
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 GB";
   const units = ["B", "KB", "MB", "GB", "TB", "PB"];

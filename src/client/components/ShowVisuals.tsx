@@ -4,10 +4,10 @@ import type { ShowListItem, ShowUserProgress } from "../../shared/types";
 export type ViewerBadge = ShowUserProgress & { isHistory: boolean };
 
 export function Poster({ show, className = "" }: { show: Pick<ShowListItem, "title" | "posterUrl">; className?: string }) {
-  if (show.posterUrl) return <img className={`show-poster ${className}`} src={show.posterUrl} alt={`${show.title} poster`} loading="lazy" />;
+  if (show.posterUrl) return <img className={`block aspect-[2/3] rounded-lg bg-background-container object-cover ${className}`} src={show.posterUrl} alt={`${show.title} poster`} loading="lazy" />;
   return (
-    <div className={`show-poster poster-fallback ${className}`} aria-label={`${show.title} poster unavailable`}>
-      <span>{show.title.slice(0, 1).toUpperCase()}</span>
+    <div className={`grid aspect-[2/3] place-items-center rounded-lg bg-background-container text-on-surface-variant ${className}`} aria-label={`${show.title} poster unavailable`}>
+      <span className="grid size-14 place-items-center rounded-full bg-background-container-high text-2xl font-black">{show.title.slice(0, 1).toUpperCase()}</span>
     </div>
   );
 }
@@ -23,15 +23,15 @@ export function AvatarStack({ viewers, size = 26 }: { viewers: ViewerBadge[]; si
   const shown = viewers.slice(0, 4);
   const hidden = viewers.slice(4);
   return (
-    <div className="avatar-stack">
+    <div className="flex items-center">
       {shown.map((viewer) => (
-        <span className="avatar-stack-item" key={viewer.userId} title={viewerTooltip(viewer)}>
+        <span className="-ml-2 block rounded-full first:ml-0 [box-shadow:0_0_0_2px_var(--color-background-container-low)]" key={viewer.userId} title={viewerTooltip(viewer)}>
           <Avatar avatarUrl={viewer.avatarUrl} displayName={viewer.displayName} size={size} muted={viewer.isHistory || !viewer.enabled} />
         </span>
       ))}
       {hidden.length > 0 && (
         <span
-          className="avatar-stack-item avatar-overflow"
+          className="-ml-2 grid place-items-center rounded-full bg-background-container-high text-[11px] font-extrabold text-on-surface-variant [box-shadow:0_0_0_2px_var(--color-background-container-low)]"
           style={{ width: size, height: size }}
           title={hidden.map(viewerTooltip).join(", ")}
         >

@@ -15,7 +15,7 @@ export function Avatar({ avatarUrl, displayName, size = 36, muted = false }: {
     setFailed(false);
   }, [src]);
 
-  const className = `user-avatar ${muted ? "avatar-muted" : ""}`;
+  const className = `shrink-0 rounded-full object-cover ${muted ? "grayscale opacity-50" : ""}`;
   const style = { width: size, height: size };
 
   if (src && !failed) {
@@ -23,7 +23,7 @@ export function Avatar({ avatarUrl, displayName, size = 36, muted = false }: {
   }
 
   return (
-    <div className={`${className} user-avatar-fallback`} style={style}>
+    <div className={`${className} grid place-items-center bg-background-container-high text-on-surface-variant`} style={style}>
       {displayName.trim() ? displayName.trim().charAt(0).toUpperCase() : <UserRound size={Math.round(size * 0.66)} />}
     </div>
   );

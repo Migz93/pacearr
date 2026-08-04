@@ -2,109 +2,80 @@
 
 # Colour Scheme
 
-Pacearr uses a fixed dark-mode green palette defined as CSS custom properties in
-the `:root` block of `src/client/styles.css`. Components reference them through
-semantic classes in that same stylesheet (`.panel`, `.stat-card`, `.badge`,
-`.nav-item`) rather than through utility classes.
-
-> **Pacearr is the odd one out.** Hubarr and ShelfBridge share a red palette
-> driven by a Tailwind v4 `@theme` block, and forbid raw hex values in component
-> code. Pacearr predates that convention: Tailwind is installed but not used for
-> colour, and **23 hardcoded hex values** remain scattered through
-> `styles.css` outside the variable system. Both the palette and the mechanism
-> are under review in
-> [#51](https://github.com/Migz93/pacearr/issues/51).
+Pacearr uses a fixed dark-mode palette defined as CSS custom properties in
+`src/client/styles.css` under the Tailwind v4 `@theme` block. Components should
+reference these variables through Tailwind utility classes (`bg-*`, `text-*`,
+`border-*`) for normal colour usage. Poster, episode, and responsive layout
+rules are Tailwind utility classes directly in component JSX; `styles.css`
+holds only the theme tokens and a small `@layer base` reset for bare
+elements (`body`, `button`, `h1`/`h2`). Form controls (`TextInput`,
+`SelectInput`, `Field`, `ToggleField`, `SectionCard`, `SaveBar`) are shared
+components in `src/client/components/FormControls.tsx`, not global CSS. Raw
+colour values in component JSX are not permitted.
 
 ## The Palette
 
 ### Background scale
 
+Six steps from darkest (page base) to lightest (hover states). Use in elevation
+order — deeper backgrounds sit behind shallower ones.
+
 | Variable | Hex | Role |
 |---|---|---|
-| `--bg` | `#121516` | Page-level background |
-| `--panel` | `#1b2021` | Default cards, panels, sections, tables |
-| `--panel-2` | `#242a2b` | Elevated surfaces: buttons at rest, nav hover, popovers |
-
-Three further background values are hardcoded rather than tokenised:
-
-| Hex | Where | Role |
-|---|---|---|
-| `#171b1c` | `.sidebar` | Sidebar background, one step below `--bg` |
-| `#151819` | `.season-panel`, `.episode-table` | Inset surfaces inside a panel |
-| `#101313` | `input`, `select`, `.shows-toolbar` | Input wells, recessed controls |
-| `#1c2021` | `.season-row:hover` | Row hover |
-| `#2b3233` | avatar fallback, popup hover | Highest-elevation hover |
-| `#3a4244` | `.toggle-track` | Inactive toggle track |
+| `background` | `#0d0e12` | Page-level backgrounds, input wells, modal overlays |
+| `background-container-low` | `#121318` | Sidebar, nav rail, inset surfaces |
+| `background-container` | `#18191e` | Default cards and panels |
+| `background-container-high` | `#1e1f25` | Elevated cards, resting buttons, selected controls |
+| `background-container-highest` | `#24252b` | Tooltips, popovers, elevated row hovers |
+| `background-bright` | `#2a2c32` | Button hover state, interactive element hover |
 
 ### Brand / interactive
 
-Two steps of the brand green. `--primary-2` is the resting state and `--primary`
-the brighter accent, the same brighten-on-hover relationship hubarr and
-ShelfBridge use.
+Two steps of the brand red. Use `primary-dim` for resting interactive states
+and `primary` for hover only — this gives a consistent brighten-on-hover feel
+and keeps resting contrast above WCAG AAA (7:1 against `on-surface`).
 
 | Variable | Hex | Role |
 |---|---|---|
-| `--primary` | `#6fd3a6` | Brand accent, active indicators, logo mark |
-| `--primary-2` | `#2d7c61` | Resting state for primary buttons |
-
-Also hardcoded: `#3f9a77` (Plex login button hover) and `#1f5542` (login brand
-mark gradient stop).
+| `primary` | `#e50914` | Hover state, active indicators, and brand accent |
+| `primary-dim` | `#ae0610` | Resting state for buttons, active nav, filters, toggles, and badges |
 
 ### Text
 
 | Variable | Hex | Role |
 |---|---|---|
-| `--text` | `#eef2ef` | Primary text |
-| `--muted` | `#9aa7a1` | Secondary text: subtitles, hints, inactive nav items, stat labels |
+| `on-surface` | `#faf8fe` | Primary text and text on coloured backgrounds |
+| `on-surface-variant` | `#abaab0` | Secondary text: subtitles, hints, and inactive labels |
 
 ### Border
 
 | Variable | Hex | Role |
 |---|---|---|
-| `--line` | `rgba(238, 242, 239, 0.1)` | Borders and dividers — an alpha value, not a solid hex |
+| `outline-variant` | `#47484c` | Borders and dividers, used at reduced opacity |
 
 ### Status
 
 | Variable | Hex | Role |
 |---|---|---|
-| `--danger` | `#ff7b7b` | Errors, destructive action indicators |
-| `--warn` | `#dcb867` | Warnings, non-critical notices |
-
-There is no `--success` variable. Success and "enrolled" states use hardcoded
-tints instead:
-
-| Hex | Where | Role |
-|---|---|---|
-| `#c5f4dc` | `.show-state.enrolled`, `.inline-success` | Enrolled and success text |
-| `#dcf9e9` | `.poster-savings-badge` | Reclaimed-space badge text |
-| `#f5fff9` | `.plex-login-button` | Text on the Plex login button |
-| `#f0d696` | `.badge.warn`, `.callout.warn` | Warning text, lighter than `--warn` |
-| `#ffc1c1` | `.dashboard-attention`, `.inline-error` | Error text, lighter than `--danger` |
+| `success` | `#22c55e` | Enrolled, reclaimed-space, healthy, and successful states |
+| `warning` | `#f59e0b` | Warnings and non-critical notices |
+| `error` | `#f07070` | Errors, validation failures, and destructive actions |
 
 ## Contrast
 
-Text pairings in active use pass WCAG AA (4.5:1 for normal text) against the
-background scale. The greens are used as accents and tinted text, not as
-backgrounds for small text.
+All text/background pairings in active use pass WCAG AA (4.5:1 for normal text).
 
-| Text | Background | Notes |
+| Text | Background | Ratio |
 |---|---|---|
-| `--text` on `--bg` / `--panel` / `--panel-2` | — | Comfortably above AA |
-| `--muted` on `--panel` | — | Passes AA for body text |
-| `--text` on `--primary-2` | Primary buttons | Passes AA |
-
-These have not been re-measured since the palette was written. If the palette
-changes under [#51](https://github.com/Migz93/pacearr/issues/51), recompute them
-against the ratios documented in hubarr's and ShelfBridge's colour-scheme docs.
+| `on-surface` on any background step | worst case `background-bright` | 13.2:1 |
+| `on-surface-variant` on any background step | worst case `background-bright` | 6.1:1 |
+| `on-surface` on `primary-dim` | Buttons, badges | 7.0:1 (AAA) |
+| `on-surface` on `primary` | Hover state | 4.6:1 (AA) |
 
 ## Rules
 
-- Prefer a `:root` variable over a raw hex. The hardcoded values listed above are
-  legacy, not a precedent — do not add more.
-- Never use `--primary` or `--primary-2` as a text colour on dark backgrounds.
-- The lighter status tints (`#c5f4dc`, `#f0d696`, `#ffc1c1`) are for text and
-  subtle tinted backgrounds only — do not use them as solid button backgrounds.
-- `--line` is a border colour only, not used for text.
-- Green currently carries meaning in Pacearr beyond branding: enrolled state and
-  reclaimed disk space both read as "green = good". Keep that association intact
-  when adding new UI.
+- Never use `primary` or `primary-dim` as a text colour on dark backgrounds.
+- Use `on-surface` for text on coloured backgrounds to keep the off-white tone consistent.
+- Status colours are for text and subtle tinted backgrounds only; do not use them as solid button backgrounds.
+- Keep green success semantics for enrolled, healthy, and reclaimed-space states; red is reserved for Pacearr branding and interaction.
+- `outline-variant` is a border colour only, never used for text.
