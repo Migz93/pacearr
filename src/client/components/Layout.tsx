@@ -30,6 +30,19 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
 
   const sidebarRef = useDialogA11y<HTMLElement>(mobileOpen, () => setMobileOpen(false));
 
+  // Below the md breakpoint the sidebar is only ever a dialog when open — it's
+  // translated off-screen otherwise, but without `inert` its links stay in
+  // the Tab order, so a keyboard user has to tab through the whole hidden
+  // nav before reaching visible page content.
+  const [belowMdBreakpoint, setBelowMdBreakpoint] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const updateBreakpoint = () => setBelowMdBreakpoint(mediaQuery.matches);
+    updateBreakpoint();
+    mediaQuery.addEventListener("change", updateBreakpoint);
+    return () => mediaQuery.removeEventListener("change", updateBreakpoint);
+  }, []);
+
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
       {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
@@ -39,6 +52,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
         role={mobileOpen ? "dialog" : undefined}
         aria-modal={mobileOpen ? true : undefined}
         aria-label={mobileOpen ? "Navigation menu" : undefined}
+        inert={belowMdBreakpoint && !mobileOpen}
         tabIndex={-1}
         className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >

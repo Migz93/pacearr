@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -22,9 +22,11 @@ function focusableElements(container: HTMLElement | null): HTMLElement[] {
 export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () => void, trigger?: HTMLElement | null) {
   const containerRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
   const triggerRef = useRef(trigger);
-  triggerRef.current = trigger;
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+    triggerRef.current = trigger;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +44,11 @@ export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () 
       }
       if (event.key !== "Tab") return;
       const focusable = focusableElements(container);
-      if (focusable.length === 0) return;
+      if (focusable.length === 0) {
+        event.preventDefault();
+        container?.focus();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && document.activeElement === first) {

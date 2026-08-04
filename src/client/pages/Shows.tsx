@@ -382,8 +382,9 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
 
   const dialogRef = useDialogA11y<HTMLDivElement>(true, onClose, trigger);
 
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" onClick={onClose}>
-    <div ref={dialogRef} className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="enroll-show-title" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+    <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close enroll show dialog" onClick={onClose} />
+    <div ref={dialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="enroll-show-title" tabIndex={-1}>
       <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 id="enroll-show-title" className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
       <div className="mb-[18px] flex h-10 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant"><Search size={17} /><input className="m-0 h-full border-0 bg-transparent p-0" aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}

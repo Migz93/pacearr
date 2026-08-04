@@ -506,8 +506,9 @@ function LogsTab() {
   return (
     <>
       {activeLog && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" onClick={() => setActiveLog(null)}>
-          <div ref={logDialogRef} className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+          <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close log details" onClick={() => setActiveLog(null)} />
+          <div ref={logDialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1}>
             <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log Details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
             <div className="grid gap-2.5">
               <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
