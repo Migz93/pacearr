@@ -70,11 +70,13 @@ export class Logger {
 
   /**
    * The rotating file transport always symlinks its active file to this fixed name,
-   * regardless of date. Settings -> Logs reads it directly as a bounded, restart-surviving
-   * fallback for whatever the in-memory ring hasn't retained (see readTodaysLogEntries in
-   * app.ts). Deliberately just today's file, not every retained rotated file: reading and
-   * merging all of them, including gzip decompression for the older ones, blocked the
-   * event loop on every concurrent request while Settings -> Logs was open with auto-refresh.
+   * regardless of date. Settings -> Logs reads it directly and combines it with the
+   * in-memory ring (see readRecentLogEntries in app.ts) rather than treating one as a
+   * fallback for the other, since either can hold history the other doesn't depending on
+   * restart/rotation timing. Deliberately just today's file, not every retained rotated
+   * file: reading and merging all of them, including gzip decompression for the older
+   * ones, blocked the event loop on every concurrent request while Settings -> Logs was
+   * open with auto-refresh.
    */
   get currentLogFilePath(): string {
     return path.join(this.logDir, "pacearr.log");

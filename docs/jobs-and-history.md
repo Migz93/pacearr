@@ -126,6 +126,7 @@ Important workflow actions should usually write both:
 - a `history_events` row for admin visibility
 
 Application logs are retained for 14 days in `/config/logs`. Settings → Logs
-reads the in-memory ring of recent entries, falling back to today's active log
-file (read directly, not merged across every retained rotated file) so it
-remains useful immediately after a restart.
+combines the in-memory ring of recent entries with today's active log file
+(read directly, not merged across every retained rotated file), so it stays
+useful both immediately after a restart and right after midnight's daily
+rotation.

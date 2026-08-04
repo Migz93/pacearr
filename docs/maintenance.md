@@ -30,10 +30,13 @@ authoritative behaviour and safety boundary.
 | `history_events` | Configurable, default 90 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
 | `reclaimed_storage_events` | Never pruned | — |
 
-**Settings → Logs** reads the in-memory ring of recent entries, falling back
-to today's active log file if the ring doesn't cover the requested range, so
-recent logs remain available immediately after an application or container
-restart.
+**Settings → Logs** combines the in-memory ring of recent entries with today's
+active log file (not every retained file — that would mean decompressing and
+merging up to 14 days on every request). Neither source alone is always
+complete: the ring is empty right after a restart while the file still has
+that day's history, and the file is near-empty right after midnight's
+rotation while the ring still holds the tail of the previous day — so recent
+logs stay available across both cases.
 
 `history_events` pruning deletes rows older than `historyRetentionDays` on
 every `rolling-reconcile` run rather than running as its own job — see
