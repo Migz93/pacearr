@@ -28,8 +28,6 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [accountOpen]);
 
-  const sidebarRef = useDialogA11y<HTMLElement>(mobileOpen, () => setMobileOpen(false));
-
   // Below the md breakpoint the sidebar is only ever a dialog when open — it's
   // translated off-screen otherwise, but without `inert` its links stay in
   // the Tab order, so a keyboard user has to tab through the whole hidden
@@ -43,15 +41,23 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
     return () => mediaQuery.removeEventListener("change", updateBreakpoint);
   }, []);
 
+  // Above md the sidebar is the permanent desktop nav, never a dialog, even if
+  // it was opened as a mobile drawer right before the viewport crossed the
+  // breakpoint (e.g. a tablet rotation) — without this check it would keep
+  // trapping Tab focus and announcing role="dialog" at a width where it isn't
+  // presented as one.
+  const drawerIsDialog = mobileOpen && belowMdBreakpoint;
+  const sidebarRef = useDialogA11y<HTMLElement>(drawerIsDialog, () => setMobileOpen(false));
+
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
       {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <aside
         id="mobile-sidebar"
         ref={sidebarRef}
-        role={mobileOpen ? "dialog" : undefined}
-        aria-modal={mobileOpen ? true : undefined}
-        aria-label={mobileOpen ? "Navigation menu" : undefined}
+        role={drawerIsDialog ? "dialog" : undefined}
+        aria-modal={drawerIsDialog ? true : undefined}
+        aria-label={drawerIsDialog ? "Navigation menu" : undefined}
         inert={belowMdBreakpoint && !mobileOpen}
         tabIndex={-1}
         className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
