@@ -1,10 +1,19 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE_SELECTOR = "a[href], button, textarea, input, select, [tabindex]";
 
 function focusableElements(container: HTMLElement | null): HTMLElement[] {
   if (!container) return [];
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => element.offsetParent !== null);
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) => element.tabIndex >= 0 && !element.matches(":disabled") && element.offsetParent !== null,
+  );
+}
+
+// container.focus() (used as a fallback when the dialog has nothing else
+// focusable) is a no-op unless the element is already focusable — ensure it
+// always is, rather than relying on every call site remembering tabIndex={-1}.
+function ensureFocusable(container: HTMLElement | null) {
+  if (container && !container.hasAttribute("tabindex")) container.tabIndex = -1;
 }
 
 /**
@@ -32,6 +41,7 @@ export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () 
     if (!open) return;
     const container = containerRef.current;
     const triggerElement = triggerRef.current !== undefined ? triggerRef.current : (document.activeElement as HTMLElement | null);
+    ensureFocusable(container);
 
     if (container && !container.contains(document.activeElement)) {
       (focusableElements(container)[0] ?? container).focus();
@@ -63,7 +73,12 @@ export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      triggerElement?.focus();
+      // The trigger can be torn down while the dialog was open — e.g. an
+      // auto-refreshing list re-keying its rows out from under a button the
+      // user clicked. Restoring focus to a detached node is already a silent
+      // no-op, but check explicitly rather than relying on that incidental
+      // browser behavior.
+      if (triggerElement && document.contains(triggerElement)) triggerElement.focus();
     };
   }, [open]);
 
