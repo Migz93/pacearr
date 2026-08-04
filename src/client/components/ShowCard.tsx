@@ -12,6 +12,14 @@ function seasonLabel(count: number) {
   return `${count} season${count === 1 ? "" : "s"}`;
 }
 
+// Column header text is hidden below the list breakpoints (see the header
+// rows in Shows.tsx), so stacked mobile values need their own inline label
+// to stay identifiable — otherwise a mobile user sees bare numbers/badges
+// with no indication of what each one means.
+export function RowLabel({ children, className }: { children: React.ReactNode; className: string }) {
+  return <span className={`mr-1.5 shrink-0 text-[10px] font-black uppercase tracking-wide text-on-surface-variant ${className}`}>{children}</span>;
+}
+
 function commonFields(item: ShowBrowserItem) {
   const { data } = item;
   return {
@@ -62,9 +70,10 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
           </span>
         </div>
       </div>
-      {item.kind === "recommendation" && <span>{formatBytes(item.data.sizeOnDiskBytes)}</span>}
+      {item.kind === "recommendation" && <span><RowLabel className="hidden max-[1170px]:inline">Size on disk</RowLabel>{formatBytes(item.data.sizeOnDiskBytes)}</span>}
       {item.kind === "recommendation" ? (
-      <span className="flex flex-wrap gap-1.5">
+      <span className="flex flex-wrap items-center gap-1.5">
+          <RowLabel className="hidden max-[1170px]:inline">Seasons</RowLabel>
           <span className={badgeClass("success")}>{item.data.retainedSeasons.length} kept</span>
           <span className={badgeClass("warning")}>{item.data.droppedSeasons.length} pilot-only</span>
         </span>
@@ -72,11 +81,12 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
         <span>{seasonLabel(common.seasonCount)}</span>
       )}
       <span className="flex items-center gap-2">
+        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Watchers</RowLabel>
         <AvatarStack viewers={common.watchers} size={22} />
         {common.watcherCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
       </span>
       {item.kind === "recommendation" && (
-        <strong className="flex items-center gap-1.5 text-success"><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>
+        <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>
       )}
     </Link>
   );

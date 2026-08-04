@@ -3,6 +3,7 @@ import { Link, NavLink } from "react-router-dom";
 import { Beaker, Code2, History, LayoutDashboard, ListVideo, LogOut, Menu, Server, Settings, Users } from "lucide-react";
 import { apiGet } from "../lib/api";
 import { getPlexImageSrc } from "../lib/plexImage";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type { AboutInfo, SessionUser } from "../../shared/types";
 
 const nav = [
@@ -27,19 +28,20 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [accountOpen]);
 
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileOpen(false);
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [mobileOpen]);
+  const sidebarRef = useDialogA11y<HTMLElement>(mobileOpen, () => setMobileOpen(false));
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
       {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
-      <aside id="mobile-sidebar" className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      <aside
+        id="mobile-sidebar"
+        ref={sidebarRef}
+        role={mobileOpen ? "dialog" : undefined}
+        aria-modal={mobileOpen ? true : undefined}
+        aria-label={mobileOpen ? "Navigation menu" : undefined}
+        tabIndex={-1}
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-outline-variant/30 bg-background-container-low transition-transform duration-300 md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <div className="flex items-center gap-3 border-b border-outline-variant/30 px-6 py-5">
           <div className="grid size-8 shrink-0 place-items-center"><img className="block size-8" src="/pacearr-logo.svg" alt="Pacearr" /></div>
           <div className="min-w-0">
@@ -106,13 +108,18 @@ function getChannelConfig(buildChannel: string) {
 }
 
 function VersionFooter({ onNavigate }: { onNavigate: () => void }) {
+  const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
   const [info, setInfo] = useState<AboutInfo | null>(null);
-  useEffect(() => { void apiGet<AboutInfo>("/api/settings/about").then(setInfo).catch(() => undefined); }, []);
+  useEffect(() => {
+    void apiGet<AboutInfo>("/api/settings/about")
+      .then((result) => { setInfo(result); setStatus("loaded"); })
+      .catch(() => setStatus("error"));
+  }, []);
 
   // Don't render a channel label until the API has responded — any guess
   // before that point could misrepresent the build (e.g. showing "Stable"
   // for a develop image during the load window).
-  if (!info) {
+  if (status === "loading") {
     return (
       <div className="px-3 pb-3">
         <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
@@ -120,6 +127,20 @@ function VersionFooter({ onNavigate }: { onNavigate: () => void }) {
           <div className="min-w-0 flex-1">
             <div className="text-xs font-semibold leading-tight text-on-surface-variant">Pacearr</div>
             <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "error" || !info) {
+    return (
+      <div className="px-3 pb-3">
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
+          <div className="size-8 shrink-0 rounded-lg bg-background-container-highest" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold leading-tight text-on-surface-variant">Pacearr</div>
+            <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">Version unavailable</div>
           </div>
         </div>
       </div>

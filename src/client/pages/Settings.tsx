@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, Ref
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
 import { Field, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   AboutInfo,
   JobInfo,
@@ -500,12 +501,14 @@ function LogsTab() {
   const results = data?.results ?? [];
   const pageInfo = data?.pageInfo;
 
+  const logDialogRef = useDialogA11y<HTMLDivElement>(activeLog !== null, () => setActiveLog(null));
+
   return (
     <>
       {activeLog && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" onClick={() => setActiveLog(null)}>
-          <div className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Log Details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
+          <div ref={logDialogRef} className="max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log Details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
             <div className="grid gap-2.5">
               <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
               <InfoRow label="Level"><span className={LEVEL_BADGE[activeLog.level]}>{activeLog.level}</span></InfoRow>
@@ -617,12 +620,14 @@ function JobsTab() {
     }
   }
 
+  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, () => setEditingJob(null));
+
   return (
     <>
       {editingJob && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
-          <div className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 className="font-headline text-lg font-semibold">Edit Schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)} aria-label="Close"><X size={18} /></button></div>
+          <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit Schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)} aria-label="Close"><X size={18} /></button></div>
             <Field label="New Frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
               <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
@@ -717,6 +722,7 @@ function AboutTab() {
 
   const codeClass = "rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface";
   const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
+  const changelogDialogRef = useDialogA11y<HTMLDivElement>(changelogRelease !== null, () => setChangelogRelease(null));
 
   return (
     <div className="grid gap-4">
@@ -759,7 +765,7 @@ function AboutTab() {
         </div>}
       </SectionCard>
       {changelogRelease && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
-        <div className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div ref={changelogDialogRef} className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-center justify-between gap-3.5">
             <div><h2 id="changelog-title" className="font-headline text-lg font-semibold">{releaseTitle(changelogRelease)} changelog</h2></div>
             <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
