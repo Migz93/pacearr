@@ -36,28 +36,13 @@ Persistent data is stored in `/config`, which should be bind-mounted from `/opt/
 
 Pacearr uses SQLite `PRAGMA user_version` for schema migrations.
 
-- Versioned migrations live in `src/server/db/migrations.ts`.
+- Versioned migrations live in `src/server/db/migrations.ts`, each with a comment explaining what it does and why. That comment is the source of truth for a given migration's purpose — it lives next to the schema change itself, so it can't drift out of sync the way a running prose list in this doc would. This doc does not narrate individual migrations.
 - `runMigrations(db)` runs on startup, applies any migration whose version is higher than the current `user_version`, and advances `user_version` after each successful migration.
 - Each migration runs inside a transaction so a failure should leave the database unchanged.
 
-The current v1 baseline migration creates:
-
-- `settings`
-- `users`
-- `rolling_shows`
-- `rolling_show_users`
-- `watch_events`
-- `history_events`
-- `job_run_state`
-- `sessions`
-
-Migration v2 adds `ignored_recommendations`, keyed by Sonarr series id, so recommendation exclusions survive application restarts.
-
-Migration v3 adds the calculated `recommendation_cache`. Migration v4 adds `sonarr_library_cache`, which stores the shared Sonarr series snapshot and locally cached poster paths.
-
 When changing the schema in the future:
 
-1. Add a new migration entry with the next integer version.
+1. Add a new migration entry with the next integer version, with a comment explaining what it does and why.
 2. Write the schema change in that migration's `up(db)` function.
 3. Do not edit older migrations that may already have shipped.
 4. Keep default-setting seeding separate from schema migrations.
