@@ -28,11 +28,11 @@ test("getRecentLogs only reflects the in-memory ring, not retained rotated files
   }
 });
 
-test("currentLogFilePath points at the rotating transport's fixed symlink name", async () => {
+test("currentLogFilePath points at the machine-readable transport's fixed symlink name", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
   try {
     const logger = new Logger(dataDir);
-    assert.equal(logger.currentLogFilePath, path.join(dataDir, "logs", "pacearr.log"));
+    assert.equal(logger.currentLogFilePath, path.join(dataDir, "logs", ".machinelogs.json"));
     await logger.close();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });

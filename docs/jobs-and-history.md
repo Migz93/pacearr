@@ -125,8 +125,10 @@ Important workflow actions should usually write both:
 - a structured log for support/debugging
 - a `history_events` row for admin visibility
 
-Application logs are retained for 14 days in `/config/logs`. Settings → Logs
-combines the in-memory ring of recent entries with today's active log file
-(read directly, not merged across every retained rotated file), so it stays
-useful both immediately after a restart and right after midnight's daily
-rotation.
+Application logs are written to two rotating files in `/config/logs`,
+matching hubarr: a human-readable `pacearr-*.log` retained 7 days for manual
+inspection, and a machine-readable `.machinelogs-*.json` retained 3 days that
+Settings → Logs actually reads. It combines that file's active day with the
+in-memory ring of recent entries (read directly, not merged across every
+retained rotated file), so it stays useful both immediately after a restart
+and right after midnight's daily rotation.

@@ -75,7 +75,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | `getRecentLogs` only reflects the in-memory ring | Retained rotated files never leak into the ring-only read path |
-| `currentLogFilePath` points at the rotating transport's fixed symlink name | Settings → Logs reads the same file the rotating transport always symlinks to |
+| `currentLogFilePath` points at the machine-readable transport's fixed symlink name | Settings → Logs reads the same file the machine-readable rotating transport always symlinks to |
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |

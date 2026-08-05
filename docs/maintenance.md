@@ -25,14 +25,16 @@ authoritative behaviour and safety boundary.
 
 | Data | Retained | Controlled by |
 |---|---|---|
-| `/config/logs/pacearr.log` | 14 days, compressed after rotation | Log rotation config |
+| `/config/logs/pacearr-*.log` (human-readable) | 7 days, compressed after rotation | Log rotation config; matches hubarr |
+| `/config/logs/.machinelogs-*.json` (machine-readable) | 3 days, compressed after rotation | Log rotation config; matches hubarr — this is the file Settings → Logs reads |
 | `watch_events` | Never pruned | — |
 | `history_events` | Configurable, default 7 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
 | `reclaimed_storage_events` | Never pruned | — |
 
 **Settings → Logs** combines the in-memory ring of recent entries with today's
-active log file (not every retained file — that would mean decompressing and
-merging up to 14 days on every request). Neither source alone is always
+active machine-readable log file (not every retained file — that would mean
+decompressing and merging up to 3 days on every request, and the app never
+reads the separate human-readable log at all). Neither source alone is always
 complete: the ring is empty right after a restart while the file still has
 that day's history, and the file is near-empty right after midnight's
 rotation while the ring still holds the tail of the previous day — so recent
