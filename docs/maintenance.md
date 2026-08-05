@@ -27,7 +27,7 @@ authoritative behaviour and safety boundary.
 |---|---|---|
 | `/config/logs/pacearr.log` | 14 days, compressed after rotation | Log rotation config |
 | `watch_events` | Never pruned | — |
-| `history_events` | Configurable, default 90 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
+| `history_events` | Configurable, default 7 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
 | `reclaimed_storage_events` | Never pruned | — |
 
 **Settings → Logs** combines the in-memory ring of recent entries with today's

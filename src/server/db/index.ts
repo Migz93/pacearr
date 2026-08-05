@@ -35,7 +35,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
-  historyRetentionDays: 90,
+  historyRetentionDays: 7,
   sessionPollIntervalMinutes: 5,
   historyImportIntervalHours: 24,
   inactivityResetDays: 7,

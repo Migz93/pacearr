@@ -3,6 +3,7 @@ import test from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 
@@ -16,7 +17,18 @@ function createDb() {
     logLevel: "error",
   };
   const db = new PacearrDatabase(config);
-  return { db, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { db, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/**
+ * addHistory always stamps created_at with the current time - there's no legitimate
+ * production reason for a caller to backdate it themselves. Tests that need to exercise
+ * age-based pruning open a second connection to the same file just to set it directly.
+ */
+function backdateHistoryEvent(dir: string, title: string, createdAt: string) {
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  raw.prepare("UPDATE history_events SET created_at = ? WHERE title = ?").run(createdAt, title);
+  raw.close();
 }
 
 test("rolling show enrollment is idempotent by Sonarr series id", () => {
@@ -141,6 +153,44 @@ test("history supports filtered server-side pagination", () => {
     const warningImports = db.listHistoryPaginated({ page: 1, pageSize: 10, level: "warn", action: "history.import" });
     assert.equal(warningImports.total, 1);
     assert.equal(warningImports.results[0]?.title, "Second import");
+  } finally {
+    cleanup();
+  }
+});
+
+test("pruning history events by retention only removes events older than the cutoff, and leaves watch_events/reclaimed_storage_events alone", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    db.addHistory("info", "history.import", "Old entry", { processed: 1 });
+    db.addHistory("info", "history.import", "Recent entry", { processed: 2 });
+    backdateHistoryEvent(dir, "Old entry", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    backdateHistoryEvent(dir, "Recent entry", new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString());
+
+    const [user] = db.upsertUsers([{ plexUserId: "plex-retention", plexAccountId: "9", tautulliUserId: null, username: "retention", displayName: "Retention", avatarUrl: null }]);
+    db.upsertRollingShow({ id: 900, title: "Retention Show" });
+    db.insertWatchEvent({
+      source: "plex-history",
+      sourceEventId: "retention-evt-1",
+      userId: user!.id,
+      plexAccountId: "9",
+      username: "retention",
+      sonarrSeriesId: 900,
+      showTitle: "Retention Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
+      watchedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      rawPayload: {},
+    });
+    db.recordStorageReclaim({ rollingShowId: null, sonarrSeriesId: 900, showTitle: "Retention Show", action: "cleanup.progressive", seasonNumber: 1, fileCount: 1, bytesReclaimed: 500 });
+
+    const pruned = db.pruneHistoryEvents(7);
+
+    assert.equal(pruned, 1);
+    assert.deepEqual(db.listHistory(10).map((event) => event.title), ["Recent entry"]);
+    // Retention only ever applies to the audit log - core viewer-progress state and the
+    // dashboard's lifetime reclaimed-storage total must never be touched by it.
+    assert.equal(db.countWatchEvents(), 1);
+    assert.equal(db.getReclaimedStorageTotals().bytesReclaimed, 500);
   } finally {
     cleanup();
   }

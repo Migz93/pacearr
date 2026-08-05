@@ -67,6 +67,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Expanded seasons are monotonic and not duplicated | Expansion state is sorted and duplicate-safe |
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
+| Pruning history events by retention only removes events older than the cutoff | `history_events` past `historyRetentionDays` is deleted; recent events, `watch_events`, and `reclaimed_storage_events` are untouched |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior

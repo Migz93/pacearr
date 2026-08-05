@@ -96,7 +96,7 @@ It records:
 
 History events are intentionally separate from watch events. Watch events represent user playback. History events represent Pacearr's own actions and operational state.
 
-`history_events` is pruned to `historyRetentionDays` (default 90) by the `rolling-reconcile` job. `watch_events` is never pruned — see [maintenance.md](maintenance.md#data-retention).
+`history_events` is pruned to `historyRetentionDays` (default 7) by the `rolling-reconcile` job. `watch_events` is never pruned — see [maintenance.md](maintenance.md#data-retention).
 
 ## Reclaimed Storage
 
