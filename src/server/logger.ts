@@ -18,12 +18,26 @@ const LOG_RING_SIZE = 500;
  * already-safe value.
  */
 function sanitizeMeta(value: unknown): unknown {
-  const seen = new WeakSet<object>();
-  const json = JSON.stringify(value, (_key, val: unknown) => {
+  // A WeakSet of every object seen anywhere in the tree would flag two sibling
+  // properties that happen to reference the same object (e.g. { x: user, y: user }) as
+  // circular, even though neither is actually a cycle - silently discarding the second
+  // occurrence's real value. Track ancestry instead: parentOf lets isAncestor walk back
+  // from the current holder to the root, so only an object that is genuinely one of its
+  // own ancestors (a true cycle, direct or indirect) gets replaced.
+  const parentOf = new WeakMap<object, unknown>();
+  function isAncestor(candidate: object, holder: unknown): boolean {
+    let current = holder;
+    while (current && typeof current === "object") {
+      if (current === candidate) return true;
+      current = parentOf.get(current as object);
+    }
+    return false;
+  }
+  const json = JSON.stringify(value, function (this: unknown, _key, val: unknown) {
     if (typeof val === "bigint") return val.toString();
     if (typeof val === "object" && val !== null) {
-      if (seen.has(val)) return "[Circular]";
-      seen.add(val);
+      if (isAncestor(val, this)) return "[Circular]";
+      parentOf.set(val, this);
     }
     return val;
   });

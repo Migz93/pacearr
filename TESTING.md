@@ -69,6 +69,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
 | Pruning history events by retention only removes events older than the cutoff | `history_events` past `historyRetentionDays` is deleted; recent events, `watch_events`, and `reclaimed_storage_events` are untouched |
 | Pruning history events does not crash on an extreme retention value | An overflow-inducing input (e.g. `1e308`) is clamped to `MAX_SAFE_RETENTION_DAYS` instead of producing an invalid Date that throws |
+| Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
@@ -83,6 +84,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
 | Logging circular or BigInt metadata does not throw, in the ring, the persisted file, or the Logs API's own merge | `write()` sanitizes metadata once before it enters the ring, so every downstream consumer (the persisted file, and `mergeLogEntries` via the Logs API) only ever sees an already-safe value |
+| Logging the same object referenced twice preserves both, rather than marking the repeat as circular | `sanitizeMeta` tracks ancestry, not "every object ever seen", so two sibling properties referencing the same object aren't mistaken for a cycle |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 

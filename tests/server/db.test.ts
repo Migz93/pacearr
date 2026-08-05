@@ -210,6 +210,27 @@ test("pruning history events does not crash on an extreme retention value", () =
   }
 });
 
+test("pruning history events with a zero or negative retention value does not wipe every row", () => {
+  // Regression test: the same defensive clamp only bounded the upper end
+  // (Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS)). A retentionDays of 0 or negative
+  // pushes the cutoff to now-or-future, and DELETE FROM history_events WHERE created_at <
+  // cutoff would then match every row - silently wiping the entire audit log with no
+  // error, which is worse than the overflow crash this was written to guard against.
+  const { db, cleanup } = createDb();
+  try {
+    db.addHistory("info", "history.import", "Entry one", { processed: 1 });
+    db.addHistory("info", "history.import", "Entry two", { processed: 2 });
+
+    assert.equal(db.pruneHistoryEvents(0), 0);
+    assert.equal(db.listHistory(10).length, 2);
+
+    assert.equal(db.pruneHistoryEvents(-5), 0);
+    assert.equal(db.listHistory(10).length, 2);
+  } finally {
+    cleanup();
+  }
+});
+
 test("watch event import is idempotent by source and source event id", () => {
   const { db, cleanup } = createDb();
   try {

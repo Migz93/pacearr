@@ -189,3 +189,29 @@ test("logging circular or BigInt metadata does not throw, in the ring, the persi
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("logging the same object referenced twice preserves both, rather than marking the repeat as circular", async () => {
+  // Regression test: an earlier version of sanitizeMeta tracked every object it had ever
+  // seen in a single WeakSet, so two sibling properties referencing the same object
+  // (e.g. { previous: user, current: user }, not an actual cycle) had the second
+  // occurrence silently replaced with "[Circular]", discarding its real value. Ancestry
+  // must be tracked instead - only an object that is genuinely its own ancestor (a true
+  // cycle) should be replaced.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const logger = new Logger(dataDir);
+  try {
+    const shared = { id: 42, name: "Shared" };
+    logger.info("Shared reference metadata", { previous: shared, current: shared });
+
+    const [ringEntry] = logger.getRecentLogs(1);
+    assert.deepEqual(ringEntry!.meta, { previous: { id: 42, name: "Shared" }, current: { id: 42, name: "Shared" } });
+
+    await waitForFileContent(logger.currentLogFilePath);
+    const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+    const parsed = JSON.parse(raw.trim().split("\n").pop()!);
+    assert.deepEqual(parsed.meta, { previous: { id: 42, name: "Shared" }, current: { id: 42, name: "Shared" } });
+  } finally {
+    await logger.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

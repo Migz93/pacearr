@@ -927,8 +927,11 @@ export class PacearrDatabase {
    */
   pruneHistoryEvents(retentionDays: number): number {
     // Defensive clamp for any internal/persisted caller, not just the settings API - see
-    // MAX_SAFE_RETENTION_DAYS above for why this exists.
-    const safeDays = Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS);
+    // MAX_SAFE_RETENTION_DAYS above for why the upper bound exists. The lower bound
+    // matters just as much: 0 or a negative value pushes the cutoff to now-or-future,
+    // which would silently delete every history_events row rather than throw - worse
+    // than the overflow this was written to guard against.
+    const safeDays = Math.max(1, Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS));
     const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString();
     return this.db.prepare("DELETE FROM history_events WHERE created_at < ?").run(cutoff).changes;
   }
