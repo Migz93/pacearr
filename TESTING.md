@@ -68,6 +68,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
 | Pruning history events by retention only removes events older than the cutoff | `history_events` past `historyRetentionDays` is deleted; recent events, `watch_events`, and `reclaimed_storage_events` are untouched |
+| Pruning history events does not crash on an extreme retention value | An overflow-inducing input (e.g. `1e308`) is clamped to `MAX_SAFE_RETENTION_DAYS` instead of producing an invalid Date that throws |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
@@ -80,6 +81,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
+| The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 

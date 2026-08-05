@@ -133,3 +133,27 @@ test("logged metadata survives the full write/read round trip through the persis
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("the ring entry's timestamp matches the persisted file's timestamp for the same log call", async () => {
+  // Regression test: winston.format.timestamp() generates a fresh timestamp
+  // independently of the one write() already stored in the ring entry - two separate
+  // `new Date()` calls a few microseconds apart, which land in different milliseconds
+  // often enough in practice (confirmed ~16% of calls) that mergeLogEntries' dedup key
+  // failed to recognize the ring and file copies of the same entry as identical, so it
+  // could appear twice in the Logs viewer for as long as it remained in both sources.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  try {
+    const logger = new Logger(dataDir);
+    logger.info("Timestamp consistency check");
+    const [ringEntry] = logger.getRecentLogs(1);
+
+    await waitForFileContent(logger.currentLogFilePath);
+    const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+    const parsed = JSON.parse(raw.trim().split("\n").pop()!);
+
+    assert.equal(parsed.timestamp, ringEntry!.timestamp);
+    await logger.close();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

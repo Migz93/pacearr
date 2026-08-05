@@ -196,6 +196,20 @@ test("pruning history events by retention only removes events older than the cut
   }
 });
 
+test("pruning history events does not crash on an extreme retention value", () => {
+  // Regression test: retentionDays * a day-in-ms can overflow to Infinity for a
+  // sufficiently large but still Number.isFinite input (e.g. 1e308, which a number input
+  // field accepts as valid scientific notation), producing an invalid Date whose
+  // toISOString() throws RangeError. Confirmed this crashed rolling-reconcile entirely.
+  const { db, cleanup } = createDb();
+  try {
+    db.addHistory("info", "history.import", "Entry", { processed: 1 });
+    assert.doesNotThrow(() => db.pruneHistoryEvents(1e308));
+  } finally {
+    cleanup();
+  }
+});
+
 test("watch event import is idempotent by source and source event id", () => {
   const { db, cleanup } = createDb();
   try {

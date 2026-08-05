@@ -43,8 +43,10 @@ export class Logger {
           zippedArchive: true,
           createSymlink: true,
           symlinkName: "pacearr.log",
+          // No format.timestamp() here - write() supplies its own timestamp explicitly
+          // (see below) so this file's entries match the ring's exactly, not a second,
+          // independently-generated one.
           format: winston.format.combine(
-            winston.format.timestamp(),
             winston.format.errors({ stack: true }),
             humanFormat
           ),
@@ -58,7 +60,6 @@ export class Logger {
           createSymlink: true,
           symlinkName: ".machinelogs.json",
           format: winston.format.combine(
-            winston.format.timestamp(),
             winston.format.errors({ stack: true }),
             winston.format.json()
           ),
@@ -68,8 +69,9 @@ export class Logger {
   }
 
   private write(level: "debug" | "info" | "warn" | "error", message: string, meta?: unknown) {
+    const timestamp = new Date().toISOString();
     const entry: LogEntry = {
-      timestamp: new Date().toISOString(),
+      timestamp,
       level,
       message,
       ...(meta !== undefined ? { meta } : {}),
@@ -78,15 +80,15 @@ export class Logger {
     this.ring.push(entry);
     if (this.ring.length > LOG_RING_SIZE) this.ring.shift();
 
-    if (meta !== undefined) {
-      // Winston's second argument is spread onto the top-level log object, not nested -
-      // passing meta directly would serialize it as top-level fields instead of a "meta"
-      // key, which readTodaysLogEntries/mergeLogEntries wouldn't recognize. Wrapping it
-      // keeps the persisted file's shape consistent with the in-memory ring's LogEntry.
-      this.logger[level](message, { meta });
-    } else {
-      this.logger[level](message);
-    }
+    // Winston's second argument is spread onto the top-level log object, not nested -
+    // passing meta directly (rather than wrapped) would serialize it as top-level fields
+    // instead of a "meta" key, which readTodaysLogEntries/mergeLogEntries wouldn't
+    // recognize. Passing our own timestamp here too (instead of relying on
+    // format.timestamp() in the file transports) guarantees the persisted file's
+    // timestamp always matches the ring entry's exactly - two separate `new Date()` calls
+    // can and do land in different milliseconds, which broke mergeLogEntries' dedup key
+    // for any entry still present in both sources (confirmed ~16% mismatch rate).
+    this.logger[level](message, meta !== undefined ? { timestamp, meta } : { timestamp });
   }
 
   getRecentLogs(limit = 200): LogEntry[] {

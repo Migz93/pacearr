@@ -31,6 +31,15 @@ import { runMigrations } from "./migrations.js";
 
 const now = () => new Date().toISOString();
 
+// JS Date can only represent times within +/-8,640,000,000,000,000ms of the epoch (see
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date
+// #the_epoch_timestamps_and_invalid_date), i.e. +/-100,000,000 days. A day count anywhere
+// near that (e.g. a user pasting 1e308 into historyRetentionDays) overflows the
+// multiplication to Infinity, producing an invalid Date whose toISOString() throws -
+// confirmed this crashes pruneHistoryEvents specifically. This ceiling exists purely to
+// stay inside Date's valid range; it is not a policy opinion about a "reasonable" value.
+export const MAX_SAFE_RETENTION_DAYS = 100_000_000;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
@@ -917,7 +926,10 @@ export class PacearrDatabase {
    * features depend on, not just shrink an audit trail.
    */
   pruneHistoryEvents(retentionDays: number): number {
-    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    // Defensive clamp for any internal/persisted caller, not just the settings API - see
+    // MAX_SAFE_RETENTION_DAYS above for why this exists.
+    const safeDays = Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS);
+    const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString();
     return this.db.prepare("DELETE FROM history_events WHERE created_at < ?").run(cutoff).changes;
   }
 

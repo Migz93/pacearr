@@ -7,7 +7,7 @@ import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
-import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
+import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration } from "./integrations/tautulli.js";
@@ -372,7 +372,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
     if (body.historyRetentionDays !== undefined) {
       const retentionDays = Number(body.historyRetentionDays);
-      patch.historyRetentionDays = Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays));
+      patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
     }
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
