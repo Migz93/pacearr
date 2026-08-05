@@ -6,12 +6,34 @@ import type { LogEntry } from "../shared/types.js";
 
 const LOG_RING_SIZE = 500;
 
+/**
+ * winston.format.json() (used by the machine-readable transport) already handles
+ * circular references and BigInt safely on its own - confirmed empirically, it replaces
+ * repeated references with "[Circular]" rather than throwing. Plain JSON.stringify does
+ * not: it throws synchronously at the write()/logger.info() call site itself for either
+ * case, which would otherwise crash whatever code was mid-log-call. No current call site
+ * passes anything but a fresh plain-data object literal as meta, so this isn't reachable
+ * today, but humanFormat's manual JSON.stringify(meta) call has no equivalent safety net,
+ * unlike the machine-readable transport - this closes that gap for future call sites.
+ */
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, val: unknown) => {
+    if (typeof val === "bigint") return val.toString();
+    if (typeof val === "object" && val !== null) {
+      if (seen.has(val)) return "[Circular]";
+      seen.add(val);
+    }
+    return val;
+  });
+}
+
 // Matches hubarr's log architecture exactly: a human-readable, pretty-printed file for
 // manual inspection (7 days), and a separate machine-readable JSON file (3 days) that
 // the app's own Logs viewer reads via currentLogFilePath below. Previously pacearr had
 // one combined 14-day JSON file serving both purposes.
 const humanFormat = winston.format.printf(({ level, message, timestamp, meta }) => {
-  const extra = meta && Object.keys(meta as object).length ? ` ${JSON.stringify(meta)}` : "";
+  const extra = meta && Object.keys(meta as object).length ? ` ${safeStringify(meta)}` : "";
   return `${timestamp} ${level}: ${message}${extra}`;
 });
 

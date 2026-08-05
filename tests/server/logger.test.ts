@@ -157,3 +157,29 @@ test("the ring entry's timestamp matches the persisted file's timestamp for the 
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("logging circular or BigInt metadata does not throw", async () => {
+  // Regression test: the human-readable transport's format used plain JSON.stringify on
+  // meta, which throws synchronously - at the logger.info() call site itself, not just
+  // inside winston's formatter - for a circular reference or a BigInt value. Confirmed
+  // this crashed the calling code entirely (winston.format.json(), used by the
+  // machine-readable transport, already handled both safely on its own).
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  try {
+    const logger = new Logger(dataDir);
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+
+    assert.doesNotThrow(() => logger.info("Circular metadata", circular));
+    assert.doesNotThrow(() => logger.info("BigInt metadata", { rowId: 123n }));
+
+    await waitForFileContent(logger.currentLogFilePath);
+    const lines = fs.readFileSync(logger.currentLogFilePath, "utf8").trim().split("\n");
+    assert.deepEqual(JSON.parse(lines[0]!).meta, { a: 1, self: "[Circular]" });
+    assert.deepEqual(JSON.parse(lines[1]!).meta, { rowId: "123" });
+
+    await logger.close();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

@@ -82,6 +82,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
+| Logging circular or BigInt metadata does not throw | The human-readable transport's formatter safely serializes both instead of `JSON.stringify` throwing synchronously at the `logger.info()` call site |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
