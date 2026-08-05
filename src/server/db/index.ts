@@ -785,7 +785,11 @@ export class PacearrDatabase {
       JSON.stringify(input.rawPayload),
       now()
     );
-    return { inserted: result.changes > 0, id: result.lastInsertRowid ? Number(result.lastInsertRowid) : null };
+    // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
+    // whatever a previous successful insert on this connection left it as. Gate on
+    // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
+    // event would incorrectly report some unrelated earlier row's id as its own.
+    return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
   }
 
   /**
@@ -817,7 +821,7 @@ export class PacearrDatabase {
         JSON.stringify(item.rawPayload),
         stamp
       );
-      return { inserted: result.changes > 0, id: result.lastInsertRowid ? Number(result.lastInsertRowid) : null };
+      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
     }));
     return insertAll(inputs);
   }

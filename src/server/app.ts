@@ -361,7 +361,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
-    if (body.historyRetentionDays !== undefined) patch.historyRetentionDays = Math.max(1, Math.floor(Number(body.historyRetentionDays) || DEFAULT_APP_SETTINGS.historyRetentionDays));
+    if (body.historyRetentionDays !== undefined) {
+      const retentionDays = Number(body.historyRetentionDays);
+      patch.historyRetentionDays = Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays));
+    }
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
