@@ -68,6 +68,16 @@ export class Logger {
     return this.ring.slice(-Math.max(1, limit));
   }
 
+  /** Flushes and closes the rotating file transport. Lets tests clean up their fixture
+   * directory deterministically instead of guessing how long winston's async open/write
+   * needs to settle. */
+  close(): Promise<void> {
+    return new Promise((resolve) => {
+      this.logger.on("finish", () => resolve());
+      this.logger.end();
+    });
+  }
+
   /**
    * The rotating file transport always symlinks its active file to this fixed name,
    * regardless of date. Settings -> Logs reads it directly and combines it with the

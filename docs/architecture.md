@@ -38,7 +38,7 @@ Pacearr uses SQLite `PRAGMA user_version` for schema migrations.
 
 - Versioned migrations live in `src/server/db/migrations.ts`, each with a comment explaining what it does and why. That comment is the source of truth for a given migration's purpose — it lives next to the schema change itself, so it can't drift out of sync the way a running prose list in this doc would. This doc does not narrate individual migrations.
 - `runMigrations(db)` runs on startup, applies any migration whose version is higher than the current `user_version`, and advances `user_version` after each successful migration.
-- Each migration runs inside a transaction so a failure should leave the database unchanged.
+- Each migration runs inside a transaction, so a failure should leave the database unchanged.
 
 When changing the schema in the future:
 

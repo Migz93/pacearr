@@ -22,9 +22,7 @@ test("getRecentLogs only reflects the in-memory ring, not retained rotated files
     logger.info("Live entry");
     const messages = logger.getRecentLogs(10).map((entry) => entry.message);
     assert.deepEqual(messages, ["Live entry"]);
-    // Winston's rotating transport opens its target lazily. Give that open and
-    // write a chance to settle before removing the fixture directory.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await logger.close();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -35,9 +33,7 @@ test("currentLogFilePath points at the rotating transport's fixed symlink name",
   try {
     const logger = new Logger(dataDir);
     assert.equal(logger.currentLogFilePath, path.join(dataDir, "logs", "pacearr.log"));
-    // Winston's rotating transport opens its target lazily. Give that open a
-    // chance to settle before removing the fixture directory.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await logger.close();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -88,9 +84,7 @@ test("readRecentLogEntries combines today's log file with the in-memory ring", a
 
     const messages = readRecentLogEntries(logger).map((item) => item.message);
     assert.deepEqual(messages.sort(), ["File-only entry", "Ring-only entry"]);
-    // Winston's rotating transport opens its target lazily. Give that open and
-    // write a chance to settle before removing the fixture directory.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await logger.close();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
