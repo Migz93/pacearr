@@ -157,12 +157,14 @@ test("the ring entry's timestamp matches the persisted file's timestamp for the 
   }
 });
 
-test("logging circular or BigInt metadata does not throw", async () => {
-  // Regression test: the human-readable transport's format used plain JSON.stringify on
-  // meta, which throws synchronously - at the logger.info() call site itself, not just
-  // inside winston's formatter - for a circular reference or a BigInt value. Confirmed
-  // this crashed the calling code entirely (winston.format.json(), used by the
-  // machine-readable transport, already handled both safely on its own).
+test("logging circular or BigInt metadata does not throw, in the ring, the persisted file, or the Logs API's own merge", async () => {
+  // Regression test: a first fix only sanitized humanFormat's own JSON.stringify(meta)
+  // call, but write() still stored the raw circular/BigInt value in the ring entry
+  // itself. That raw value was still reachable via readRecentLogEntries ->
+  // mergeLogEntries (used by the actual /api/settings/logs route), which does its own
+  // unguarded JSON.stringify(entry.meta) for the dedup key - so the log call itself
+  // wouldn't crash, but the next request to load Settings -> Logs would. Sanitizing once
+  // in write(), before meta enters the ring, closes that gap for every consumer at once.
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
   const logger = new Logger(dataDir);
   try {
@@ -171,6 +173,12 @@ test("logging circular or BigInt metadata does not throw", async () => {
 
     assert.doesNotThrow(() => logger.info("Circular metadata", circular));
     assert.doesNotThrow(() => logger.info("BigInt metadata", { rowId: 123n }));
+
+    const [circularEntry, bigintEntry] = logger.getRecentLogs(2);
+    assert.deepEqual(circularEntry!.meta, { a: 1, self: "[Circular]" });
+    assert.deepEqual(bigintEntry!.meta, { rowId: "123" });
+
+    assert.doesNotThrow(() => readRecentLogEntries(logger));
 
     await waitForFileContent(logger.currentLogFilePath);
     const lines = fs.readFileSync(logger.currentLogFilePath, "utf8").trim().split("\n");

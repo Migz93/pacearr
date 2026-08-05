@@ -7,18 +7,19 @@ import type { LogEntry } from "../shared/types.js";
 const LOG_RING_SIZE = 500;
 
 /**
- * winston.format.json() (used by the machine-readable transport) already handles
- * circular references and BigInt safely on its own - confirmed empirically, it replaces
- * repeated references with "[Circular]" rather than throwing. Plain JSON.stringify does
- * not: it throws synchronously at the write()/logger.info() call site itself for either
- * case, which would otherwise crash whatever code was mid-log-call. No current call site
- * passes anything but a fresh plain-data object literal as meta, so this isn't reachable
- * today, but humanFormat's manual JSON.stringify(meta) call has no equivalent safety net,
- * unlike the machine-readable transport - this closes that gap for future call sites.
+ * Reduces arbitrary metadata to a plain, JSON-round-trippable value once, at the point
+ * it's logged - rather than leaving the raw value in place and hoping every downstream
+ * consumer that might later JSON.stringify it (humanFormat, mergeLogEntries's dedup key,
+ * the eventual res.json() response) each remembers to guard against circular references
+ * and BigInt independently. A previous fix only patched humanFormat; the same raw meta
+ * was still reachable via the ring -> readRecentLogEntries -> mergeLogEntries, and would
+ * have broken the Logs API response the same way. Sanitizing once in write(), before the
+ * value enters the ring or reaches winston, means every consumer only ever sees an
+ * already-safe value.
  */
-function safeStringify(value: unknown): string {
+function sanitizeMeta(value: unknown): unknown {
   const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, val: unknown) => {
+  const json = JSON.stringify(value, (_key, val: unknown) => {
     if (typeof val === "bigint") return val.toString();
     if (typeof val === "object" && val !== null) {
       if (seen.has(val)) return "[Circular]";
@@ -26,6 +27,7 @@ function safeStringify(value: unknown): string {
     }
     return val;
   });
+  return JSON.parse(json);
 }
 
 // Matches hubarr's log architecture exactly: a human-readable, pretty-printed file for
@@ -33,7 +35,9 @@ function safeStringify(value: unknown): string {
 // the app's own Logs viewer reads via currentLogFilePath below. Previously pacearr had
 // one combined 14-day JSON file serving both purposes.
 const humanFormat = winston.format.printf(({ level, message, timestamp, meta }) => {
-  const extra = meta && Object.keys(meta as object).length ? ` ${safeStringify(meta)}` : "";
+  // Safe to use plain JSON.stringify here - meta arrives already sanitized by write()'s
+  // sanitizeMeta() call, not the raw value passed to logger.info()/warn()/etc.
+  const extra = meta && Object.keys(meta as object).length ? ` ${JSON.stringify(meta)}` : "";
   return `${timestamp} ${level}: ${message}${extra}`;
 });
 
@@ -92,11 +96,14 @@ export class Logger {
 
   private write(level: "debug" | "info" | "warn" | "error", message: string, meta?: unknown) {
     const timestamp = new Date().toISOString();
+    // Sanitize once, before meta enters the ring or reaches winston - see sanitizeMeta's
+    // comment for why patching individual downstream consumers isn't enough.
+    const safeMeta = meta !== undefined ? sanitizeMeta(meta) : undefined;
     const entry: LogEntry = {
       timestamp,
       level,
       message,
-      ...(meta !== undefined ? { meta } : {}),
+      ...(safeMeta !== undefined ? { meta: safeMeta } : {}),
     };
 
     this.ring.push(entry);
@@ -110,7 +117,7 @@ export class Logger {
     // timestamp always matches the ring entry's exactly - two separate `new Date()` calls
     // can and do land in different milliseconds, which broke mergeLogEntries' dedup key
     // for any entry still present in both sources (confirmed ~16% mismatch rate).
-    this.logger[level](message, meta !== undefined ? { timestamp, meta } : { timestamp });
+    this.logger[level](message, safeMeta !== undefined ? { timestamp, meta: safeMeta } : { timestamp });
   }
 
   getRecentLogs(limit = 200): LogEntry[] {
