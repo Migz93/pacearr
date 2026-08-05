@@ -70,6 +70,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events by retention only removes events older than the cutoff | `history_events` past `historyRetentionDays` is deleted; recent events, `watch_events`, and `reclaimed_storage_events` are untouched |
 | Pruning history events does not crash on an extreme retention value | An overflow-inducing input (e.g. `1e308`) is clamped to `MAX_SAFE_RETENTION_DAYS` instead of producing an invalid Date that throws |
 | Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
+| Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior

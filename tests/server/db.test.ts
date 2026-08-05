@@ -231,6 +231,21 @@ test("pruning history events with a zero or negative retention value does not wi
   }
 });
 
+test("pruning history events does not crash or wipe every row on a NaN retention value", () => {
+  // Regression test: Math.min/Math.max both propagate NaN if either operand is NaN, so
+  // the existing Math.max(1, Math.min(retentionDays, MAX)) clamp doesn't actually catch a
+  // NaN input - it would still produce an invalid Date and throw. Number.isFinite has to
+  // be checked before the clamp runs, not as part of the same expression.
+  const { db, cleanup } = createDb();
+  try {
+    db.addHistory("info", "history.import", "Entry", { processed: 1 });
+    assert.doesNotThrow(() => db.pruneHistoryEvents(NaN));
+    assert.equal(db.listHistory(10).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("watch event import is idempotent by source and source event id", () => {
   const { db, cleanup } = createDb();
   try {

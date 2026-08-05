@@ -930,8 +930,12 @@ export class PacearrDatabase {
     // MAX_SAFE_RETENTION_DAYS above for why the upper bound exists. The lower bound
     // matters just as much: 0 or a negative value pushes the cutoff to now-or-future,
     // which would silently delete every history_events row rather than throw - worse
-    // than the overflow this was written to guard against.
-    const safeDays = Math.max(1, Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS));
+    // than the overflow this was written to guard against. Math.min/Math.max both
+    // propagate NaN if either operand is NaN, so that check has to happen first, not as
+    // part of the same clamp expression.
+    const safeDays = Number.isFinite(retentionDays)
+      ? Math.max(1, Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS))
+      : DEFAULT_APP_SETTINGS.historyRetentionDays;
     const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString();
     return this.db.prepare("DELETE FROM history_events WHERE created_at < ?").run(cutoff).changes;
   }
