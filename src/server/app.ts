@@ -77,15 +77,24 @@ function readTodaysLogEntries(logger: Logger): LogEntry[] {
  * sources — one day's plain-text file plus up to 500 ring entries, no gzip, no scanning
  * prior days — so merging stays cheap.
  */
-function readRecentLogEntries(logger: Logger): LogEntry[] {
+export function readRecentLogEntries(logger: Logger): LogEntry[] {
+  return mergeLogEntries(readTodaysLogEntries(logger), logger.getRecentLogs(500));
+}
+
+/**
+ * Deduplicates and chronologically sorts entries from multiple sources (today's log file,
+ * the in-memory ring). timestamp+message alone isn't a safe dedup key: a synchronous loop
+ * can log the same message text for several different items within the same millisecond
+ * (e.g. reconcileRollingShows's per-show skip log), varying only in meta — collapsing
+ * those would silently drop all but one. Includes level and meta in the key for that
+ * reason, matching what this replaced before the ring/file merge existed.
+ */
+export function mergeLogEntries(...sources: LogEntry[][]): LogEntry[] {
   const merged = new Map<string, LogEntry>();
-  for (const entry of [...readTodaysLogEntries(logger), ...logger.getRecentLogs(500)]) {
-    // timestamp+message alone isn't a safe dedup key: a synchronous loop can log the same
-    // message text for several different items within the same millisecond (e.g.
-    // reconcileRollingShows's per-show skip log), varying only in meta — collapsing those
-    // would silently drop all but one. Include level and meta, matching the key this
-    // replaced before the ring/file merge existed.
-    merged.set(`${entry.timestamp} ${entry.level} ${entry.message} ${JSON.stringify(entry.meta)}`, entry);
+  for (const source of sources) {
+    for (const entry of source) {
+      merged.set(`${entry.timestamp} ${entry.level} ${entry.message} ${JSON.stringify(entry.meta)}`, entry);
+    }
   }
   return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }

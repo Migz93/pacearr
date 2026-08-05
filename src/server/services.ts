@@ -1238,15 +1238,27 @@ export class PacearrServices {
     // roughly current, not one fetched fresh from Sonarr on every run. Reuse the cache the
     // recommendation-refresh job already keeps warm (same fallback refreshRecommendations
     // uses), and only hit Sonarr directly if that cache hasn't been populated yet.
-    const sonarrSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries();
-    const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
+    let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
     const plex = this.getPlex();
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
+
+    // Match every active session against the cached library first. The cache can be up
+    // to ~6h stale, so a show added to Sonarr and watched within that window would
+    // otherwise go unmatched until the next history import. If anything misses, refresh
+    // once for this whole run (not per-event) and retry just the misses - a session for
+    // a show that's genuinely untracked by Sonarr then costs exactly one fetch per run,
+    // same as before this cache was introduced, never more.
+    const matched: Array<{ event: PlexEpisodeActivity; series: SonarrSeries | null }> = [];
+    for (const event of events) matched.push({ event, series: await this.matchSeries(event, seriesIndex, plex) });
+    if (matched.some((item) => !item.series)) {
+      seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
+      for (const item of matched) if (!item.series) item.series = await this.matchSeries(item.event, seriesIndex, plex);
+    }
+
     let changed = 0;
-    for (const event of events) {
+    for (const { event, series } of matched) {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
-      const series = await this.matchSeries(event, seriesIndex, plex);
       const result = await this.processWatchEvent({
         source: "plex-session",
         sourceEventId: `${event.sourceEventId}:${event.seasonNumber}:${event.episodeNumber}`,
