@@ -43,6 +43,27 @@ function entry(overrides: Partial<LogEntry> = {}): LogEntry {
   return { timestamp: "2026-08-04T10:00:00.000Z", level: "info", message: "Message", ...overrides };
 }
 
+/**
+ * winston's write to a DailyRotateFile transport is asynchronous, and its top-level
+ * "finish" event (what Logger.close() waits on) doesn't reliably fire only after that
+ * write has actually reached disk - confirmed empirically (10/10 failures) reading the
+ * file immediately after close() resolves. Polling for content is slower to write but
+ * doesn't depend on winston/stream internals that don't guarantee this ordering.
+ */
+async function waitForFileContent(filePath: string, timeoutMs = 2000): Promise<string> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const content = fs.readFileSync(filePath, "utf8");
+      if (content.trim()) return content;
+    } catch {
+      // File may not exist yet.
+    }
+    if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${filePath} to have content`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("mergeLogEntries drops exact duplicates but keeps same-millisecond entries that differ only in meta", () => {
   // Regression test: a dedup key of just timestamp+message previously collapsed these
   // into one, silently dropping two of three - reconcileRollingShows's synchronous
@@ -84,6 +105,29 @@ test("readRecentLogEntries combines today's log file with the in-memory ring", a
 
     const messages = readRecentLogEntries(logger).map((item) => item.message);
     assert.deepEqual(messages.sort(), ["File-only entry", "Ring-only entry"]);
+    await logger.close();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("logged metadata survives the full write/read round trip through the persisted file", async () => {
+  // Regression test: winston's second log argument is spread onto the top-level info
+  // object, not nested. Passing meta directly (rather than wrapping it as { meta })
+  // serialized it as top-level JSON fields that readTodaysLogEntries' `parsed.meta`
+  // check could never see - every entry recovered from the persisted file (as opposed
+  // to the in-memory ring) silently lost its metadata entirely.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  try {
+    const logger = new Logger(dataDir);
+    logger.info("Scheduled job started", { id: "session-check", scheduled: true });
+    await waitForFileContent(logger.currentLogFilePath);
+
+    const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+    const parsed = JSON.parse(raw.trim().split("\n").pop()!);
+    assert.deepEqual(parsed.meta, { id: "session-check", scheduled: true });
+    assert.equal(parsed.id, undefined, "metadata must not also leak onto top-level fields");
+
     await logger.close();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });

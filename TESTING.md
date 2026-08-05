@@ -79,6 +79,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
+| Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 

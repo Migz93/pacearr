@@ -909,7 +909,13 @@ export class PacearrDatabase {
     return (this.db.prepare("SELECT * FROM history_events ORDER BY id DESC LIMIT ?").all(limit) as any[]).map(historyFromRow);
   }
 
-  /** Deletes history_events older than retentionDays, using the existing created_at index. */
+  /**
+   * Deletes history_events older than retentionDays, using the existing created_at
+   * index. Scoped to history_events only, deliberately - watch_events (core
+   * viewer-progress state) and reclaimed_storage_events (the Dashboard's lifetime
+   * "Space reclaimed" total) must never be pruned; doing so would corrupt state other
+   * features depend on, not just shrink an audit trail.
+   */
   pruneHistoryEvents(retentionDays: number): number {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
     return this.db.prepare("DELETE FROM history_events WHERE created_at < ?").run(cutoff).changes;

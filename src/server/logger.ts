@@ -10,8 +10,8 @@ const LOG_RING_SIZE = 500;
 // manual inspection (7 days), and a separate machine-readable JSON file (3 days) that
 // the app's own Logs viewer reads via currentLogFilePath below. Previously pacearr had
 // one combined 14-day JSON file serving both purposes.
-const humanFormat = winston.format.printf(({ level, message, timestamp, ...meta }) => {
-  const extra = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
+const humanFormat = winston.format.printf(({ level, message, timestamp, meta }) => {
+  const extra = meta && Object.keys(meta as object).length ? ` ${JSON.stringify(meta)}` : "";
   return `${timestamp} ${level}: ${message}${extra}`;
 });
 
@@ -79,7 +79,11 @@ export class Logger {
     if (this.ring.length > LOG_RING_SIZE) this.ring.shift();
 
     if (meta !== undefined) {
-      this.logger[level](message, meta as object);
+      // Winston's second argument is spread onto the top-level log object, not nested -
+      // passing meta directly would serialize it as top-level fields instead of a "meta"
+      // key, which readTodaysLogEntries/mergeLogEntries wouldn't recognize. Wrapping it
+      // keeps the persisted file's shape consistent with the in-memory ring's LogEntry.
+      this.logger[level](message, { meta });
     } else {
       this.logger[level](message);
     }
@@ -89,9 +93,14 @@ export class Logger {
     return this.ring.slice(-Math.max(1, limit));
   }
 
-  /** Flushes and closes the rotating file transport. Lets tests clean up their fixture
-   * directory deterministically instead of guessing how long winston's async open/write
-   * needs to settle. */
+  /**
+   * Ends the underlying winston stream so a test isn't left with an open file handle
+   * before removing its fixture directory. Does NOT guarantee an in-flight write has
+   * reached disk yet - winston's top-level "finish" event fires once its own stream
+   * ends, not necessarily once every transport's write has actually flushed. A test that
+   * needs to read back what it just logged should poll for the file to have content
+   * rather than assume close() alone is sufficient.
+   */
   close(): Promise<void> {
     return new Promise((resolve) => {
       this.logger.on("finish", () => resolve());

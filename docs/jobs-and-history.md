@@ -126,9 +126,7 @@ Important workflow actions should usually write both:
 - a `history_events` row for admin visibility
 
 Application logs are written to two rotating files in `/config/logs`,
-matching hubarr: a human-readable `pacearr-*.log` retained 7 days for manual
-inspection, and a machine-readable `.machinelogs-*.json` retained 3 days that
-Settings → Logs actually reads. It combines that file's active day with the
-in-memory ring of recent entries (read directly, not merged across every
-retained rotated file), so it stays useful both immediately after a restart
-and right after midnight's daily rotation.
+matching hubarr: a human-readable `pacearr-*.log` (7 days, manual inspection
+only) and a machine-readable `.machinelogs-*.json` (3 days) that Settings →
+Logs reads, combined with the in-memory ring — see `readRecentLogEntries` in
+`app.ts`.

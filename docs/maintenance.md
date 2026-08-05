@@ -31,22 +31,11 @@ authoritative behaviour and safety boundary.
 | `history_events` | Configurable, default 7 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
 | `reclaimed_storage_events` | Never pruned | — |
 
-**Settings → Logs** combines the in-memory ring of recent entries with today's
-active machine-readable log file (not every retained file — that would mean
-decompressing and merging up to 3 days on every request, and the app never
-reads the separate human-readable log at all). Neither source alone is always
-complete: the ring is empty right after a restart while the file still has
-that day's history, and the file is near-empty right after midnight's
-rotation while the ring still holds the tail of the previous day — so recent
-logs stay available across both cases.
-
-`history_events` pruning deletes rows older than `historyRetentionDays` on
-every `rolling-reconcile` run rather than running as its own job — see
-[Adding New Maintenance Work](#adding-new-maintenance-work) below for the
-reasoning. `watch_events` (core viewer-progress state) and
-`reclaimed_storage_events` (the Dashboard's lifetime "Space reclaimed" total)
-are deliberately excluded: pruning either would corrupt state other features
-depend on, not just shrink an audit trail.
+**Settings → Logs** combines the in-memory ring with today's active
+machine-readable log file (see `readRecentLogEntries` in `app.ts`).
+`history_events` pruning runs inside the `rolling-reconcile` job rather than
+as its own job; see `pruneHistoryEvents` in `db/index.ts` for what is and
+isn't in scope.
 
 ## Adding New Maintenance Work
 
