@@ -50,12 +50,12 @@ function entry(overrides: Partial<LogEntry> = {}): LogEntry {
  * file immediately after close() resolves. Polling for content is slower to write but
  * doesn't depend on winston/stream internals that don't guarantee this ordering.
  */
-async function waitForFileContent(filePath: string, timeoutMs = 2000): Promise<string> {
+async function waitForFileContent(filePath: string, timeoutMs = 2000, predicate: (content: string) => boolean = (content) => content.trim().length > 0): Promise<string> {
   const start = Date.now();
   for (;;) {
     try {
       const content = fs.readFileSync(filePath, "utf8");
-      if (content.trim()) return content;
+      if (predicate(content)) return content;
     } catch {
       // File may not exist yet.
     }
@@ -260,12 +260,13 @@ test("the human-readable log retains falsy scalar metadata instead of treating i
     logger.info("Empty string metadata", "");
     logger.info("Null metadata", null);
 
-    await waitForFileContent(humanLogPath);
+    const expectedLines = ["Zero metadata 0", "False metadata false", 'Empty string metadata ""', "Null metadata null"];
+    // waitForFileContent's default predicate returns as soon as the file has any content -
+    // with four separate async writes queued, that's only guaranteed to be the first of
+    // them. Wait for all four lines specifically before reading.
+    await waitForFileContent(humanLogPath, 2000, (content) => expectedLines.every((line) => content.includes(line)));
     const lines = fs.readFileSync(humanLogPath, "utf8").trim().split("\n");
-    assert.ok(lines.some((line) => line.endsWith("Zero metadata 0")));
-    assert.ok(lines.some((line) => line.endsWith("False metadata false")));
-    assert.ok(lines.some((line) => line.endsWith('Empty string metadata ""')));
-    assert.ok(lines.some((line) => line.endsWith("Null metadata null")));
+    for (const expected of expectedLines) assert.ok(lines.some((line) => line.endsWith(expected)));
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
