@@ -67,7 +67,27 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Expanded seasons are monotonic and not duplicated | Expansion state is sorted and duplicate-safe |
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
+| Pruning history events by retention only removes events older than the cutoff | `history_events` past `historyRetentionDays` is deleted; recent events, `watch_events`, and `reclaimed_storage_events` are untouched |
+| Pruning history events does not crash on an extreme retention value | An overflow-inducing input (e.g. `1e308`) is clamped to `MAX_SAFE_RETENTION_DAYS` instead of producing an invalid Date that throws |
+| Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
+| Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
+
+### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
+
+| Test | What it checks |
+|---|---|
+| `getRecentLogs` only reflects the in-memory ring | Retained rotated files never leak into the ring-only read path |
+| `currentLogFilePath` points at the machine-readable transport's fixed symlink name | Settings → Logs reads the same file the machine-readable rotating transport always symlinks to |
+| `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
+| `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
+| `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
+| Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
+| The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
+| Logging circular or BigInt metadata does not throw, in the ring, the persisted file, or the Logs API's own merge | `write()` sanitizes metadata once before it enters the ring, so every downstream consumer (the persisted file, and `mergeLogEntries` via the Logs API) only ever sees an already-safe value |
+| Logging the same object referenced twice preserves both, rather than marking the repeat as circular | `sanitizeMeta` tracks ancestry, not "every object ever seen", so two sibling properties referencing the same object aren't mistaken for a cycle |
+| Logging a root metadata value with no JSON representation (a function or Symbol) does not throw and omits metadata | `JSON.stringify` returns `undefined` for these at the root, so `sanitizeMeta` must recognize that instead of handing `undefined` to `JSON.parse`, which throws |
+| The human-readable log retains falsy scalar metadata (`0`, `false`, `""`, `null`) instead of treating it as absent | `humanFormat` checks whether meta is present, not whether it's truthy, so a real but falsy scalar isn't silently dropped from `pacearr.log` |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
@@ -81,6 +101,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
+| History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
 | Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |

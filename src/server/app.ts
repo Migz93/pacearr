@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import type { AppSettings, JobInfo, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
+import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
-import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
+import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration } from "./integrations/tautulli.js";
@@ -34,6 +35,68 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res).catch(next);
   };
+}
+
+/**
+ * Reads today's active log file directly rather than merging every retained rotated
+ * file: the log viewer only needs a bounded, restart-surviving source for whatever the
+ * in-memory ring hasn't kept, not the app's full retention history. Returns an empty
+ * array (not the ring's job to fill in for this function) if the file is missing,
+ * unreadable, or just freshly rotated — normal right after the very first log write of
+ * a fresh install, or just after midnight's daily rotation.
+ */
+function readTodaysLogEntries(logger: Logger): LogEntry[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+  } catch {
+    return [];
+  }
+  const entries: LogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<LogEntry>;
+      if (typeof parsed.timestamp === "string" && typeof parsed.message === "string" &&
+        (parsed.level === "debug" || parsed.level === "info" || parsed.level === "warn" || parsed.level === "error")) {
+        entries.push({ timestamp: parsed.timestamp, level: parsed.level, message: parsed.message, ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}) });
+      }
+    } catch {
+      // A partially written final line must not make the log viewer unavailable.
+    }
+  }
+  return entries;
+}
+
+/**
+ * Combines today's file with the in-memory ring rather than treating one as a fallback
+ * for the other: right after a restart the ring is empty and the file carries recent
+ * history, but right after midnight's rotation it's the reverse — the fresh file is
+ * still near-empty while the ring still holds the tail end of yesterday's entries (that
+ * file is already rotated away and not re-read, by design). Bounded to two small
+ * sources — one day's plain-text file plus up to 500 ring entries, no gzip, no scanning
+ * prior days — so merging stays cheap.
+ */
+export function readRecentLogEntries(logger: Logger): LogEntry[] {
+  return mergeLogEntries(readTodaysLogEntries(logger), logger.getRecentLogs(500));
+}
+
+/**
+ * Deduplicates and chronologically sorts entries from multiple sources (today's log file,
+ * the in-memory ring). timestamp+message alone isn't a safe dedup key: a synchronous loop
+ * can log the same message text for several different items within the same millisecond
+ * (e.g. reconcileRollingShows's per-show skip log), varying only in meta — collapsing
+ * those would silently drop all but one. Includes level and meta in the key for that
+ * reason, matching what this replaced before the ring/file merge existed.
+ */
+export function mergeLogEntries(...sources: LogEntry[][]): LogEntry[] {
+  const merged = new Map<string, LogEntry>();
+  for (const source of sources) {
+    for (const entry of source) {
+      merged.set(`${entry.timestamp} ${entry.level} ${entry.message} ${JSON.stringify(entry.meta)}`, entry);
+    }
+  }
+  return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
 function requiredString(value: unknown, name: string) {
@@ -307,6 +370,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
+    if (body.historyRetentionDays !== undefined) {
+      const retentionDays = Number(body.historyRetentionDays);
+      patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
+    }
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
@@ -359,6 +426,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   });
 
+  app.use("/api/settings/logs", rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+  }));
   app.get("/api/settings/logs", requireAuth, (req, res) => {
     const rawPage = Number(req.query.page ?? 1);
     const rawPageSize = Number(req.query.pageSize ?? 25);
@@ -368,7 +441,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const filter = levels.includes(req.query.filter as typeof levels[number]) ? req.query.filter as typeof levels[number] : "debug";
     const allowed = new Set(levels.slice(levels.indexOf(filter)));
     const search = typeof req.query.search === "string" ? req.query.search.toLowerCase().slice(0, 200) : "";
-    const filtered = logger.getRecentLogs(500)
+    const entries = readRecentLogEntries(logger);
+    const filtered = entries
       .filter((entry) => allowed.has(entry.level))
       .filter((entry) => !search || entry.message.toLowerCase().includes(search) || JSON.stringify(entry.meta ?? "").toLowerCase().includes(search))
       .reverse();
@@ -563,6 +637,11 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   const clientDir = path.resolve(process.cwd(), "dist/client");
   app.use("/images", express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
   app.use("/images", (_req, res) => res.sendStatus(404));
+  // Vite content-hashes every filename under /assets, so a build's output never collides
+  // with a previous one — safe to cache for as long as a browser will keep it. Everything
+  // else in dist/client (notably index.html, which names the current asset hashes and must
+  // always revalidate) keeps the conservative default below.
+  app.use("/assets", express.static(path.join(clientDir, "assets"), { maxAge: "1y", immutable: true }));
   app.use(express.static(clientDir, { maxAge: "1h" }));
   app.get(/.*/, (_req, res) => res.sendFile(path.join(clientDir, "index.html")));
 

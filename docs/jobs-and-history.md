@@ -9,7 +9,7 @@ Pacearr has five scheduler-managed jobs.
 | `session-check` | every 5 minutes | Poll Plex live sessions and process active episode playback |
 | `history-import` | every 24 hours | Import Plex history and optional Tautulli history |
 | `full-history-reconcile` | every 30 days | Re-read all available Plex and Tautulli episode history to recover source gaps |
-| `rolling-reconcile` | every 6 hours | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files |
+| `rolling-reconcile` | every 6 hours | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
 | `recommendation-refresh` | every 6 hours | Refresh the cached Sonarr library and projected-savings recommendations |
 
 Job state is stored in `job_run_state`.
@@ -96,6 +96,8 @@ It records:
 
 History events are intentionally separate from watch events. Watch events represent user playback. History events represent Pacearr's own actions and operational state.
 
+`history_events` is pruned to `historyRetentionDays` (default 7) by the `rolling-reconcile` job. `watch_events` is never pruned — see [maintenance.md](maintenance.md#data-retention).
+
 ## Reclaimed Storage
 
 When a live Sonarr cleanup deletes episode files, Pacearr records a separate
@@ -123,6 +125,8 @@ Important workflow actions should usually write both:
 - a structured log for support/debugging
 - a `history_events` row for admin visibility
 
-Application logs are retained for 14 days in `/config/logs`. Settings → Logs
-reads both currently running entries and retained rotated files, so it remains
-useful after a restart.
+Application logs are written to two rotating files in `/config/logs`,
+matching hubarr: a human-readable `pacearr-*.log` (7 days, manual inspection
+only) and a machine-readable `.machinelogs-*.json` (3 days) that Settings →
+Logs reads, combined with the in-memory ring — see `readRecentLogEntries` in
+`app.ts`.

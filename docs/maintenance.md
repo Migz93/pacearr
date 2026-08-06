@@ -10,7 +10,7 @@ the jobs that own the relevant state.
 
 | Where | What it does |
 |---|---|
-| `rolling-reconcile` job | Brings enrolled shows back to the monitoring state implied by enabled viewers' progress |
+| `rolling-reconcile` job | Brings enrolled shows back to the monitoring state implied by enabled viewers' progress; also prunes `history_events` past `historyRetentionDays` |
 | Watch-event processing | Progressive cleanup shrinks older expanded seasons back to pilot-only |
 | `job_run_state` | Durable job state across restarts |
 | `history_events` | Audit history of what Pacearr did |
@@ -25,12 +25,17 @@ authoritative behaviour and safety boundary.
 
 | Data | Retained | Controlled by |
 |---|---|---|
-| `/config/logs/pacearr.log` | 14 days, compressed after rotation | Log rotation config |
+| `/config/logs/pacearr-*.log` (human-readable) | 7 days, compressed after rotation | Log rotation config; matches hubarr |
+| `/config/logs/.machinelogs-*.json` (machine-readable) | 3 days, compressed after rotation | Log rotation config; matches hubarr — this is the file Settings → Logs reads |
 | `watch_events` | Never pruned | — |
-| `history_events` | Never pruned | — |
+| `history_events` | Configurable, default 7 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
+| `reclaimed_storage_events` | Never pruned | — |
 
-**Settings → Logs** combines the active in-memory log stream with the retained
-files, so recent logs remain available after an application or container restart.
+**Settings → Logs** combines the in-memory ring with today's active
+machine-readable log file (see `readRecentLogEntries` in `app.ts`).
+`history_events` pruning runs inside the `rolling-reconcile` job rather than
+as its own job; see `pruneHistoryEvents` in `db/index.ts` for what is and
+isn't in scope.
 
 ## Adding New Maintenance Work
 

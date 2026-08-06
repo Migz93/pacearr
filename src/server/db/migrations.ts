@@ -245,6 +245,24 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Two indexes for the same watch_events window-function shape, covering it in both
+    // directions: listLatestUserProgressForSeries(Batch) leads with sonarr_series_id (the
+    // Dashboard and Shows-page queries fixed in #59 — measured on a 932-show library /
+    // ~96k watch_events, this took the Shows-page progress query from ~150ms to ~8ms).
+    // listLatestWatchProgressForUser leads with user_id instead, for the rarer path that
+    // runs during Plex user discovery. Both let SQLite resolve the most recent watch event
+    // directly from the index instead of sorting matching rows in a temp b-tree.
+    version: 13,
+    up(db) {
+      db.exec(`
+        CREATE INDEX idx_watch_events_series_user_watched
+        ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+        ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger): void {

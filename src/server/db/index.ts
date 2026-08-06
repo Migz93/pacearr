@@ -31,10 +31,20 @@ import { runMigrations } from "./migrations.js";
 
 const now = () => new Date().toISOString();
 
+// JS Date can only represent times within +/-8,640,000,000,000,000ms of the epoch (see
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date
+// #the_epoch_timestamps_and_invalid_date), i.e. +/-100,000,000 days. A day count anywhere
+// near that (e.g. a user pasting 1e308 into historyRetentionDays) overflows the
+// multiplication to Infinity, producing an invalid Date whose toISOString() throws -
+// confirmed this crashes pruneHistoryEvents specifically. This ceiling exists purely to
+// stay inside Date's valid range; it is not a policy opinion about a "reasonable" value.
+export const MAX_SAFE_RETENTION_DAYS = 100_000_000;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
+  historyRetentionDays: 7,
   sessionPollIntervalMinutes: 5,
   historyImportIntervalHours: 24,
   inactivityResetDays: 7,
@@ -784,7 +794,45 @@ export class PacearrDatabase {
       JSON.stringify(input.rawPayload),
       now()
     );
-    return { inserted: result.changes > 0, id: result.lastInsertRowid ? Number(result.lastInsertRowid) : null };
+    // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
+    // whatever a previous successful insert on this connection left it as. Gate on
+    // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
+    // event would incorrectly report some unrelated earlier row's id as its own.
+    return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+  }
+
+  /**
+   * Batched form of insertWatchEvent — wraps every insert in a single transaction instead
+   * of one auto-committed transaction per row. A history import or full reconciliation can
+   * process thousands of rows in one run; measured on this exact pattern, 2000 unwrapped
+   * inserts took ~212ms versus ~3ms wrapped in one transaction.
+   */
+  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): Array<{ inserted: boolean; id: number | null }> {
+    if (inputs.length === 0) return [];
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO watch_events
+        (source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const stamp = now();
+    const insertAll = this.db.transaction((items: NormalizedWatchEventInput[]) => items.map((item) => {
+      const result = insert.run(
+        item.source,
+        item.sourceEventId,
+        item.userId,
+        item.plexAccountId,
+        item.username,
+        item.sonarrSeriesId,
+        item.showTitle,
+        item.seasonNumber,
+        item.episodeNumber,
+        item.watchedAt,
+        JSON.stringify(item.rawPayload),
+        stamp
+      );
+      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+    }));
+    return insertAll(inputs);
   }
 
   listUnmatchedWatchEvents(): WatchEvent[] {
@@ -807,11 +855,17 @@ export class PacearrDatabase {
   }
 
   listDashboardShowActivity(activeSince: string): Omit<DashboardShowActivity, "posterUrl">[] {
+    // Restricting latest_watch to currently-enrolled series avoids ranking every watch
+    // event ever recorded (including for shows that were later unenrolled) just to find
+    // the newest one per enrolled show — on a large history table this was the dominant
+    // cost of loading the dashboard (see issue #59).
     return (this.db.prepare(`
       WITH latest_watch AS (
         SELECT we.sonarr_series_id, we.season_number, we.episode_number, we.watched_at, we.user_id,
           ROW_NUMBER() OVER (PARTITION BY we.sonarr_series_id ORDER BY we.watched_at DESC, we.id DESC) AS row_number
-        FROM watch_events we WHERE we.sonarr_series_id IS NOT NULL
+        FROM watch_events we
+        WHERE we.sonarr_series_id IS NOT NULL
+          AND we.sonarr_series_id IN (SELECT sonarr_series_id FROM rolling_shows)
       ), active_viewers AS (
         SELECT rsu.rolling_show_id, COUNT(DISTINCT rsu.user_id) AS active_viewer_count
         FROM rolling_show_users rsu JOIN users ON users.id = rsu.user_id
@@ -862,6 +916,28 @@ export class PacearrDatabase {
 
   listHistory(limit = 100): HistoryEvent[] {
     return (this.db.prepare("SELECT * FROM history_events ORDER BY id DESC LIMIT ?").all(limit) as any[]).map(historyFromRow);
+  }
+
+  /**
+   * Deletes history_events older than retentionDays, using the existing created_at
+   * index. Scoped to history_events only, deliberately - watch_events (core
+   * viewer-progress state) and reclaimed_storage_events (the Dashboard's lifetime
+   * "Space reclaimed" total) must never be pruned; doing so would corrupt state other
+   * features depend on, not just shrink an audit trail.
+   */
+  pruneHistoryEvents(retentionDays: number): number {
+    // Defensive clamp for any internal/persisted caller, not just the settings API - see
+    // MAX_SAFE_RETENTION_DAYS above for why the upper bound exists. The lower bound
+    // matters just as much: 0 or a negative value pushes the cutoff to now-or-future,
+    // which would silently delete every history_events row rather than throw - worse
+    // than the overflow this was written to guard against. Math.min/Math.max both
+    // propagate NaN if either operand is NaN, so that check has to happen first, not as
+    // part of the same clamp expression.
+    const safeDays = Number.isFinite(retentionDays)
+      ? Math.max(1, Math.min(retentionDays, MAX_SAFE_RETENTION_DAYS))
+      : DEFAULT_APP_SETTINGS.historyRetentionDays;
+    const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString();
+    return this.db.prepare("DELETE FROM history_events WHERE created_at < ?").run(cutoff).changes;
   }
 
   listHistoryPaginated(options: {

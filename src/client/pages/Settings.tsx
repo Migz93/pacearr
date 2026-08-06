@@ -159,6 +159,9 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         <Field label="Viewer activity window days" hint="Only viewers active in this window count as current progress or keep a season expanded. Shows without any current viewers return to pilots.">
           <TextInput type="number" min={1} value={String(form.viewerActivityWindowDays)} onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })} />
         </Field>
+        <Field label="History retention days" hint="How long History audit entries are kept before being pruned. Watch history and reclaimed-storage totals are never pruned.">
+          <TextInput type="number" min={1} value={String(form.historyRetentionDays)} onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })} />
+        </Field>
         <Field label="Recommendation minimum savings (GB)" hint="Shows with projected savings below this amount are hidden from Recommendations.">
           <TextInput type="number" min={0} step={1} value={String(form.recommendationMinimumSavingsGb)} onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })} />
         </Field>

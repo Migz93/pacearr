@@ -15,10 +15,15 @@ const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
 
 export class ImageCacheService {
   private readonly cacheDir: string;
+  // Refreshing a full library's posters checks this cache for every show. Reading the
+  // directory listing once up front and tracking writes in memory avoids up to 4
+  // synchronous fs.existsSync calls (one per known extension) per lookup.
+  private readonly knownFiles: Set<string>;
 
   constructor(dataDir: string, private readonly logger: Logger) {
     this.cacheDir = path.join(dataDir, "image-cache");
     fs.mkdirSync(this.cacheDir, { recursive: true });
+    this.knownFiles = new Set(fs.readdirSync(this.cacheDir));
   }
 
   get publicDir() {
@@ -100,11 +105,15 @@ export class ImageCacheService {
       const fileName = `${input.kind}-${cacheKey}.${extension}`;
       const filePath = path.join(this.cacheDir, fileName);
       fs.writeFileSync(filePath, data, { flag: "wx" });
+      this.knownFiles.add(fileName);
       this.logger.info("Image cached", { kind: input.kind, fileName, bytes: data.byteLength, ...input.logMeta });
       return `/images/${fileName}`;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        return this.findExistingImage(input.kind, cacheKey);
+        // A concurrent request already wrote this file after our in-memory check missed
+        // it. The in-memory set doesn't know about that write yet, so confirm on disk
+        // rather than wrongly report a still-missing cache entry.
+        return this.findExistingImage(input.kind, cacheKey, { forceDiskCheck: true });
       }
       this.logger.warn("Image cache failed", { kind: input.kind, error: error instanceof Error ? error.message : String(error), ...input.logMeta });
       return null;
@@ -123,10 +132,14 @@ export class ImageCacheService {
     }
   }
 
-  private findExistingImage(kind: "avatar" | "poster", cacheKey: string): string | null {
+  private findExistingImage(kind: "avatar" | "poster", cacheKey: string, options: { forceDiskCheck?: boolean } = {}): string | null {
     for (const extension of Object.values(CONTENT_TYPE_EXTENSIONS)) {
       const fileName = `${kind}-${cacheKey}.${extension}`;
-      if (fs.existsSync(path.join(this.cacheDir, fileName))) return `/images/${fileName}`;
+      if (this.knownFiles.has(fileName)) return `/images/${fileName}`;
+      if (options.forceDiskCheck && fs.existsSync(path.join(this.cacheDir, fileName))) {
+        this.knownFiles.add(fileName);
+        return `/images/${fileName}`;
+      }
     }
     return null;
   }

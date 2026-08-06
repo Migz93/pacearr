@@ -48,13 +48,18 @@ function installFetchStub(routes: {
   episodesBySeries?: Record<number, SonarrEpisode[]>;
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
   episodeFileErrorsBySeries?: Record<number, string>;
+  plexHistoryXml?: string;
   requests?: Array<{ method: string; pathname: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") return emptyPlexHistoryXml();
+    if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
+      return routes.plexHistoryXml
+        ? new Response(routes.plexHistoryXml, { status: 200, headers: { "content-type": "application/xml" } })
+        : emptyPlexHistoryXml();
+    }
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
     if (byIdMatch) {
@@ -102,6 +107,64 @@ test("watch events for non-enrolled shows are matched against the full Sonarr li
     await services.importHistory();
 
     assert.equal(db.listUnmatchedWatchEvents().length, 0);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("history import batches events outside the activity window while still applying rolling logic to recent ones", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false, viewerActivityWindowDays: 30 });
+  const [user] = db.upsertUsers([{ plexUserId: "plex-batch", plexAccountId: "1", tautulliUserId: null, username: "batchuser", displayName: "Batch User", avatarUrl: null }]);
+  db.updateUser(user!.id, { enabled: true, tautulliUserId: null });
+
+  const series: SonarrSeries = {
+    id: 950,
+    title: "Rolling Test",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9501, seriesId: 950, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 95001 },
+    { id: 9502, seriesId: 950, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true, episodeFileId: 95003 },
+  ];
+  db.upsertRollingShow(series);
+
+  const recentUnix = Math.floor((Date.now() - 1 * 24 * 60 * 60 * 1000) / 1000);
+  const oldUnix = Math.floor((Date.now() - 60 * 24 * 60 * 60 * 1000) / 1000);
+  const plexHistoryXml = `<?xml version="1.0"?>
+    <MediaContainer size="2">
+      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="1" index="1" viewedAt="${recentUnix}" historyKey="hk-recent" ratingKey="rk-recent" accountID="1" user="batchuser"/>
+      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="2" index="1" viewedAt="${oldUnix}" historyKey="hk-old" ratingKey="rk-old" accountID="1" user="batchuser"/>
+    </MediaContainer>`;
+  const restoreFetch = installFetchStub({
+    series: [series],
+    seriesById: { 950: series },
+    episodesBySeries: { 950: episodes },
+    episodeFilesBySeries: { 950: [] },
+    plexHistoryXml,
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.ok, true);
+    assert.equal(result.processed, 2);
+    assert.equal(result.imported, 2);
+    assert.equal(result.matched, 2);
+    assert.equal(result.unmatched, 0);
+
+    // The recent event (S1E1) went through the Sonarr-touching path and expanded
+    // season 1. The old event (S2E1) was routed to the batched insert-only path and
+    // must not have triggered any rolling logic - season 2 stays un-expanded.
+    const rolling = db.getRollingShowBySeriesId(950);
+    assert.deepEqual(rolling?.expandedSeasons, [1]);
+
+    const stored = db.listLatestUserProgressForSeries(950);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0]?.seasonNumber, 1);
   } finally {
     restoreFetch();
     cleanup();
