@@ -86,6 +86,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
 | Logging circular or BigInt metadata does not throw, in the ring, the persisted file, or the Logs API's own merge | `write()` sanitizes metadata once before it enters the ring, so every downstream consumer (the persisted file, and `mergeLogEntries` via the Logs API) only ever sees an already-safe value |
 | Logging the same object referenced twice preserves both, rather than marking the repeat as circular | `sanitizeMeta` tracks ancestry, not "every object ever seen", so two sibling properties referencing the same object aren't mistaken for a cycle |
+| Logging a root metadata value with no JSON representation (a function or Symbol) does not throw and omits metadata | `JSON.stringify` returns `undefined` for these at the root, so `sanitizeMeta` must recognize that instead of handing `undefined` to `JSON.parse`, which throws |
+| The human-readable log retains falsy scalar metadata (`0`, `false`, `""`, `null`) instead of treating it as absent | `humanFormat` checks whether meta is present, not whether it's truthy, so a real but falsy scalar isn't silently dropped from `pacearr.log` |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 

@@ -41,7 +41,11 @@ function sanitizeMeta(value: unknown): unknown {
     }
     return val;
   });
-  return JSON.parse(json);
+  // A root value with no JSON representation (a bare function or Symbol) makes
+  // JSON.stringify return undefined rather than a string - JSON.parse(undefined) would
+  // throw SyntaxError before winston ever sees the entry. Treat it the same as no meta at
+  // all instead, since there's nothing meaningful to log.
+  return json === undefined ? undefined : JSON.parse(json);
 }
 
 // Matches hubarr's log architecture exactly: a human-readable, pretty-printed file for
@@ -51,7 +55,10 @@ function sanitizeMeta(value: unknown): unknown {
 const humanFormat = winston.format.printf(({ level, message, timestamp, meta }) => {
   // Safe to use plain JSON.stringify here - meta arrives already sanitized by write()'s
   // sanitizeMeta() call, not the raw value passed to logger.info()/warn()/etc.
-  const extra = meta && Object.keys(meta as object).length ? ` ${JSON.stringify(meta)}` : "";
+  // Checking truthiness (rather than presence) would treat a falsy-but-real scalar meta
+  // (0, false, "", null) the same as no meta at all and silently drop it from this file.
+  const hasMeta = meta !== undefined && (meta === null || typeof meta !== "object" || Object.keys(meta as object).length > 0);
+  const extra = hasMeta ? ` ${JSON.stringify(meta)}` : "";
   return `${timestamp} ${level}: ${message}${extra}`;
 });
 

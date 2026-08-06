@@ -106,6 +106,16 @@ test("readRecentLogEntries combines today's log file with the in-memory ring", a
     const messages = readRecentLogEntries(logger).map((item) => item.message);
     assert.deepEqual(messages.sort(), ["File-only entry", "Ring-only entry"]);
   } finally {
+    // Confirmed in CI (not reproducible on a fast local disk): winston's file transports
+    // hadn't finished their first async write yet when rmSync tore down dataDir, and the
+    // delayed write's ENOENT surfaced as an uncaught exception after the test had already
+    // ended. Can't wait on logger.currentLogFilePath itself here - this test already wrote
+    // a plain file at that path above, and file-stream-rotator only (re)creates the
+    // symlink when lstat on that path throws ENOENT or finds an existing symlink, so it
+    // silently leaves our pre-existing plain file alone forever. The human-readable
+    // symlink is never touched by this test, so waiting on it actually reflects winston's
+    // real flush.
+    await waitForFileContent(path.join(dataDir, "logs", "pacearr.log"));
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
@@ -210,6 +220,52 @@ test("logging the same object referenced twice preserves both, rather than marki
     const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
     const parsed = JSON.parse(raw.trim().split("\n").pop()!);
     assert.deepEqual(parsed.meta, { previous: { id: 42, name: "Shared" }, current: { id: 42, name: "Shared" } });
+  } finally {
+    await logger.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("logging a root metadata value with no JSON representation does not throw and omits metadata", async () => {
+  // Regression test: JSON.stringify returns undefined (not a string) for a bare function
+  // or Symbol at the root, so JSON.parse(undefined) would throw SyntaxError before
+  // winston ever saw the entry. sanitizeMeta must recognize that and treat it the same as
+  // no meta being passed at all, rather than crashing the log call.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const logger = new Logger(dataDir);
+  try {
+    assert.doesNotThrow(() => logger.info("Function metadata", () => {}));
+    assert.doesNotThrow(() => logger.info("Symbol metadata", Symbol("nope")));
+
+    const [functionEntry, symbolEntry] = logger.getRecentLogs(2);
+    assert.equal(functionEntry!.meta, undefined);
+    assert.equal(symbolEntry!.meta, undefined);
+  } finally {
+    await logger.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("the human-readable log retains falsy scalar metadata instead of treating it as absent", async () => {
+  // Regression test: humanFormat checked `meta && Object.keys(meta).length`, which treats
+  // a real but falsy scalar meta (0, false, "", null) the same as "no meta" and silently
+  // drops it from pacearr.log. The ring, machine-readable JSON file, and Logs API are
+  // unaffected since only this printf format has the truthiness check.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const logger = new Logger(dataDir);
+  const humanLogPath = path.join(dataDir, "logs", "pacearr.log");
+  try {
+    logger.info("Zero metadata", 0);
+    logger.info("False metadata", false);
+    logger.info("Empty string metadata", "");
+    logger.info("Null metadata", null);
+
+    await waitForFileContent(humanLogPath);
+    const lines = fs.readFileSync(humanLogPath, "utf8").trim().split("\n");
+    assert.ok(lines.some((line) => line.endsWith("Zero metadata 0")));
+    assert.ok(lines.some((line) => line.endsWith("False metadata false")));
+    assert.ok(lines.some((line) => line.endsWith('Empty string metadata ""')));
+    assert.ok(lines.some((line) => line.endsWith("Null metadata null")));
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
