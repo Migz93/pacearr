@@ -240,6 +240,11 @@ test("logging a root metadata value with no JSON representation does not throw a
     const [functionEntry, symbolEntry] = logger.getRecentLogs(2);
     assert.equal(functionEntry!.meta, undefined);
     assert.equal(symbolEntry!.meta, undefined);
+
+    // Wait for both async writes to reach disk before close()/rmSync() below, or the
+    // second write can still be in flight when the temp dir is removed - see the
+    // waitForFileContent docstring above.
+    await waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2);
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
