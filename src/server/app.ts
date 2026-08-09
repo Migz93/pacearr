@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
+import { isHistoryCategory } from "../shared/history.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
 import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
@@ -604,17 +605,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1;
     const pageSize = Number.isFinite(requestedPageSize) ? Math.min(100, Math.max(1, requestedPageSize)) : 10;
     const requestedLevel = String(req.query.level ?? "all");
-    const level = requestedLevel === "info" || requestedLevel === "warn" || requestedLevel === "error"
-      ? requestedLevel
-      : undefined;
-    const action = typeof req.query.action === "string" && req.query.action !== "all"
-      ? req.query.action
-      : undefined;
-    const { results, total, actions } = db.listHistoryPaginated({ page, pageSize, level, action });
+    // No code path writes an error-level history event — every addHistory call uses info
+    // or warn — so "error" is deliberately not an accepted level here either.
+    const level = requestedLevel === "info" || requestedLevel === "warn" ? requestedLevel : undefined;
+    const category = isHistoryCategory(req.query.category) ? req.query.category : undefined;
+    const { results, total } = db.listHistoryPaginated({ page, pageSize, level, category });
 
     res.json({
       results,
-      actions,
       pageInfo: {
         page,
         pageSize,

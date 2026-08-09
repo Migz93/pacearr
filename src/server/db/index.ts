@@ -24,6 +24,7 @@ import type {
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
 } from "../../shared/types.js";
+import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
 import { createSecret } from "../auth.js";
 import type { Logger } from "../logger.js";
@@ -944,8 +945,8 @@ export class PacearrDatabase {
     page: number;
     pageSize: number;
     level?: HistoryEvent["level"];
-    action?: string;
-  }): { results: HistoryEvent[]; total: number; actions: string[] } {
+    category?: HistoryCategory;
+  }): { results: HistoryEvent[]; total: number } {
     const conditions: string[] = [];
     const parameters: Array<string | number> = [];
 
@@ -953,9 +954,12 @@ export class PacearrDatabase {
       conditions.push("level = ?");
       parameters.push(options.level);
     }
-    if (options.action) {
-      conditions.push("action = ?");
-      parameters.push(options.action);
+    if (options.category) {
+      // A category is a fixed set of action names (live plus their dry-run twins), so it
+      // filters as an IN list rather than needing a column on the table.
+      const actions = actionsInCategory(options.category);
+      conditions.push(`action IN (${actions.map(() => "?").join(", ")})`);
+      parameters.push(...actions);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -967,10 +971,8 @@ export class PacearrDatabase {
       ORDER BY id DESC
       LIMIT ? OFFSET ?
     `).all(...parameters, options.pageSize, offset) as any[]).map(historyFromRow);
-    const actions = (this.db.prepare("SELECT DISTINCT action FROM history_events ORDER BY action").all() as Array<{ action: string }>)
-      .map((row) => row.action);
 
-    return { results, total, actions };
+    return { results, total };
   }
 
   getJobRunState(id: string) {

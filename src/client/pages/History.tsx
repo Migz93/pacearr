@@ -5,11 +5,14 @@ import { apiGet } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
 import { SelectInput } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader } from "../components/Page";
+import { HISTORY_CATEGORIES, historyActionLabel, isDryRunAction, isHistoryCategory } from "../../shared/history";
 import type { HistoryEvent, HistoryPageResponse } from "../../shared/types";
 
-type LevelFilter = "all" | HistoryEvent["level"];
+// "error" is intentionally absent: nothing in the app writes an error-level history
+// event, so offering the filter only ever produced an empty list.
+type LevelFilter = "all" | "info" | "warn";
 
-const LEVELS: LevelFilter[] = ["all", "info", "warn", "error"];
+const LEVELS: LevelFilter[] = ["all", "info", "warn"];
 const PAGE_SIZES = [10, 25, 50, 100];
 
 const LEVEL_BADGE: Record<HistoryEvent["level"], string> = {
@@ -17,32 +20,6 @@ const LEVEL_BADGE: Record<HistoryEvent["level"], string> = {
   warn: badgeClass("warning"),
   error: badgeClass("error"),
 };
-
-const ACTION_LABELS: Record<string, string> = {
-  "history.import": "History import",
-  "history.full_reconcile": "Full history reconciliation",
-  "sessions.check": "Plex session check",
-  "cleanup.inactive_reset": "Inactive show reset",
-  "cleanup.progressive": "Progressive cleanup",
-  "show.enrolled": "Show enrolled",
-  "show.removed": "Show removed",
-  "show.unenrolled": "Show unenrolled",
-  "show.reset": "Show reset",
-  "sonarr.baseline": "Sonarr baseline",
-  "sonarr.expand_season": "Season expansion",
-  "watch_events.reconciled": "Watch events reconciled",
-  "dry_run.show.reset": "Show reset (dry run)",
-  "dry_run.sonarr.baseline": "Sonarr baseline (dry run)",
-  "dry_run.sonarr.expand_season": "Season expansion (dry run)",
-};
-
-function actionLabel(action: string) {
-  return ACTION_LABELS[action] ?? action
-    .split(/[._-]/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 function parseDetails(details: string): unknown {
   try {
@@ -69,7 +46,8 @@ export default function History() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLevel = searchParams.get("level") as LevelFilter;
   const level = LEVELS.includes(requestedLevel) ? requestedLevel : "all";
-  const action = searchParams.get("action") ?? "all";
+  const requestedCategory = searchParams.get("category");
+  const category = isHistoryCategory(requestedCategory) ? requestedCategory : "all";
   const requestedPage = Number(searchParams.get("page") ?? 1);
   const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1;
   const requestedPageSize = Number(searchParams.get("pageSize") ?? 10);
@@ -95,7 +73,7 @@ export default function History() {
       page: String(page),
       pageSize: String(pageSize),
       level,
-      action,
+      category,
     });
     try {
       setData(await apiGet<HistoryPageResponse>(`/api/history?${params.toString()}`));
@@ -105,7 +83,7 @@ export default function History() {
     } finally {
       setLoading(false);
     }
-  }, [action, level, page, pageSize]);
+  }, [category, level, page, pageSize]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -132,11 +110,10 @@ export default function History() {
           ))}
         </fieldset>
         <fieldset className="m-0 flex min-w-0 flex-wrap overflow-hidden rounded-lg border border-outline-variant/30 p-0">
-          <legend className="sr-only">Job type</legend>
-          <button type="button" className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold ${action === "all" ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === "all"} onClick={() => setParam("action", "all", true)}>All types</button>
-          {(data?.actions ?? []).map((item) => (
-            <button type="button" key={item} className={`min-h-8 border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${action === item ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={action === item} onClick={() => setParam("action", item, true)}>
-              {actionLabel(item)}
+          <legend className="sr-only">Event type</legend>
+          {[{ id: "all", label: "All types" }, ...HISTORY_CATEGORIES].map((item) => (
+            <button type="button" key={item.id} className={`min-h-8 whitespace-nowrap border-r border-outline-variant/30 px-2.5 text-xs font-bold last:border-r-0 ${category === item.id ? "bg-primary-dim text-on-surface" : "bg-background-container text-on-surface-variant hover:bg-background-container-high hover:text-on-surface"}`} aria-pressed={category === item.id} onClick={() => setParam("category", item.id, true)}>
+              {item.label}
             </button>
           ))}
         </fieldset>
@@ -179,7 +156,8 @@ function HistoryRow({ event }: { event: HistoryEvent }) {
         <span className="grid min-w-0 gap-1">
           <span className="flex min-w-0 items-baseline gap-2.5">
             <strong className="overflow-hidden text-ellipsis whitespace-nowrap">{event.title}</strong>
-            <span className="shrink-0 text-[11px] font-extrabold uppercase text-primary">{actionLabel(event.action)}</span>
+            <span className="shrink-0 text-[11px] font-extrabold uppercase text-primary">{historyActionLabel(event.action)}</span>
+            {isDryRunAction(event.action) && <span className={`${badgeClass("warning")} shrink-0 self-center`}>Dry run</span>}
           </span>
           <span className="text-xs text-on-surface-variant">{compactDetails(details)}</span>
         </span>
@@ -190,7 +168,7 @@ function HistoryRow({ event }: { event: HistoryEvent }) {
         <div className="px-4 pb-4 pl-[86px] text-xs text-on-surface-variant max-[820px]:pl-4">
           <dl className="mb-3 flex flex-wrap gap-[18px]">
             <div className="flex gap-1.5"><dt className="font-extrabold text-on-surface">Logged</dt><dd>{new Date(event.createdAt).toLocaleString()}</dd></div>
-            <div className="flex gap-1.5"><dt className="font-extrabold text-on-surface">Job type</dt><dd>{event.action}</dd></div>
+            <div className="flex gap-1.5"><dt className="font-extrabold text-on-surface">Event type</dt><dd>{event.action}</dd></div>
           </dl>
           <div className="font-extrabold text-on-surface">Details</div>
           {typeof details === "string" ? <p className="mt-1.5 rounded-lg border border-outline-variant/30 bg-background p-3 text-on-surface">{details}</p> : <pre className="mt-1.5 overflow-x-auto rounded-lg border border-outline-variant/30 bg-background p-3 text-on-surface">{JSON.stringify(details, null, 2)}</pre>}

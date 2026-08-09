@@ -379,7 +379,6 @@ export interface HistoryEvent {
 
 export interface HistoryPageResponse {
   results: HistoryEvent[];
-  actions: string[];
   pageInfo: {
     page: number;
     pageSize: number;

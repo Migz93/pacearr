@@ -142,17 +142,38 @@ test("history supports filtered server-side pagination", () => {
   try {
     db.addHistory("info", "history.import", "First import", { processed: 10 });
     db.addHistory("warn", "history.import", "Second import", { errors: ["timeout"] });
-    db.addHistory("error", "sessions.check", "Session failure", "Plex unavailable");
+    db.addHistory("info", "sessions.check", "Plex sessions", { changed: 1 });
 
     const firstPage = db.listHistoryPaginated({ page: 1, pageSize: 2 });
     assert.equal(firstPage.total, 3);
     assert.equal(firstPage.results.length, 2);
-    assert.equal(firstPage.results[0]?.title, "Session failure");
-    assert.deepEqual(firstPage.actions, ["history.import", "sessions.check"]);
+    assert.equal(firstPage.results[0]?.title, "Plex sessions");
 
-    const warningImports = db.listHistoryPaginated({ page: 1, pageSize: 10, level: "warn", action: "history.import" });
-    assert.equal(warningImports.total, 1);
-    assert.equal(warningImports.results[0]?.title, "Second import");
+    const warnings = db.listHistoryPaginated({ page: 1, pageSize: 10, level: "warn" });
+    assert.equal(warnings.total, 1);
+    assert.equal(warnings.results[0]?.title, "Second import");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a history category filter matches an action and its dry-run twin, and nothing outside the category", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.addHistory("info", "sonarr.expand_season", "Fringe", { seasonNumber: 2 });
+    db.addHistory("info", "dry_run.sonarr.expand_season", "The Wire", { seasonNumber: 3 });
+    db.addHistory("info", "cleanup.progressive", "Deadwood", { seasonNumber: 1 });
+    db.addHistory("info", "history.import", "Import", { processed: 4 });
+
+    const monitoring = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "monitoring" });
+    assert.equal(monitoring.total, 2);
+    assert.deepEqual(monitoring.results.map((event) => event.title).sort(), ["Fringe", "The Wire"]);
+
+    const cleanup_ = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "cleanup" });
+    assert.deepEqual(cleanup_.results.map((event) => event.title), ["Deadwood"]);
+
+    // Level and category stack rather than replacing each other.
+    assert.equal(db.listHistoryPaginated({ page: 1, pageSize: 10, category: "monitoring", level: "warn" }).total, 0);
   } finally {
     cleanup();
   }
