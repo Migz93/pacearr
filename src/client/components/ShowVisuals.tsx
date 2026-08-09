@@ -7,20 +7,15 @@ import type { ShowListItem, ShowUserProgress } from "../../shared/types";
 export type ViewerBadge = ShowUserProgress & { isHistory: boolean };
 
 /**
- * The poster tile used everywhere a show is shown as artwork — the Shows grid and the
- * Dashboard strip. Shared so the two can't drift: same aspect, border, hover lift, and
- * the same gradient-plus-detail overlay that fades in on hover (and is always visible on
- * touch, where there is no hover).
- */
-/**
- * "S2, S5 expanded" for a poster overlay. Shared so the Dashboard strip and the Shows
- * grid describe expansion the same way; renders nothing for a pilot-only show.
+ * Expansion state for a poster overlay. A count rather than a season list: a show with
+ * several expanded seasons would wrap the overlay and push the rest of it out of view.
+ * Shared so the Dashboard strip and the Shows grid say it the same way.
  */
 export function ExpandedSeasons({ seasons }: { seasons: number[] }) {
   if (seasons.length === 0) return <span className="text-[11px] text-on-surface/75">Pilot-only</span>;
   return (
     <span className="flex items-center gap-1 text-[11px] font-bold text-success">
-      <Layers size={11} /> S{seasons.join(", S")} expanded
+      <Layers size={11} /> {seasons.length} expanded
     </span>
   );
 }
@@ -28,12 +23,19 @@ export function ExpandedSeasons({ seasons }: { seasons: number[] }) {
 /** The centred pill a PosterTile can show over the top of the artwork. */
 export function PosterTileBadge({ children }: { children: ReactNode }) {
   return (
-    <div className="absolute left-1/2 top-2 z-[1] inline-flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-success/45 bg-success/20 px-2 py-0.5 text-[11px] font-extrabold text-on-surface shadow-lg backdrop-blur-sm">
+    <div className="absolute left-1/2 top-2 z-[1] inline-flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-success/40 bg-background/85 px-2 py-0.5 text-[11px] font-extrabold text-success shadow-lg backdrop-blur-md">
       {children}
     </div>
   );
 }
 
+/**
+ * The poster tile used everywhere a show is shown as artwork — the Shows grid and the
+ * Dashboard strip. Shared so the two can't drift: same aspect, border, hover lift, and
+ * the same gradient-plus-detail overlay that fades in on hover (and is always visible on
+ * touch, where there is no hover). `topBadge` stays visible without hovering, for the one
+ * thing you need to compare across the whole grid at a glance.
+ */
 export function PosterTile({ show, to, state, topBadge, children }: {
   show: Pick<ShowListItem, "title" | "posterUrl">;
   to: string;

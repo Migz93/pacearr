@@ -118,7 +118,7 @@ test("history import batches events outside the activity window while still appl
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   db.updateAppSettings({ dryRun: false, viewerActivityWindowDays: 30 });
   const [user] = db.upsertUsers([{ plexUserId: "plex-batch", plexAccountId: "1", tautulliUserId: null, username: "batchuser", displayName: "Batch User", avatarUrl: null }]);
-  db.updateUser(user!.id, { enabled: true, tautulliUserId: null });
+  db.updateUser(user!.id, { enabled: true });
 
   const series: SonarrSeries = {
     id: 950,
@@ -239,7 +239,7 @@ test("a returning active viewer clears an inactive season's cleanup timer", asyn
   try {
     db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
     const [user] = db.upsertUsers([{ plexUserId: "plex-delay", plexAccountId: "delay", tautulliUserId: null, username: "delay", displayName: "Delay", avatarUrl: null }]);
-    db.updateUser(user.id, { enabled: true, tautulliUserId: null });
+    db.updateUser(user.id, { enabled: true });
     const rolling = db.upsertRollingShow({ id: 903, title: series.title });
     db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
     db.markSeasonInactive(rolling.id, 1, "2026-01-01T00:00:00.000Z");
@@ -281,7 +281,7 @@ test("full history reconciliation leaves incremental source cursors unchanged", 
 test("enrolling a show seeds rolling progress from watch history that was already matched before enrollment", async () => {
   const { db, services, cleanup } = createHarness();
   const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null }]);
-  db.updateUser(user.id, { enabled: true, tautulliUserId: null });
+  db.updateUser(user.id, { enabled: true });
 
   const fringe: SonarrSeries = { id: 800, title: "Fringe", year: 2008, seasons: [] };
   const restoreFetch = installFetchStub({ seriesById: { 800: fringe } });
@@ -550,7 +550,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
   // but season 2 is retained. Smaller savings than A.
   db.upsertUsers([{ plexUserId: "plex-2", plexAccountId: "2", tautulliUserId: null, username: "carol", displayName: "Carol", avatarUrl: null }]);
   const user = db.listUsers().find((candidate) => candidate.username === "carol")!;
-  db.updateUser(user.id, { enabled: true, tautulliUserId: null });
+  db.updateUser(user.id, { enabled: true });
   const showB: SonarrSeries = {
     id: 600,
     title: "Continuum",
@@ -578,7 +578,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
   // Candidate C: fully retained already (single season, actively watched) — should be excluded entirely.
   db.upsertUsers([{ plexUserId: "plex-3", plexAccountId: "3", tautulliUserId: null, username: "dave", displayName: "Dave", avatarUrl: null }]);
   const user2 = db.listUsers().find((candidate) => candidate.username === "dave")!;
-  db.updateUser(user2.id, { enabled: true, tautulliUserId: null });
+  db.updateUser(user2.id, { enabled: true });
   const showC: SonarrSeries = {
     id: 650,
     title: "Firefly",

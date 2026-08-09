@@ -27,7 +27,7 @@ const TABS: { id: ShowsTab; label: string }[] = [
 
 const SORT_MODES: SortMode[] = ["title-asc", "title-desc", "size-desc", "size-asc"];
 
-// Recommendations/Ignored are led by projected savings (see TAB_CAPTIONS), not raw size on
+// Recommendations/Ignored are led by projected savings, not raw size on
 // disk, so the "size" sort modes rank by that metric there — labeled "Savings" rather than
 // "Size" so the control doesn't imply it matches the "Size on disk" column shown in-list.
 const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
@@ -63,16 +63,6 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
   const cmp = sizeOf(a) - sizeOf(b);
   return sort === "size-asc" ? cmp : -cmp;
 }
-
-// Page headers carry no subtitle (see components/Page.tsx), so the per-tab explanation
-// sits under the tab bar instead — where it describes the tab you just clicked rather
-// than the page as a whole.
-const TAB_CAPTIONS: Record<ShowsTab, string> = {
-  enrolled: "Shows Pacearr is managing, trimmed back to what someone is actually watching.",
-  recommendations: "Shows you haven't enrolled yet, ranked by how much space enrolling would free up.",
-  ignored: "Recommendations you've chosen to hide.",
-  sonarr: "Everything in your Sonarr library, enrolled or not.",
-};
 
 const PAGE_SIZE = 24;
 
@@ -285,7 +275,6 @@ function ShowsBrowser() {
           </button>
         ))}
       </fieldset>
-      <p className="mt-2.5 text-xs text-on-surface-variant">{TAB_CAPTIONS[tab]}</p>
       <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />

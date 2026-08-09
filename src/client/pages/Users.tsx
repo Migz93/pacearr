@@ -4,10 +4,10 @@ import { Link } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { formatRelativeTime } from "../lib/utils";
 import { Avatar } from "../components/Avatar";
-import { Field, TextInput, ToggleField } from "../components/FormControls";
+import { ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
-import type { SettingsResponse, UserListItem, UserShowActivity } from "../../shared/types";
+import type { UserListItem, UserShowActivity } from "../../shared/types";
 
 const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
 const compactPrimaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface";
@@ -22,7 +22,6 @@ export default function Users() {
   const [disabledOpen, setDisabledOpen] = useState(false);
   const [showsUserId, setShowsUserId] = useState<number | null>(null);
   const [editUserId, setEditUserId] = useState<number | null>(null);
-  const [tautulliEnabled, setTautulliEnabled] = useState(false);
 
   // Three sections, not two. "Active" is an enabled viewer who is currently keeping at
   // least one show expanded — the people whose switch actually has an effect right now.
@@ -44,14 +43,6 @@ export default function Users() {
     }
   }
   useEffect(() => { void load(); }, []);
-
-  // The Tautulli link control only makes sense when the integration is on, and this page
-  // is the only place a viewer can be matched to their Tautulli account.
-  useEffect(() => {
-    void apiGet<SettingsResponse>("/api/settings")
-      .then((settings) => setTautulliEnabled(settings.tautulli.enabled))
-      .catch(() => setTautulliEnabled(false));
-  }, []);
 
   async function discover() {
     try {
@@ -137,7 +128,7 @@ export default function Users() {
       </div>
 
       {showsUser && <UserShowsDialog user={showsUser} onClose={() => setShowsUserId(null)} />}
-      {editUser && <UserEditDialog user={editUser} tautulliEnabled={tautulliEnabled} onClose={() => setEditUserId(null)} onSaved={load} />}
+      {editUser && <UserEditDialog user={editUser} onClose={() => setEditUserId(null)} onSaved={load} />}
     </Page>
   );
 }
@@ -228,14 +219,12 @@ function UserCard({
   );
 }
 
-function UserEditDialog({ user, tautulliEnabled, onClose, onSaved }: {
+function UserEditDialog({ user, onClose, onSaved }: {
   user: UserListItem;
-  tautulliEnabled: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [enabled, setEnabled] = useState(user.enabled);
-  const [tautulliUserId, setTautulliUserId] = useState(user.tautulliUserId ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useDialogA11y<HTMLDivElement>(true, onClose);
@@ -244,7 +233,7 @@ function UserEditDialog({ user, tautulliEnabled, onClose, onSaved }: {
     setSaving(true);
     setError(null);
     try {
-      await apiPatch(`/api/users/${user.id}`, { enabled, tautulliUserId: tautulliUserId.trim() || null });
+      await apiPatch(`/api/users/${user.id}`, { enabled });
       await onSaved();
       onClose();
     } catch (caught) {
@@ -264,13 +253,6 @@ function UserEditDialog({ user, tautulliEnabled, onClose, onSaved }: {
           checked={enabled}
           onChange={setEnabled}
         />
-        {/* Tautulli history is matched by username first, so this is normally empty and
-            that's fine. It only earns its keep when the two usernames differ. */}
-        {tautulliEnabled && (
-          <Field label="Tautulli user ID" hint="Only needed if this person's Tautulli username differs from their Plex one. Left empty, Pacearr matches them by username.">
-            <TextInput className="w-40" value={tautulliUserId} onChange={setTautulliUserId} placeholder="e.g. 12345" />
-          </Field>
-        )}
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <button type="button" className={compactSecondaryButton} onClick={onClose}>Cancel</button>

@@ -1185,7 +1185,7 @@ export class PacearrServices {
         const tautulliEvents = await new TautulliIntegration(tautulliSettings, this.logger).getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         for (const event of tautulliEvents) {
-          const user = this.db.findUserByTautulliId(event.userId, event.username);
+          const user = this.db.findUserByTautulliName(event.username);
           const series = await this.matchSeries(event, seriesIndex);
           prepared.push({
             input: {

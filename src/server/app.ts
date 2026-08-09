@@ -515,8 +515,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ shows: services.listShowsDrivenByUser(Number(req.params.id)) });
   });
   app.patch("/api/users/:id", requireAuth, (req, res) => {
-    const user = db.updateUser(Number(req.params.id), req.body as { enabled?: boolean; tautulliUserId?: string | null });
-    logger.info("User settings updated", { userId: user.id, enabled: user.enabled, tautulliLinked: Boolean(user.tautulliUserId) });
+    const user = db.updateUser(Number(req.params.id), { enabled: Boolean((req.body as { enabled?: boolean }).enabled) });
+    logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });
   });
 

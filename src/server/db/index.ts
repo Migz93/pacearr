@@ -428,11 +428,11 @@ export class PacearrDatabase {
     return (this.db.prepare("SELECT * FROM users WHERE enabled = 1 ORDER BY display_name").all() as any[]).map(userFromRow);
   }
 
-  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled" | "tautulliUserId">>): UserRecord {
+  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled">>): UserRecord {
     const current = this.getUser(id);
     if (!current) throw new Error("User not found");
-    this.db.prepare("UPDATE users SET enabled = ?, tautulli_user_id = ?, updated_at = ? WHERE id = ?")
-      .run(patch.enabled ?? current.enabled ? 1 : 0, patch.tautulliUserId ?? current.tautulliUserId, now(), id);
+    this.db.prepare("UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?")
+      .run((patch.enabled ?? current.enabled) ? 1 : 0, now(), id);
     return this.getUser(id)!;
   }
 
@@ -469,10 +469,16 @@ export class PacearrDatabase {
     `).all(userId) as Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }>;
   }
 
-  findUserByTautulliId(tautulliUserId?: string | null, username?: string | null): UserRecord | null {
-    let row: any;
-    if (tautulliUserId) row = this.db.prepare("SELECT * FROM users WHERE tautulli_user_id = ?").get(tautulliUserId);
-    if (!row && username) row = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?) OR lower(display_name) = lower(?)").get(username, username);
+  /**
+   * Tautulli takes its users from Plex, so the name it reports is the Plex username or
+   * the Plex title (its friendly-name default) — both of which are what discovery already
+   * stored. This used to check a `tautulli_user_id` column first, but nothing ever
+   * populated it: discovery inserts NULL and there was no UI to set one, so that branch
+   * could never match. The column is left in place rather than migrated away.
+   */
+  findUserByTautulliName(username?: string | null): UserRecord | null {
+    if (!username) return null;
+    const row = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?) OR lower(display_name) = lower(?)").get(username, username);
     return row ? userFromRow(row) : null;
   }
 
