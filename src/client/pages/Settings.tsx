@@ -134,6 +134,26 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         setError("Early prefetch values must be positive whole numbers.");
         return;
       }
+      // The server clamps every one of these to a safe value regardless (see
+      // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
+      // without this check it fails silently: the field just snaps to the clamped number
+      // after the save completes, with no indication anything was wrong.
+      if (!Number.isInteger(form.viewerActivityWindowDays) || form.viewerActivityWindowDays < 1) {
+        setError("Viewer activity window must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(form.historyRetentionDays) || form.historyRetentionDays < 1) {
+        setError("History retention must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(form.progressiveCleanupDelayDays) || form.progressiveCleanupDelayDays < 0) {
+        setError("Cleanup delay must be a whole number of days, zero or more.");
+        return;
+      }
+      if (!Number.isFinite(form.recommendationMinimumSavingsGb) || form.recommendationMinimumSavingsGb < 0) {
+        setError("Minimum savings must be zero or more.");
+        return;
+      }
       // Only the fields this tab owns. Spreading the whole form would PATCH back the
       // job intervals as they were when the tab loaded, silently undoing a schedule
       // changed on the Jobs tab in the meantime.
@@ -317,7 +337,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setTestResult(null);
     try {
       const result = await apiPost<{ ok: boolean; message?: string; error?: string }>("/api/settings/plex/test", buildPayload());
-      setTestResult({ ok: true, message: result.message ?? "Test Succeeded" });
+      setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
     } finally {

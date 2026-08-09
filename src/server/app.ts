@@ -523,9 +523,15 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // updateUser on every call, including a body that never mentioned it — silently
     // disabling the user instead of leaving them as they were. Only pass `enabled`
     // through when the request actually included it, so updateUser's own
-    // patch.enabled ?? current.enabled can do its job.
+    // patch.enabled ?? current.enabled can do its job. And Boolean(value) on a value
+    // that IS present would accept any truthy non-boolean ("no", {}, ...) as true, so a
+    // present field must be an actual boolean rather than merely coerced.
     const body = req.body as { enabled?: unknown };
-    const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {};
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be a boolean." });
+      return;
+    }
+    const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: body.enabled } : {};
     const user = db.updateUser(Number(req.params.id), patch);
     logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });

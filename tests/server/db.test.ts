@@ -31,6 +31,45 @@ function backdateHistoryEvent(dir: string, title: string, createdAt: string) {
   raw.close();
 }
 
+test("findUserByTautulliName prefers an exact username match and refuses to guess between ambiguous display names", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // username has no uniqueness constraint in the schema, and display_name even less
+    // so — Plex Home profiles commonly share generic names. A bare OR query with .get()
+    // would pick an arbitrary row on a tie, silently attributing one person's Tautulli
+    // history to a different Pacearr user.
+    const [alice, bob] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
+    ]);
+
+    // Exact username match wins even when it would also match another user's display name.
+    assert.equal(db.findUserByTautulliName("alice_h")?.id, alice.id);
+    assert.equal(db.findUserByTautulliName("bob_h")?.id, bob.id);
+
+    // Two users share this display name and neither has it as a username — ambiguous,
+    // so the lookup must refuse to guess rather than returning whichever row SQLite
+    // happens to return first.
+    assert.equal(db.findUserByTautulliName("Kid"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName falls back to an unambiguous display name match", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol87", displayName: "Carol", avatarUrl: null },
+    ]);
+    // Tautulli reported "Carol" (a custom friendly name), which matches nobody's username
+    // but exactly one display_name — the case this method exists for.
+    assert.equal(db.findUserByTautulliName("carol")?.id, carol.id);
+  } finally {
+    cleanup();
+  }
+});
+
 test("updateUser with an empty patch preserves the current enabled state", () => {
   const { db, cleanup } = createDb();
   try {
@@ -228,6 +267,40 @@ test("a recommendation cache written in an older field shape is treated as absen
       { sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null, seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0, retainedSeasons: [], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false },
     ]);
     assert.equal(db.getRecommendationCache()?.candidates.length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache missing any field, not just viewers/viewerCount, is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // The guard used to check only the two fields that broke last time (viewers,
+    // viewerCount). A row with those two present but sizeOnDiskBytes missing would have
+    // passed the old check and then crashed formatBytes(undefined) downstream. Same for a
+    // malformed entry nested inside viewers — a real client crash either way.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const missingField = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, retainedSeasons: [], droppedSeasons: [2],
+      viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false,
+      // sizeOnDiskBytes intentionally omitted
+    }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(missingField), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+
+    const raw2 = new Database(path.join(dir, "pacearr.db"));
+    const malformedViewer = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0, retainedSeasons: [], droppedSeasons: [2],
+      viewerCount: 1, viewers: [{ userId: 1, displayName: "Alice" }], // missing enabled, seasonNumber, etc.
+      projectedSavingsBytes: 1, ignored: false,
+    }];
+    raw2.prepare("UPDATE recommendation_cache SET candidates = ? WHERE id = 1").run(JSON.stringify(malformedViewer));
+    raw2.close();
+    assert.equal(db.getRecommendationCache(), null);
   } finally {
     cleanup();
   }

@@ -110,9 +110,39 @@ function bool(value: number | boolean) {
   return value === true || value === 1;
 }
 
+function isCurrentShapeShowUserProgress(candidate: unknown): candidate is ShowUserProgress {
+  const value = candidate as Partial<ShowUserProgress> | null;
+  return Boolean(value)
+    && typeof value?.userId === "number"
+    && typeof value?.displayName === "string"
+    && (value?.avatarUrl === null || typeof value?.avatarUrl === "string")
+    && typeof value?.enabled === "boolean"
+    && typeof value?.seasonNumber === "number"
+    && typeof value?.episodeNumber === "number"
+    && typeof value?.watchedAt === "string";
+}
+
+// Checks every field, not just the ones a past rename happened to touch (viewers/
+// viewerCount, when watchers/watcherCount were renamed) — a guard that only re-validates
+// the one field that broke last time doesn't catch the next rename, and a partial match
+// still crashes the client on whichever field it missed (e.g. formatBytes(undefined)).
 function isCurrentShapeRecommendation(candidate: unknown): candidate is ShowRecommendation {
   const value = candidate as Partial<ShowRecommendation> | null;
-  return Boolean(value) && Array.isArray(value?.viewers) && typeof value?.viewerCount === "number";
+  return Boolean(value)
+    && typeof value?.sonarrSeriesId === "number"
+    && typeof value?.title === "string"
+    && (value?.year === null || typeof value?.year === "number")
+    && (value?.posterUrl === null || typeof value?.posterUrl === "string")
+    && (value?.status === null || typeof value?.status === "string")
+    && typeof value?.seasonCount === "number"
+    && typeof value?.episodeCount === "number"
+    && typeof value?.sizeOnDiskBytes === "number"
+    && Array.isArray(value?.retainedSeasons)
+    && Array.isArray(value?.droppedSeasons)
+    && typeof value?.viewerCount === "number"
+    && Array.isArray(value?.viewers) && value.viewers.every(isCurrentShapeShowUserProgress)
+    && typeof value?.projectedSavingsBytes === "number"
+    && typeof value?.ignored === "boolean";
 }
 
 function userFromRow(row: any): UserRecord {
@@ -481,8 +511,17 @@ export class PacearrDatabase {
    */
   findUserByTautulliName(username?: string | null): UserRecord | null {
     if (!username) return null;
-    const row = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?) OR lower(display_name) = lower(?)").get(username, username);
-    return row ? userFromRow(row) : null;
+    // username has no uniqueness constraint in the schema (only plex_user_id does), and
+    // display_name is even less constrained — Plex Home profiles commonly share generic
+    // names like "Kid". A single OR query with a bare .get() would pick whichever
+    // matching row SQLite returns first, silently misattributing one person's watch
+    // history to a different account when two rows match. Username is checked first and
+    // must match exactly one row; display_name is only trusted as a fallback when it too
+    // is unambiguous, rather than guessing between multiple matches.
+    const usernameMatch = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").get(username);
+    if (usernameMatch) return userFromRow(usernameMatch);
+    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(username);
+    return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
   }
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {

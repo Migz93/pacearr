@@ -77,6 +77,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
 | A legacy `watch_events.reconciled` row still appears under the Sync category | That action stopped being written, but an install that ran an older version can already have rows with it, and dropping it from the category map would make them disappear from the Sync filter |
 | `updateUser` with an empty patch preserves the current enabled state | Locks in the `patch.enabled ?? current.enabled` fallback this layer relies on, independent of whatever the route above it does with an absent field |
+| A recommendation cache missing any field, not just viewers/viewerCount, is treated as absent | The shape guard used to check only the two fields the last rename broke; a row missing a different field (or a malformed nested viewer) would have passed and then crashed the client downstream |
+| `findUserByTautulliName` prefers an exact username match and refuses to guess between ambiguous display names | `username` has no uniqueness constraint and `display_name` even less so — a single OR query with `.get()` would silently attribute one person's Tautulli history to a different Pacearr user on a tie |
+| `findUserByTautulliName` falls back to an unambiguous display name match | The case the fallback exists for — a Tautulli friendly name that matches nobody's username but exactly one display name |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -159,6 +162,7 @@ Read-only. Safe to run against a live instance.
 |---|---|
 | Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
 | PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; runs against live data and restores the original state in a `finally` block |
+| PATCH-ing a user with a non-boolean `enabled` value is rejected, not coerced | `Boolean(...)` also accepted any truthy non-boolean (a string, an object) as `true`; the route now requires an actual boolean whenever the field is present at all |
 
 ### `tests/server/users-activity.test.ts` — Per-user shows dialog activity
 

@@ -31,7 +31,9 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  if (!data) return <Page><PageLoading label="Loading dashboard..." /></Page>;
+  // A failed first load must not loop in "Loading..." forever with no way out — matches
+  // the error-over-loading precedence Shows.tsx's detail view already uses.
+  if (!data) return <Page>{error ? <ErrorBanner message={error} /> : <PageLoading label="Loading dashboard..." />}</Page>;
 
   const attentionJobs = data.jobs.filter((job) => job.running || job.lastRunStatus === "error");
   const shows = data.activeShows.slice(0, POSTER_COUNT);
@@ -116,7 +118,7 @@ function RecentActivity({ events }: { events: HistoryEvent[] }) {
         <div className="grid gap-1.5">
           {events.map((event) => (
             <div className="flex min-w-0 items-center gap-2 text-xs" key={event.id}>
-              <span className={`size-1.5 shrink-0 rounded-full ${event.level === "warn" ? "bg-warning" : "bg-primary"}`} />
+              <span className={`size-1.5 shrink-0 rounded-full ${event.level === "error" ? "bg-error" : event.level === "warn" ? "bg-warning" : "bg-primary"}`} />
               <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{historyActionLabel(event.action)}: {event.title}</span>
               <span className="shrink-0 text-on-surface-variant">{formatRelativeTime(event.createdAt)}</span>
             </div>
@@ -143,7 +145,9 @@ function ShowTile({ show }: { show: DashboardShowActivity }) {
     <PosterTile show={show} to={`/shows/${show.sonarrSeriesId}`} state={{ from: "/dashboard" }}>
       <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{show.title}</strong>
       <ExpandedSeasons seasons={show.expandedSeasons} />
-      {show.lastWatchedAt && show.lastWatchedSeason && show.lastWatchedEpisode ? (
+      {/* Truthiness would treat a watched special (season/episode 0, a legitimate value
+          here — see the `number | null` field type) as absent and misreport no activity. */}
+      {show.lastWatchedAt && show.lastWatchedSeason !== null && show.lastWatchedEpisode !== null ? (
         <>
           <span className="text-[11px] font-bold text-on-surface/75">{show.lastWatcherName ?? "Unknown viewer"} · S{show.lastWatchedSeason}E{show.lastWatchedEpisode}</span>
           <span className="text-[11px] text-on-surface/75">{formatRelativeTime(show.lastWatchedAt)}</span>

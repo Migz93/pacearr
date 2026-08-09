@@ -12,8 +12,12 @@ elements (`body`, `button`, `h1`/`h2`). Form controls (`TextInput`,
 `SelectInput`, `Field`, `ToggleField`, `SectionCard`, `SaveBar`) are shared
 components in `src/client/components/FormControls.tsx`, not global CSS. Page
 layout (`Page`, `PageHeader`, `PageLoading`, `ErrorBanner`) is shared the same
-way in `src/client/components/Page.tsx` — every route renders inside `Page`, so
-container width and heading size are set in one place rather than per page.
+way in `src/client/components/Page.tsx` — every authenticated app route
+(Dashboard, Shows, Users, History, Settings) renders inside `Page`, so container
+width and heading size are set in one place rather than per page. Login, the
+Plex OAuth popup screens, and the top-level bootstrap/loading states in
+`App.tsx` render outside `Page` — they're full-bleed or centred layouts with
+no sidebar, not a page in the shell's sense.
 Status badges use the shared `badgeClass()` helper in `src/client/lib/utils.ts`
 instead of inline colour classes. Raw colour values in component JSX are not
 permitted.

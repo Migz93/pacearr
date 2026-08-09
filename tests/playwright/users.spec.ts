@@ -44,3 +44,22 @@ test("PATCH-ing a user with no enabled field in the body leaves their enabled st
     await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
   }
 });
+
+// Regression test: the fix for the above (only include `enabled` when the body has it)
+// used Boolean(body.enabled) to coerce whatever was present, so a truthy non-boolean —
+// a string, an object — silently enabled the user rather than being rejected. The route
+// now requires an actual boolean when the field is present at all.
+test("PATCH-ing a user with a non-boolean enabled value is rejected, not coerced", async ({ page }) => {
+  await openPage(page, "/users", "Users");
+
+  const listed = await page.request.get("/api/users");
+  const { users } = (await listed.json()) as { users: Array<{ id: number; enabled: boolean }> };
+  const user = users[0]!;
+
+  const patched = await page.request.patch(`/api/users/${user.id}`, { data: { enabled: "not-a-boolean" } });
+  expect(patched.status()).toBe(400);
+
+  const after = await page.request.get("/api/users");
+  const { users: usersAfter } = (await after.json()) as { users: Array<{ id: number; enabled: boolean }> };
+  expect(usersAfter.find((u) => u.id === user.id)?.enabled).toBe(user.enabled);
+});
