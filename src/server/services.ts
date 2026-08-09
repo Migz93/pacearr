@@ -583,8 +583,10 @@ export class PacearrServices {
         this.db.upsertRollingUserProgress(rollingShowId, event.userId, event.seasonNumber, event.episodeNumber, event.watchedAt);
       }
     }
+    // Deliberately logger-only: re-matching stored events is internal bookkeeping that
+    // changes nothing a user can see, and it fired on every enrolment. History is the
+    // record of what Pacearr did to your shows — this belongs in Logs.
     if (matched.length > 0) {
-      this.db.addHistory("info", "watch_events.reconciled", series.title, { seriesId: series.id, matchedEvents: matched.length });
       this.logger.info("Reconciled previously unmatched watch events for enrolled show", { seriesId: series.id, matchedEvents: matched.length });
     }
     return matched.length;
@@ -605,7 +607,6 @@ export class PacearrServices {
       }
     }
     if (matchedCount > 0) {
-      this.db.addHistory("info", "watch_events.reconciled", "Watch event reconciliation", { matchedEvents: matchedCount });
       this.logger.info("Reconciled previously unmatched watch events against full Sonarr series list", { matchedEvents: matchedCount });
     }
     return matchedCount;
@@ -1274,7 +1275,12 @@ export class PacearrServices {
       }, "plex-session", true, episodeCache);
       if (result.changed) changed++;
     }
-    this.db.addHistory("info", "sessions.check", "Plex sessions", { processed: events.length, changed });
+    // This job can run as often as every minute, so an unconditional entry here buried
+    // History under thousands of "processed 0, changed 0" rows. Only a check that moved
+    // someone's progress is worth an audit entry; every run is still logged.
+    if (changed > 0) {
+      this.db.addHistory("info", "sessions.check", "Plex sessions", { processed: events.length, changed });
+    }
     this.logger.info("Plex session check complete", { processed: events.length, changed });
     return { ok: true, message: `Checked ${events.length} active Plex sessions.`, processed: events.length, changed };
   }
@@ -1336,7 +1342,11 @@ export class PacearrServices {
     } else {
       this.logger.debug("No history events old enough to prune", { historyRetentionDays: settings.historyRetentionDays });
     }
-    this.db.addHistory(errors.length ? "warn" : "info", "rolling.reconcile", "Rolling monitoring reconciliation", { changed, enrolledShows: this.db.listRollingShows().length, errors });
+    // Same rule as sessions.check: a six-hourly sweep that changed nothing and hit no
+    // errors is not an audit event.
+    if (changed > 0 || errors.length > 0) {
+      this.db.addHistory(errors.length ? "warn" : "info", "rolling.reconcile", "Rolling monitoring reconciliation", { changed, enrolledShows: this.db.listRollingShows().length, errors });
+    }
     this.logger[errors.length ? "warn" : "info"]("Rolling monitoring reconciliation complete", { changed, errors: errors.length });
     return { ok: errors.length === 0, message: `Reconciled rolling monitoring for enrolled shows.`, changed, errors };
   }
