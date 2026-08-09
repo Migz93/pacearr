@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { badgeClass, formatBytes, formatRelativeTime, titleCaseJob } from "../lib/utils";
 import { historyActionLabel } from "../../shared/history";
-import { PosterTile, PosterTileBadge } from "../components/ShowVisuals";
+import { ExpandedSeasons, PosterTile } from "../components/ShowVisuals";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import type { DashboardResponse, DashboardShowActivity, HistoryEvent, JobInfo } from "../../shared/types";
 
@@ -137,15 +137,12 @@ function JobNotice({ job }: { job: JobInfo }) {
 }
 
 function ShowTile({ show }: { show: DashboardShowActivity }) {
-  const expanded = show.expandedSeasons.length;
   return (
-    <PosterTile
-      show={show}
-      to={`/shows/${show.sonarrSeriesId}`}
-      state={{ from: "/dashboard" }}
-      topBadge={expanded > 0 && <PosterTileBadge><Layers size={12} /> {expanded} expanded</PosterTileBadge>}
-    >
+    // Expanded seasons used to sit in a pill over the artwork, where it was unreadable
+    // against a busy poster. It lives in the hover overlay now, on the dimmed gradient.
+    <PosterTile show={show} to={`/shows/${show.sonarrSeriesId}`} state={{ from: "/dashboard" }}>
       <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{show.title}</strong>
+      <ExpandedSeasons seasons={show.expandedSeasons} />
       {show.lastWatchedAt && show.lastWatchedSeason && show.lastWatchedEpisode ? (
         <>
           <span className="text-[11px] font-bold text-on-surface/75">{show.lastWatcherName ?? "Unknown viewer"} · S{show.lastWatchedSeason}E{show.lastWatchedEpisode}</span>

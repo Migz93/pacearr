@@ -2,7 +2,7 @@ import { HardDrive } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ShowListItem, ShowRecommendation } from "../../shared/types";
 import { badgeClass, formatBytes } from "../lib/utils";
-import { AvatarStack, Poster, PosterTile, PosterTileBadge } from "./ShowVisuals";
+import { AvatarStack, ExpandedSeasons, Poster, PosterTile, PosterTileBadge } from "./ShowVisuals";
 
 export type ShowBrowserItem =
   | { kind: "library"; data: ShowListItem }
@@ -45,6 +45,7 @@ export function ShowCard({ item, returnTo }: { item: ShowBrowserItem; returnTo: 
       <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
       <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
       <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
+      {item.kind === "library" && item.data.enrolled && <ExpandedSeasons seasons={item.data.expandedSeasons} />}
       {common.viewers.length > 0 && <AvatarStack viewers={common.viewers} size={18} />}
     </PosterTile>
   );

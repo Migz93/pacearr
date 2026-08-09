@@ -64,12 +64,14 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
   return sort === "size-asc" ? cmp : -cmp;
 }
 
-// Enrolled and Sonarr are self-explanatory from the tab label; the two recommendation
-// tabs are not, so they keep a caption under the tab bar. Page headers carry no
-// subtitle (see components/Page.tsx), which is why this sits with the tabs instead.
-const TAB_CAPTIONS: Partial<Record<ShowsTab, string>> = {
+// Page headers carry no subtitle (see components/Page.tsx), so the per-tab explanation
+// sits under the tab bar instead — where it describes the tab you just clicked rather
+// than the page as a whole.
+const TAB_CAPTIONS: Record<ShowsTab, string> = {
+  enrolled: "Shows Pacearr is managing, trimmed back to what someone is actually watching.",
   recommendations: "Shows you haven't enrolled yet, ranked by how much space enrolling would free up.",
   ignored: "Recommendations you've chosen to hide.",
+  sonarr: "Everything in your Sonarr library, enrolled or not.",
 };
 
 const PAGE_SIZE = 24;
@@ -283,7 +285,7 @@ function ShowsBrowser() {
           </button>
         ))}
       </fieldset>
-      {TAB_CAPTIONS[tab] && <p className="mt-2.5 text-xs text-on-surface-variant">{TAB_CAPTIONS[tab]}</p>}
+      <p className="mt-2.5 text-xs text-on-surface-variant">{TAB_CAPTIONS[tab]}</p>
       <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />

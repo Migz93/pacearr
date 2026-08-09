@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Layers } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Avatar } from "./Avatar";
 import type { ShowListItem, ShowUserProgress } from "../../shared/types";
@@ -11,6 +12,19 @@ export type ViewerBadge = ShowUserProgress & { isHistory: boolean };
  * the same gradient-plus-detail overlay that fades in on hover (and is always visible on
  * touch, where there is no hover).
  */
+/**
+ * "S2, S5 expanded" for a poster overlay. Shared so the Dashboard strip and the Shows
+ * grid describe expansion the same way; renders nothing for a pilot-only show.
+ */
+export function ExpandedSeasons({ seasons }: { seasons: number[] }) {
+  if (seasons.length === 0) return <span className="text-[11px] text-on-surface/75">Pilot-only</span>;
+  return (
+    <span className="flex items-center gap-1 text-[11px] font-bold text-success">
+      <Layers size={11} /> S{seasons.join(", S")} expanded
+    </span>
+  );
+}
+
 /** The centred pill a PosterTile can show over the top of the artwork. */
 export function PosterTileBadge({ children }: { children: ReactNode }) {
   return (
