@@ -34,6 +34,11 @@ const CATEGORY_BY_ACTION: Record<string, HistoryCategory> = {
   "history.full_reconcile": "sync",
   "sessions.check": "sync",
   "rolling.reconcile": "sync",
+  // Not written any more — see the "only record what changed" note in
+  // docs/jobs-and-history.md — but installs that ran an older version can already have
+  // rows with this action, and they're genuinely sync activity. Mapped so the category
+  // migration doesn't make existing history disappear from the Sync filter.
+  "watch_events.reconciled": "sync",
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -50,6 +55,7 @@ const ACTION_LABELS: Record<string, string> = {
   "history.full_reconcile": "History reconciled",
   "sessions.check": "Plex session",
   "rolling.reconcile": "Reconcile run",
+  "watch_events.reconciled": "Watch events reconciled",
 };
 
 export function isDryRunAction(action: string): boolean {

@@ -264,7 +264,12 @@ export class PacearrServices {
 
   listShowsDrivenByUser(userId: number): UserShowActivity[] {
     const cutoff = this.activityCutoff();
-    return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: show.watchedAt >= cutoff }));
+    // A disabled viewer's watches can't keep anything expanded (every retention
+    // calculation in this file filters on user.enabled), so nothing of theirs can read
+    // as "Active" here regardless of how recent it was — matching countActiveShowsByUser,
+    // which gates the same way for the card this dialog opens from.
+    const enabled = this.db.getUser(userId)?.enabled ?? false;
+    return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: enabled && show.watchedAt >= cutoff }));
   }
 
   private activityCutoff(): string {

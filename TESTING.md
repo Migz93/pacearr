@@ -75,6 +75,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
+| A legacy `watch_events.reconciled` row still appears under the Sync category | That action stopped being written, but an install that ran an older version can already have rows with it, and dropping it from the category map would make them disappear from the Sync filter |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -156,6 +157,13 @@ Read-only. Safe to run against a live instance.
 | Test | What it checks |
 |---|---|
 | Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
+
+### `tests/server/users-activity.test.ts` — Per-user shows dialog activity
+
+| Test | What it checks |
+|---|---|
+| The shows-driven-by-user dialog reports nothing as active for a disabled viewer, even a recent watch | Must agree with the card's `activeShowCount` — a disabled viewer's watches can't keep anything expanded, so the dialog can't show the same shows as "Active" that the card just called inactive |
+| The shows-driven-by-user dialog reports a recent watch as active for an enabled viewer | The positive case, so the negative one above is checking a real gate and not a query that always returns false |
 
 ### `tests/playwright/history.spec.ts` — History filters
 

@@ -257,6 +257,21 @@ test("a history category filter matches an action and its dry-run twin, and noth
   }
 });
 
+test("a legacy watch_events.reconciled row, from before that action stopped being written, still appears under the Sync category", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Nothing writes this action any more (see history-noise.test.ts), but an install
+    // that ran an older version can already have rows with it, and it was always sync
+    // activity — dropping it from CATEGORY_BY_ACTION would make those existing rows
+    // disappear from the Sync filter, not just stop new ones from being added.
+    db.addHistory("info", "watch_events.reconciled", "Reconciled", { matchedEvents: 2 });
+    const sync = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "sync" });
+    assert.deepEqual(sync.results.map((event) => event.title), ["Reconciled"]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("pruning history events by retention only removes events older than the cutoff, and leaves watch_events/reclaimed_storage_events alone", () => {
   const { db, dir, cleanup } = createDb();
   try {
