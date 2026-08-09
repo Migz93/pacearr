@@ -74,6 +74,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
+| A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -149,6 +150,12 @@ Read-only. Safe to run against a live instance.
 |---|---|
 | Shows tabs and filters render | Enrolled, Recommendations, Ignored, Sonarr, and the sort control render |
 | Shows tab updates the URL | Selecting Recommendations writes `?tab=recommendations` |
+
+### `tests/playwright/users.spec.ts` — Users API shape
+
+| Test | What it checks |
+|---|---|
+| Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
 
 ### `tests/playwright/history.spec.ts` — History filters
 

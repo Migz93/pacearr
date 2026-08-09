@@ -507,9 +507,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ users: await services.listUsers() });
   }));
   app.post("/api/users/discover", requireAuth, asyncRoute(async (_req, res) => {
-    const users = await services.discoverPlexUsers();
-    logger.info("Plex user discovery requested", { users: users.length });
-    res.json({ users });
+    const discovered = await services.discoverPlexUsers();
+    logger.info("Plex user discovery requested", { users: discovered.length });
+    // discoverPlexUsers returns the raw UserRecord shape; the client needs the
+    // UserListItem shape (activeShowCount, lastWatchedAt) it renders. Re-fetch through
+    // listUsers rather than adding those fields to discovery's own return, so there is
+    // one place that computes per-user activity.
+    res.json({ users: await services.listUsers() });
   }));
   app.get("/api/users/:id/shows", requireAuth, (req, res) => {
     res.json({ shows: services.listShowsDrivenByUser(Number(req.params.id)) });

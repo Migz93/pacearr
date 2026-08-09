@@ -242,7 +242,10 @@ export class PacearrDatabase {
       { candidates: string; generated_at: string } | undefined;
     if (!row) return null;
     const candidates = parseJson<ShowRecommendation[]>(row.candidates, []);
-    if (!candidates.every(isCurrentShapeRecommendation)) return null;
+    // parseJson only guards against invalid JSON syntax, not against valid JSON that
+    // isn't an array (e.g. a legacy shape that stored an object) — .every() would throw
+    // on that rather than falling through to the shape check below.
+    if (!Array.isArray(candidates) || !candidates.every(isCurrentShapeRecommendation)) return null;
     return { candidates, generatedAt: row.generated_at };
   }
 
@@ -713,12 +716,17 @@ export class PacearrDatabase {
    */
   countActiveShowsByUser(activeSince: string): Map<number, { activeShowCount: number; lastWatchedAt: string | null }> {
     // The count is windowed but the timestamp deliberately is not: a viewer who has gone
-    // quiet should still show when they were last seen, not "never".
+    // quiet should still show when they were last seen, not "never". The count is also
+    // conditioned on the user still being enabled — a disabled viewer's watches don't
+    // keep anything expanded (see the `.enabled` filters throughout the retention
+    // calculation in services.ts), so counting them here would show "N shows active" for
+    // someone whose switch has no effect on any of them.
     const rows = this.db.prepare(`
       SELECT rsu.user_id AS userId,
-        SUM(CASE WHEN rsu.last_watched_at >= ? THEN 1 ELSE 0 END) AS activeShowCount,
+        SUM(CASE WHEN rsu.last_watched_at >= ? AND users.enabled = 1 THEN 1 ELSE 0 END) AS activeShowCount,
         MAX(rsu.last_watched_at) AS lastWatchedAt
       FROM rolling_show_users rsu
+      JOIN users ON users.id = rsu.user_id
       GROUP BY rsu.user_id
     `).all(activeSince) as Array<{ userId: number; activeShowCount: number; lastWatchedAt: string | null }>;
     return new Map(rows.map((row) => [row.userId, { activeShowCount: row.activeShowCount, lastWatchedAt: row.lastWatchedAt }]));

@@ -169,6 +169,30 @@ test("per-user activity windows the show count but not the last-watched timestam
   }
 });
 
+test("a disabled user's recent watch does not count as an active show, but still counts as last watched", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // A disabled viewer's progress can't keep a season expanded — every retention
+    // calculation in services.ts filters on user.enabled — so counting their shows as
+    // "active" here would claim an effect the switch doesn't actually have.
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol", displayName: "Carol", avatarUrl: null },
+    ]);
+    db.updateUser(carol.id, { enabled: false });
+    const show = db.upsertRollingShow({ id: 12, title: "Deadwood" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.upsertRollingUserProgress(show.id, carol.id, 1, 1, recent);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    assert.equal(activity.get(carol.id)?.activeShowCount, 0);
+    assert.equal(activity.get(carol.id)?.lastWatchedAt, recent);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a recommendation cache written in an older field shape is treated as absent", () => {
   const { db, dir, cleanup } = createDb();
   try {
