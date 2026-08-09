@@ -684,6 +684,39 @@ export class PacearrDatabase {
     `).get(rollingShowId, userId) as RollingShowUserRecord | null;
   }
 
+  /**
+   * Per-user answer to "what is this person keeping expanded?" — the count of enrolled
+   * shows where they are still an active viewer, plus when they last watched anything.
+   * Every enabled viewer inside the activity window is a reason some season stays on
+   * disk, which is what makes the enable/disable switch on the Users page meaningful.
+   */
+  countActiveShowsByUser(activeSince: string): Map<number, { activeShowCount: number; lastWatchedAt: string | null }> {
+    // The count is windowed but the timestamp deliberately is not: a viewer who has gone
+    // quiet should still show when they were last seen, not "never".
+    const rows = this.db.prepare(`
+      SELECT rsu.user_id AS userId,
+        SUM(CASE WHEN rsu.last_watched_at >= ? THEN 1 ELSE 0 END) AS activeShowCount,
+        MAX(rsu.last_watched_at) AS lastWatchedAt
+      FROM rolling_show_users rsu
+      GROUP BY rsu.user_id
+    `).all(activeSince) as Array<{ userId: number; activeShowCount: number; lastWatchedAt: string | null }>;
+    return new Map(rows.map((row) => [row.userId, { activeShowCount: row.activeShowCount, lastWatchedAt: row.lastWatchedAt }]));
+  }
+
+  listShowsDrivenByUser(userId: number): Array<{ sonarrSeriesId: number; title: string; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
+    return this.db.prepare(`
+      SELECT rs.sonarr_series_id AS sonarrSeriesId,
+        rs.title,
+        rsu.last_watched_season AS seasonNumber,
+        rsu.last_watched_episode AS episodeNumber,
+        rsu.last_watched_at AS watchedAt
+      FROM rolling_show_users rsu
+      JOIN rolling_shows rs ON rs.id = rsu.rolling_show_id
+      WHERE rsu.user_id = ?
+      ORDER BY rsu.last_watched_at DESC
+    `).all(userId) as Array<{ sonarrSeriesId: number; title: string; seasonNumber: number; episodeNumber: number; watchedAt: string }>;
+  }
+
   listLatestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
     const filter = since ? "AND we.watched_at >= ?" : "";
     const values = since ? [sonarrSeriesId, since] : [sonarrSeriesId];

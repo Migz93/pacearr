@@ -241,6 +241,11 @@ function ShowsBrowser() {
     [items]
   );
 
+  const totalSizeOnDiskBytes = useMemo(
+    () => items.reduce((sum, item) => sum + (item.kind === "library" ? item.data.sizeOnDiskBytes : 0), 0),
+    [items]
+  );
+
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
   const visibleItems = sorted.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -299,12 +304,19 @@ function ShowsBrowser() {
           </button>
         </div>
       </div>
-      {isRecommendationTab && !loading && items.length > 0 && (
+      {!loading && items.length > 0 && (isRecommendationTab ? (
         <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
-          <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5"><span className="text-xs font-bold text-on-surface-variant">Candidates</span><strong>{items.length}</strong></div>
-          <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5"><span className="text-xs font-bold text-on-surface-variant">Potential Savings</span><strong>{formatBytes(totalSavingsBytes)}</strong></div>
+          <SummaryChip label="Candidates" value={items.length} />
+          <SummaryChip label="Potential savings" value={formatBytes(totalSavingsBytes)} />
         </div>
-      )}
+      ) : tab === "enrolled" && (
+        // The tab people live on had no summary at all, while the two recommendation
+        // tabs did. Both numbers are already in the list response.
+        <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
+          <SummaryChip label="Enrolled shows" value={items.length} />
+          <SummaryChip label="Size on disk" value={formatBytes(totalSizeOnDiskBytes)} />
+        </div>
+      ))}
       {loading ? (
         <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
@@ -341,6 +353,15 @@ function ShowsBrowser() {
       )}
       {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} trigger={addTriggerRef.current} />}
     </Page>
+  );
+}
+
+function SummaryChip({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5">
+      <span className="text-xs font-bold text-on-surface-variant">{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -481,8 +502,8 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
           <p className="text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"} · {show.episodeCount} episodes · {show.status ?? "unknown status"}</p>
           {detail.recommendation && (
             <div className="mt-0.5 flex gap-2.5 max-[820px]:flex-col">
-              <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5"><span className="text-xs font-bold text-on-surface-variant">Size on disk</span><strong>{formatBytes(detail.recommendation.sizeOnDiskBytes)}</strong></div>
-              <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5"><span className="text-xs font-bold text-on-surface-variant">Projected savings if enrolled</span><strong>{formatBytes(detail.recommendation.projectedSavingsBytes)}</strong></div>
+              <SummaryChip label="Size on disk" value={formatBytes(detail.recommendation.sizeOnDiskBytes)} />
+              <SummaryChip label="Savings if enrolled" value={formatBytes(detail.recommendation.projectedSavingsBytes)} />
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -492,9 +513,6 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                   type="button"
                   className={dangerButton}
                   disabled={busy}
-                  title={detail.dryRunPreview.enabled
-                    ? "Dry run: previews resetting the show to first-episode-only monitoring for every season. No Sonarr changes or file deletions are made."
-                    : "Resets the show to first-episode-only monitoring for every season and clears its expanded-season progress. Excess episode files may be deleted if deletion is enabled in Settings."}
                   onClick={() => runAction(() => apiPost(`/api/rolling-shows/${show.rollingShowId}/reset`))}
                 >
                   <RotateCcw size={15} /> Reset
@@ -503,7 +521,6 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                   type="button"
                   className={dangerButton}
                   disabled={busy}
-                  title="Stops Pacearr from managing this show and removes its stored rolling progress. It does not delete media or undo the show's current Sonarr monitoring state."
                   onClick={() => runAction(() => apiDelete(`/api/rolling-shows/${show.rollingShowId}`))}
                 >
                   <Trash2 size={15} /> Unenroll
@@ -512,7 +529,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
             ) : (
               <>
                 <button type="button" className={primaryButton} disabled={busy} onClick={() => void enroll()}>
-                  Enroll in rolling episodes
+                  Enroll show
                 </button>
                 {detail.recommendation && (detail.recommendation.eligible || detail.recommendation.ignored) && (
                   <button
@@ -530,13 +547,22 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             )}
           </div>
+          {/* These two used to be title= tooltips of two long paragraphs each, which is
+              the one place a destructive action's consequences must not hide. */}
+          {show.enrolled && show.rollingShowId && (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {detail.dryRunPreview.enabled
+                ? "Dry run is on, so both actions are previewed only."
+                : "Reset trims every season back to its first episode and can delete the extra files. Unenroll only stops Pacearr managing the show — nothing is deleted."}
+            </p>
+          )}
         </div>
       </section>
       <section className="rounded-xl border border-outline-variant/30 bg-background-container p-[18px]">
         <div className="mb-1 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="font-headline mb-1 text-lg font-semibold">Seasons</h2>
-            <p className="text-on-surface-variant">Expand a season to review its episodes, who's watching, and current vs. intended Sonarr monitoring state.</p>
+            <p className="text-on-surface-variant">Expand a season to see its episodes, who's watching, and what Pacearr will change in Sonarr.</p>
           </div>
           <ToggleField label="Show inactive viewers" checked={showHistoryViewers} onChange={setShowHistoryViewers} />
         </div>

@@ -137,6 +137,38 @@ test("season inactivity timestamps persist until a viewer returns or the season 
   }
 });
 
+test("per-user activity windows the show count but not the last-watched timestamp", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice, bob] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
+    ]);
+    const fringe = db.upsertRollingShow({ id: 10, title: "Fringe" });
+    const wire = db.upsertRollingShow({ id: 11, title: "The Wire" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    db.upsertRollingUserProgress(fringe.id, alice.id, 2, 4, recent);
+    db.upsertRollingUserProgress(wire.id, alice.id, 1, 1, old);
+    db.upsertRollingUserProgress(fringe.id, bob.id, 1, 3, old);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    // Alice drives one show inside the window, but her other, older watch still counts
+    // toward "last watched" — a quiet viewer shows when they were last seen, not "never".
+    assert.equal(activity.get(alice.id)?.activeShowCount, 1);
+    assert.equal(activity.get(alice.id)?.lastWatchedAt, recent);
+    assert.equal(activity.get(bob.id)?.activeShowCount, 0);
+    assert.equal(activity.get(bob.id)?.lastWatchedAt, old);
+
+    assert.deepEqual(db.listShowsDrivenByUser(alice.id).map((show) => show.title), ["Fringe", "The Wire"]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("history supports filtered server-side pagination", () => {
   const { db, cleanup } = createDb();
   try {

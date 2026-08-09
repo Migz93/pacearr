@@ -13,6 +13,8 @@ import type {
   SonarrLibraryCacheItem,
   RollingShowRecord,
   SonarrSeries,
+  UserListItem,
+  UserShowActivity,
 } from "../shared/types.js";
 import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
@@ -245,14 +247,28 @@ export class PacearrServices {
     return storedUsers;
   }
 
-  async listUsers() {
+  async listUsers(): Promise<UserListItem[]> {
     const users = this.db.listUsers();
     await Promise.all(users.map(async (user) => {
       if (!user.avatarUrl || user.avatarUrl.startsWith("/images/")) return;
       const cached = await this.imageCache.ensureAvatarCached(user.plexUserId, user.avatarUrl);
       if (cached) this.db.updateUserAvatarUrl(user.id, cached);
     }));
-    return this.db.listUsers();
+    const activity = this.db.countActiveShowsByUser(this.activityCutoff());
+    return this.db.listUsers().map((user) => ({
+      ...user,
+      activeShowCount: activity.get(user.id)?.activeShowCount ?? 0,
+      lastWatchedAt: activity.get(user.id)?.lastWatchedAt ?? null,
+    }));
+  }
+
+  listShowsDrivenByUser(userId: number): UserShowActivity[] {
+    const cutoff = this.activityCutoff();
+    return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: show.watchedAt >= cutoff }));
+  }
+
+  private activityCutoff(): string {
+    return new Date(Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
   }
 
   listShows(options: { enrolledOnly?: boolean; query?: string } = {}): ShowListItem[] {

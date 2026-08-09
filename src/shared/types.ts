@@ -148,6 +148,24 @@ export interface UserRecord {
   lastSeenAt: string | null;
 }
 
+/** A user plus the activity the Users page shows. UserRecord stays the raw row shape. */
+export interface UserListItem extends UserRecord {
+  /** Enrolled shows this viewer is currently keeping expanded. */
+  activeShowCount: number;
+  /** Most recent watch on any enrolled show, regardless of the activity window. */
+  lastWatchedAt: string | null;
+}
+
+export interface UserShowActivity {
+  sonarrSeriesId: number;
+  title: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  watchedAt: string;
+  /** False once the watch falls outside the viewer activity window. */
+  active: boolean;
+}
+
 export interface SonarrSeries {
   id: number;
   title: string;
