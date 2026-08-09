@@ -83,8 +83,6 @@ export interface AppSettings {
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
-  inactivityResetDays: number;
-  autoResetEnabled: boolean;
   progressiveCleanupEnabled: boolean;
   progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;

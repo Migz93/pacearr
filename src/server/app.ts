@@ -139,23 +139,23 @@ function buildPlexSettingsFromPayload(token: string, payload: PlexConfigPayload 
 
 const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings: AppSettings) => string; nextRunLabel?: string }> = {
   "session-check": {
-    name: "Plex Session Check",
+    name: "Plex session check",
     intervalDescription: (settings) => `Every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
   "history-import": {
-    name: "History Import",
+    name: "History import",
     intervalDescription: (settings) => `Every ${settings.historyImportIntervalHours} hour${settings.historyImportIntervalHours !== 1 ? "s" : ""}`,
   },
   "full-history-reconcile": {
-    name: "Full History Reconciliation",
+    name: "Full history reconciliation",
     intervalDescription: () => "Every 30 days",
   },
   "rolling-reconcile": {
-    name: "Rolling Monitoring Reconciliation",
+    name: "Rolling reconciliation",
     intervalDescription: () => "Every 6 hours",
   },
   "recommendation-refresh": {
-    name: "Sonarr Library & Recommendation Refresh",
+    name: "Sonarr library refresh",
     intervalDescription: () => "Every 6 hours",
   },
 };
@@ -377,7 +377,6 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
-    if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);

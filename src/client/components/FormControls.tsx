@@ -82,11 +82,43 @@ export function ToggleField({ label, hint, checked, onChange }: { label: string;
   );
 }
 
-export function SaveBar({ saving, success, error, label, onSave }: { saving: boolean; success: boolean; error: string | null; label: string; onSave: () => void }) {
+export interface TestConnectionState {
+  testing: boolean;
+  disabled: boolean;
+  result: { ok: boolean; message: string } | null;
+  onTest: () => void;
+}
+
+/**
+ * The footer for every settings form. The three integration tabs used to hand-roll this
+ * markup and had drifted apart (only one of them had a chevron on its save button), so
+ * the optional connection test lives here too rather than in each tab.
+ */
+export function SaveBar({ saving, success, error, label, onSave, test, saveDisabled = false, divider = true }: {
+  saving: boolean;
+  success: boolean;
+  error: string | null;
+  label: string;
+  onSave: () => void;
+  test?: TestConnectionState;
+  saveDisabled?: boolean;
+  /** Off when the bar is its own card rather than the last row inside one. */
+  divider?: boolean;
+}) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-      <div aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</div>
-      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving} aria-busy={saving} onClick={onSave}>
+    <div className={cn("flex flex-wrap items-center justify-between gap-4 max-[820px]:flex-col max-[820px]:items-stretch", divider && "border-t border-outline-variant/30 pt-4")}>
+      <div className="flex flex-wrap items-center gap-2">
+        {test && (
+          <>
+            <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={test.testing || test.disabled} onClick={test.onTest}>
+              {test.testing ? "Testing..." : "Test connection"}
+            </button>
+            <span aria-live="polite">{test.result && <span className={`text-[13px] font-bold ${test.result.ok ? "text-success" : "text-error"}`}>{test.result.message}</span>}</span>
+          </>
+        )}
+        <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
+      </div>
+      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving || saveDisabled} aria-busy={saving} onClick={onSave}>
         {saving ? "Saving..." : label}
         {!saving && <ChevronRight size={15} />}
       </button>

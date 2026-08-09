@@ -48,8 +48,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 5,
   historyImportIntervalHours: 24,
-  inactivityResetDays: 7,
-  autoResetEnabled: true,
   progressiveCleanupEnabled: true,
   progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
