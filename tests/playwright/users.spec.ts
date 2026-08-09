@@ -20,3 +20,27 @@ test("discovering users returns the same per-user activity fields as the users l
     expect(typeof (user as { activeShowCount: unknown }).activeShowCount).toBe("number");
   }
 });
+
+// Regression test: PATCH /api/users/:id used to wrap the request body's `enabled` field
+// in Boolean(...) unconditionally, which turns a genuinely absent field into `false` —
+// so a body that never mentioned `enabled` (an empty {}, or a stale caller that only sent
+// a since-removed field) silently disabled the user instead of leaving them untouched.
+// Restores the user's original state in a finally block regardless of outcome, since this
+// runs against a live instance's real data.
+test("PATCH-ing a user with no enabled field in the body leaves their enabled state unchanged", async ({ page }) => {
+  await openPage(page, "/users", "Users");
+
+  const listed = await page.request.get("/api/users");
+  const { users } = (await listed.json()) as { users: Array<{ id: number; enabled: boolean }> };
+  expect(users.length).toBeGreaterThan(0);
+  const user = users[0]!;
+
+  try {
+    const patched = await page.request.patch(`/api/users/${user.id}`, { data: {} });
+    expect(patched.ok()).toBeTruthy();
+    const { user: after } = (await patched.json()) as { user: { enabled: boolean } };
+    expect(after.enabled).toBe(user.enabled);
+  } finally {
+    await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
+  }
+});

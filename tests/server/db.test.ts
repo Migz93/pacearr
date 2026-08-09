@@ -31,6 +31,24 @@ function backdateHistoryEvent(dir: string, title: string, createdAt: string) {
   raw.close();
 }
 
+test("updateUser with an empty patch preserves the current enabled state", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // The route that calls this (PATCH /api/users/:id) used to coerce a genuinely absent
+    // `enabled` field into `false` before it ever reached this method — that bug lived in
+    // app.ts, not here, but this locks in that updateUser's own `patch.enabled ??
+    // current.enabled` does the right thing when nothing overrides it.
+    const [user] = db.upsertUsers([
+      { plexUserId: "plex-frank", plexAccountId: "6", tautulliUserId: null, username: "frank", displayName: "Frank", avatarUrl: null },
+    ]);
+    db.updateUser(user.id, { enabled: true });
+    const unchanged = db.updateUser(user.id, {});
+    assert.equal(unchanged.enabled, true);
+  } finally {
+    cleanup();
+  }
+});
+
 test("rolling show enrollment is idempotent by Sonarr series id", () => {
   const { db, cleanup } = createDb();
   try {

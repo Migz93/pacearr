@@ -4,7 +4,7 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
+import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
 import { isHistoryCategory } from "../shared/history.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
@@ -519,7 +519,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ shows: services.listShowsDrivenByUser(Number(req.params.id)) });
   });
   app.patch("/api/users/:id", requireAuth, (req, res) => {
-    const user = db.updateUser(Number(req.params.id), { enabled: Boolean((req.body as { enabled?: boolean }).enabled) });
+    // Coercing an absent field with Boolean(undefined) would send `enabled: false` to
+    // updateUser on every call, including a body that never mentioned it — silently
+    // disabling the user instead of leaving them as they were. Only pass `enabled`
+    // through when the request actually included it, so updateUser's own
+    // patch.enabled ?? current.enabled can do its job.
+    const body = req.body as { enabled?: unknown };
+    const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {};
+    const user = db.updateUser(Number(req.params.id), patch);
     logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });
   });

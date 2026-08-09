@@ -76,6 +76,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
 | A legacy `watch_events.reconciled` row still appears under the Sync category | That action stopped being written, but an install that ran an older version can already have rows with it, and dropping it from the category map would make them disappear from the Sync filter |
+| `updateUser` with an empty patch preserves the current enabled state | Locks in the `patch.enabled ?? current.enabled` fallback this layer relies on, independent of whatever the route above it does with an absent field |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -157,6 +158,7 @@ Read-only. Safe to run against a live instance.
 | Test | What it checks |
 |---|---|
 | Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
+| PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; runs against live data and restores the original state in a `finally` block |
 
 ### `tests/server/users-activity.test.ts` — Per-user shows dialog activity
 
