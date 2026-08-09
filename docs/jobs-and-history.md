@@ -24,15 +24,15 @@ The scheduler tracks:
 
 ## Manual Job Triggers
 
-The API exposes manual trigger endpoints:
+One endpoint, for any scheduler-registered job:
 
 | Endpoint | Action |
 |---|---|
-| `POST /api/jobs/session-check/run` | Run a live Plex session check immediately |
-| `POST /api/jobs/history-import/run` | Import Plex/Tautulli history immediately |
-| `POST /api/jobs/full-history-reconcile/run` | Re-read all available Plex/Tautulli history without changing incremental cursors |
-| `POST /api/jobs/rolling-reconcile/run` | Reconcile enrolled shows immediately |
-| `POST /api/jobs/:id/run` | Trigger a scheduler-registered job by id |
+| `POST /api/settings/jobs/:id/run` | Run a job now |
+| `PATCH /api/settings/jobs/:id` | Change a job's interval (`session-check` and `history-import` only) |
+
+The parallel `/api/jobs/*` routes were removed with the Dashboard quick actions
+they existed for.
 
 Settings → Jobs is the only UI surface for running a job now or changing a
 schedule. `session-check` and `history-import` intervals are stored in

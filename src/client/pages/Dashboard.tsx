@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { badgeClass, formatBytes, formatRelativeTime, titleCaseJob } from "../lib/utils";
 import { historyActionLabel } from "../../shared/history";
-import { Poster } from "../components/ShowVisuals";
+import { PosterTile, PosterTileBadge } from "../components/ShowVisuals";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import type { DashboardResponse, DashboardShowActivity, HistoryEvent, JobInfo } from "../../shared/types";
 
@@ -38,18 +38,15 @@ export default function Dashboard() {
 
   return (
     <Page>
+      {/* Live is the normal state and needs no announcing — the badge is here to warn
+          that nothing is actually being applied, so it only appears in dry run. */}
       <PageHeader
         title="Dashboard"
-        badge={
-          <span
-            className={badgeClass(data.dryRun ? "warning" : "success")}
-            title={data.dryRun
-              ? "Dry run: Pacearr is previewing changes only, and won't touch Sonarr or delete files."
-              : "Live: Pacearr can change Sonarr monitoring and delete episode files."}
-          >
-            {data.dryRun ? "Dry run" : "Live"}
+        badge={data.dryRun && (
+          <span className={badgeClass("warning")} title="Dry run: Pacearr is previewing changes only, and won't touch Sonarr or delete files.">
+            Dry run
           </span>
-        }
+        )}
       />
       {error && <ErrorBanner message={error} />}
 
@@ -141,20 +138,22 @@ function JobNotice({ job }: { job: JobInfo }) {
 
 function ShowTile({ show }: { show: DashboardShowActivity }) {
   const expanded = show.expandedSeasons.length;
-  const activity = show.lastWatchedAt && show.lastWatchedSeason && show.lastWatchedEpisode
-    ? `${show.lastWatcherName ?? "Unknown viewer"} · S${show.lastWatchedSeason}E${show.lastWatchedEpisode} · ${formatRelativeTime(show.lastWatchedAt)}`
-    : "No matched watch activity yet";
-
   return (
-    <Link to={`/shows/${show.sonarrSeriesId}`} className="group grid gap-1.5 text-on-surface no-underline" title={`${show.title} — ${activity}`}>
-      <span className="relative block overflow-hidden rounded-lg">
-        <Poster show={show} className="w-full transition-transform duration-300 group-hover:scale-105" />
-        {expanded > 0 && (
-          <span className={`${badgeClass("success")} absolute right-1.5 top-1.5`}>{expanded} expanded</span>
-        )}
-      </span>
-      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-semibold leading-tight">{show.title}</span>
-      <span className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-on-surface-variant">{activity}</span>
-    </Link>
+    <PosterTile
+      show={show}
+      to={`/shows/${show.sonarrSeriesId}`}
+      state={{ from: "/dashboard" }}
+      topBadge={expanded > 0 && <PosterTileBadge><Layers size={12} /> {expanded} expanded</PosterTileBadge>}
+    >
+      <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{show.title}</strong>
+      {show.lastWatchedAt && show.lastWatchedSeason && show.lastWatchedEpisode ? (
+        <>
+          <span className="text-[11px] font-bold text-on-surface/75">{show.lastWatcherName ?? "Unknown viewer"} · S{show.lastWatchedSeason}E{show.lastWatchedEpisode}</span>
+          <span className="text-[11px] text-on-surface/75">{formatRelativeTime(show.lastWatchedAt)}</span>
+        </>
+      ) : (
+        <span className="text-[11px] text-on-surface/75">No matched watch activity yet</span>
+      )}
+    </PosterTile>
   );
 }

@@ -110,6 +110,11 @@ function bool(value: number | boolean) {
   return value === true || value === 1;
 }
 
+function isCurrentShapeRecommendation(candidate: unknown): candidate is ShowRecommendation {
+  const value = candidate as Partial<ShowRecommendation> | null;
+  return Boolean(value) && Array.isArray(value?.viewers) && typeof value?.viewerCount === "number";
+}
+
 function userFromRow(row: any): UserRecord {
   return {
     id: row.id,
@@ -225,10 +230,20 @@ export class PacearrDatabase {
     this.db.prepare("DELETE FROM ignored_recommendations WHERE sonarr_series_id = ?").run(seriesId);
   }
 
+  /**
+   * This cache stores whole ShowRecommendation objects as JSON, so a release that renames
+   * a field leaves every existing install holding rows in the old shape — which the client
+   * then reads as `undefined` and crashes on. Treat a cache whose entries don't match the
+   * current shape as absent: the callers of this method already kick off a
+   * recommendation-refresh when it returns null, so the stale rows heal themselves.
+   */
   getRecommendationCache(): { candidates: ShowRecommendation[]; generatedAt: string } | null {
     const row = this.db.prepare("SELECT candidates, generated_at FROM recommendation_cache WHERE id = 1").get() as
       { candidates: string; generated_at: string } | undefined;
-    return row ? { candidates: parseJson<ShowRecommendation[]>(row.candidates, []), generatedAt: row.generated_at } : null;
+    if (!row) return null;
+    const candidates = parseJson<ShowRecommendation[]>(row.candidates, []);
+    if (!candidates.every(isCurrentShapeRecommendation)) return null;
+    return { candidates, generatedAt: row.generated_at };
   }
 
   saveRecommendationCache(candidates: ShowRecommendation[]): string {

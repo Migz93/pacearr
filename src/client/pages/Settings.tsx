@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
-import { Field, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { Field, NumberField, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -179,21 +179,44 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           checked={form.artworkEnabled}
           onChange={(value) => setForm({ ...form, artworkEnabled: value })}
         />
-        <Field label="Viewer activity window (days)" hint="How recently someone must have watched to still count as watching a show.">
-          <TextInput type="number" min={1} className="w-32" value={String(form.viewerActivityWindowDays)} onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })} />
-        </Field>
+        <NumberField
+          label="Viewer activity window"
+          hint="How recently someone must have watched to still count as watching a show."
+          unit="days"
+          min={1}
+          value={form.viewerActivityWindowDays}
+          onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })}
+        />
         <ToggleField
           label="Early season prefetch"
           hint="Start downloading the next season before someone finishes the current one, so playback never stalls."
           checked={form.earlyPrefetchEnabled}
           onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })}
         />
-        <Field id="early-prefetch-trigger" label="Episodes remaining trigger" hint="How close to the end of a season this kicks in.">
-          <TextInput id="early-prefetch-trigger" type="number" min={1} className="w-32" value={form.earlyPrefetchTriggerEpisodesRemaining} onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })} />
-        </Field>
-        <Field id="early-prefetch-count" label="Episodes to prefetch" hint="How many episodes of the next season to grab.">
-          <TextInput id="early-prefetch-count" type="number" min={1} className="w-32" value={form.earlyPrefetchEpisodeCount} onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })} />
-        </Field>
+        {/* Both numbers only describe how prefetch behaves, so they are meaningless
+            while it is off. */}
+        {form.earlyPrefetchEnabled && (
+          <>
+            <NumberField
+              id="early-prefetch-trigger"
+              label="Episodes remaining trigger"
+              hint="How close to the end of a season this kicks in."
+              unit="episodes left"
+              min={1}
+              value={form.earlyPrefetchTriggerEpisodesRemaining}
+              onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })}
+            />
+            <NumberField
+              id="early-prefetch-count"
+              label="Episodes to prefetch"
+              hint="How many episodes of the next season to grab."
+              unit="episodes"
+              min={1}
+              value={form.earlyPrefetchEpisodeCount}
+              onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
+            />
+          </>
+        )}
       </SectionCard>
 
       <SectionCard title="Cleanup">
@@ -203,32 +226,44 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           checked={form.progressiveCleanupEnabled}
           onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })}
         />
-        <Field label="Cleanup delay (days)" hint="How long to wait before trimming a season nobody is watching. 0 trims straight away.">
-          <TextInput type="number" min={0} step={1} className="w-32" value={String(form.progressiveCleanupDelayDays)} onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: Number(value) })} />
-        </Field>
+        <NumberField
+          label="Cleanup delay"
+          hint="How long to wait before trimming a season nobody is watching. 0 trims straight away."
+          unit="days"
+          min={0}
+          value={form.progressiveCleanupDelayDays}
+          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: Number(value) })}
+        />
       </SectionCard>
 
       <SectionCard title="Recommendations">
-        <Field label="Minimum savings (GB)" hint="Hide recommendations that wouldn't free up at least this much space.">
-          <TextInput type="number" min={0} step={1} className="w-32" value={String(form.recommendationMinimumSavingsGb)} onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })} />
-        </Field>
+        <NumberField
+          label="Minimum savings"
+          hint="Hide recommendations that wouldn't free up at least this much space."
+          unit="GB"
+          min={0}
+          value={form.recommendationMinimumSavingsGb}
+          onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })}
+        />
       </SectionCard>
 
       <SectionCard title="Data and access">
-        <Field label="History retention (days)" hint="How long to keep entries on the History page.">
-          <TextInput type="number" min={1} className="w-32" value={String(form.historyRetentionDays)} onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })} />
-        </Field>
+        <NumberField
+          label="History retention"
+          hint="How long to keep entries on the History page."
+          unit="days"
+          min={1}
+          value={form.historyRetentionDays}
+          onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })}
+        />
         <ToggleField
           label="Trust proxy"
           hint="Turn on if Pacearr sits behind a reverse proxy. Needs a restart to take effect."
           checked={form.trustProxy}
           onChange={(value) => setForm({ ...form, trustProxy: value })}
         />
+        <SaveBar saving={saving} success={success} error={error} label="Save general" onSave={() => void save()} />
       </SectionCard>
-
-      <div className="rounded-xl border border-outline-variant/30 bg-background-container p-5">
-        <SaveBar saving={saving} success={success} error={error} label="Save general" onSave={() => void save()} divider={false} />
-      </div>
     </div>
   );
 }

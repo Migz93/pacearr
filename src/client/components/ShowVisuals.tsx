@@ -1,7 +1,49 @@
+import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Avatar } from "./Avatar";
 import type { ShowListItem, ShowUserProgress } from "../../shared/types";
 
 export type ViewerBadge = ShowUserProgress & { isHistory: boolean };
+
+/**
+ * The poster tile used everywhere a show is shown as artwork — the Shows grid and the
+ * Dashboard strip. Shared so the two can't drift: same aspect, border, hover lift, and
+ * the same gradient-plus-detail overlay that fades in on hover (and is always visible on
+ * touch, where there is no hover).
+ */
+/** The centred pill a PosterTile can show over the top of the artwork. */
+export function PosterTileBadge({ children }: { children: ReactNode }) {
+  return (
+    <div className="absolute left-1/2 top-2 z-[1] inline-flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-success/45 bg-success/20 px-2 py-0.5 text-[11px] font-extrabold text-on-surface shadow-lg backdrop-blur-sm">
+      {children}
+    </div>
+  );
+}
+
+export function PosterTile({ show, to, state, topBadge, children }: {
+  show: Pick<ShowListItem, "title" | "posterUrl">;
+  to: string;
+  state?: unknown;
+  topBadge?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      className="group relative block rounded-xl text-on-surface no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      to={to}
+      state={state}
+    >
+      <div className="relative aspect-[2/3] overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container shadow-lg transition group-hover:scale-[1.035] group-hover:border-primary/55">
+        <Poster show={show} className="h-full w-full rounded-none object-cover transition duration-500 group-hover:scale-[1.025]" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent to-background opacity-0 transition-opacity group-hover:opacity-95 group-focus-visible:opacity-95 pointer-coarse:opacity-95" aria-hidden="true" />
+        {topBadge}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex translate-y-1 flex-col items-start gap-0.5 p-2.5 opacity-0 transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 pointer-coarse:translate-y-0 pointer-coarse:opacity-100">
+          {children}
+        </div>
+      </div>
+    </Link>
+  );
+}
 
 export function Poster({ show, className = "" }: { show: Pick<ShowListItem, "title" | "posterUrl">; className?: string }) {
   if (show.posterUrl) return <img className={`block aspect-[2/3] bg-background-container object-cover ${className}`} src={show.posterUrl} alt={`${show.title} poster`} loading="lazy" />;

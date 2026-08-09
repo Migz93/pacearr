@@ -169,6 +169,28 @@ test("per-user activity windows the show count but not the last-watched timestam
   }
 });
 
+test("a recommendation cache written in an older field shape is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // Recommendations are cached as whole objects in JSON, so renaming a field (watchers
+    // -> viewers) leaves existing installs holding rows the client reads as undefined.
+    // Reporting the stale cache as absent makes the callers trigger a refresh instead.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const legacy = [{ sonarrSeriesId: 1, title: "Fringe", watchers: [], watcherCount: 0 }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(legacy), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+
+    db.saveRecommendationCache([
+      { sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null, seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0, retainedSeasons: [], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false },
+    ]);
+    assert.equal(db.getRecommendationCache()?.candidates.length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("history supports filtered server-side pagination", () => {
   const { db, cleanup } = createDb();
   try {

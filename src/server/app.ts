@@ -583,23 +583,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json(result);
   }));
 
-  app.post("/api/jobs/session-check/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.checkSessions());
-  }));
-  app.post("/api/jobs/history-import/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.importHistory());
-  }));
-  app.post("/api/jobs/full-history-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileFullHistory());
-  }));
-  app.post("/api/jobs/rolling-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  // Preserve the old endpoint for callers that have not yet refreshed their UI.
-  app.post("/api/jobs/inactive-reset/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  app.post("/api/jobs/:id/run", requireAuth, (req, res) => res.json({ triggered: scheduler?.runNow(String(req.params.id)) ?? false }));
+  // Manual job triggers live at /api/settings/jobs/:id/run, which is what Settings → Jobs
+  // calls. The parallel /api/jobs/* endpoints that used to back the Dashboard's quick
+  // actions are gone with those buttons — they had no remaining callers, and two routes
+  // for one action is how they drift apart.
 
   app.get("/api/history", requireAuth, (req, res) => {
     const requestedPage = Math.floor(Number(req.query.page));
