@@ -34,7 +34,10 @@ The API exposes manual trigger endpoints:
 | `POST /api/jobs/rolling-reconcile/run` | Reconcile enrolled shows immediately |
 | `POST /api/jobs/:id/run` | Trigger a scheduler-registered job by id |
 
-The Dashboard exposes quick actions for session checks and history import.
+Settings → Jobs is the only UI surface for running a job now or changing a
+schedule. `session-check` and `history-import` intervals are stored in
+`sessionPollIntervalMinutes` and `historyImportIntervalHours`; editing them there
+writes those settings and reschedules the job.
 
 ## Watch Events
 
@@ -87,14 +90,42 @@ It records:
 
 - enrollment and removal
 - baseline application
-- season expansion
+- season expansion and early prefetch
 - history import summaries
-- live session check summaries
-- rolling-monitoring reconciliation
+- live session checks **that moved a viewer's progress**
+- rolling-monitoring reconciliation **that changed something or hit an error**
 - progressive cleanup
 - warnings and errors
 
 History events are intentionally separate from watch events. Watch events represent user playback. History events represent Pacearr's own actions and operational state.
+
+### Only Record What Changed
+
+`session-check` can run once a minute and `rolling-reconcile` runs every six
+hours. Recording every run regardless of outcome buried History under rows
+reading `processed 0, changed 0`, so both write an event only when something
+actually happened. Every run is still logged. Re-matching stored watch events
+(`watch_events.reconciled`) is logger-only for the same reason — it is internal
+bookkeeping with no user-visible effect.
+
+### Categories
+
+The History page filters on four fixed categories rather than on the raw action
+string. `src/shared/history.ts` is the single mapping, used by both the server's
+`?category=` filter and the client's row labels; adding an action there is what
+puts it in a filter. An unmapped action still appears under "All types".
+
+| Category | Actions |
+|---|---|
+| Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch` |
+| Cleanup | `cleanup.progressive`, `cleanup.prefetch`, `show.reset` |
+| Shows | `show.enrolled`, `show.unenrolled`, `recommendation.ignored` |
+| Sync | `history.import`, `history.full_reconcile`, `sessions.check`, `rolling.reconcile` |
+
+A `dry_run.` prefix is not a separate action for filtering purposes: it shares
+its live counterpart's category and label and renders a **Dry run** badge on the
+row. No code path writes an error-level history event — `addHistory` only ever
+uses `info` or `warn` — so the level filter offers All / Info / Warning only.
 
 `history_events` is pruned to `historyRetentionDays` (default 7) by the `rolling-reconcile` job. `watch_events` is never pruned — see [maintenance.md](maintenance.md#data-retention).
 
@@ -111,10 +142,10 @@ with the first successful cleanup after upgrading.
 
 ## UI Surfaces
 
-- Dashboard shows current enrolled-show activity, confirmed reclaimed storage,
-  curated Pacearr changes, and concise operational status.
-- History shows a larger audit list.
-- Settings shows job configuration and integration settings.
+- Dashboard shows four linked stat chips, the three newest history entries, and a
+  strip of recently-active enrolled shows. It carries no job controls.
+- History shows the full audit list, filtered by category and level.
+- Settings → Jobs owns every schedule and every "run now".
 
 ## Logging Relationship
 

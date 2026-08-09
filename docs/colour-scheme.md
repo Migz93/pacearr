@@ -10,7 +10,10 @@ rules are Tailwind utility classes directly in component JSX; `styles.css`
 holds only the theme tokens and a small `@layer base` reset for bare
 elements (`body`, `button`, `h1`/`h2`). Form controls (`TextInput`,
 `SelectInput`, `Field`, `ToggleField`, `SectionCard`, `SaveBar`) are shared
-components in `src/client/components/FormControls.tsx`, not global CSS.
+components in `src/client/components/FormControls.tsx`, not global CSS. Page
+layout (`Page`, `PageHeader`, `PageLoading`, `ErrorBanner`) is shared the same
+way in `src/client/components/Page.tsx` — every route renders inside `Page`, so
+container width and heading size are set in one place rather than per page.
 Status badges use the shared `badgeClass()` helper in `src/client/lib/utils.ts`
 instead of inline colour classes. Raw colour values in component JSX are not
 permitted.

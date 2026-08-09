@@ -852,18 +852,25 @@ export class PacearrServices {
       await sonarr.searchSeason(seriesId, seasonNumber);
     }
     const dryRun = this.isDryRun();
-    this.db.addHistory("info", dryRun ? "dry_run.sonarr.baseline" : "sonarr.baseline", series.title, {
-      reason,
-      dryRun,
-      retainedSeasons: plan.retainedSeasons,
-      pilotSearches: searchAllPilots ? plan.pilotSearches.length : 0,
-      seasonSearches: seasonSearches.length,
-      monitored: plan.episodesToMonitor.length,
-      unmonitored: plan.episodesToUnmonitor.length,
-      deletedFiles: plan.filesToDelete.length,
-      reclaimedBytes,
-      cleanupEpisodes,
-    });
+    // The six-hourly reconcile calls this for every enrolled show, so recording it
+    // unconditionally wrote one "Baseline set" row per show per run — the same
+    // heartbeat-in-the-audit-log problem as sessions.check. Enrolment and manual resets
+    // are always worth an entry; a scheduled sweep only is when it did something.
+    const changedSomething = updates.length > 0 || plan.filesToDelete.length > 0 || seasonSearches.length > 0 || (searchAllPilots && plan.pilotSearches.length > 0);
+    if (reason !== "scheduled-reconcile" || changedSomething) {
+      this.db.addHistory("info", dryRun ? "dry_run.sonarr.baseline" : "sonarr.baseline", series.title, {
+        reason,
+        dryRun,
+        retainedSeasons: plan.retainedSeasons,
+        pilotSearches: searchAllPilots ? plan.pilotSearches.length : 0,
+        seasonSearches: seasonSearches.length,
+        monitored: plan.episodesToMonitor.length,
+        unmonitored: plan.episodesToUnmonitor.length,
+        deletedFiles: plan.filesToDelete.length,
+        reclaimedBytes,
+        cleanupEpisodes,
+      });
+    }
     if (!dryRun && rolling) this.db.replaceExpandedSeasons(rolling.id, plan.retainedSeasons);
     if (rolling) await this.syncPlexArtwork(series, rolling, plan.retainedSeasons);
     this.logger.info("Sonarr monitoring plan complete", { seriesId, title: series.title, reason, dryRun, changed: updates.length + plan.filesToDelete.length });

@@ -72,6 +72,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
 | Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
+| A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
+| Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
+
+### `tests/server/history-noise.test.ts` — History records only real changes
+
+| Test | What it checks |
+|---|---|
+| A session check that moved nobody's progress records no history event | `session-check` can run once a minute; an unconditional entry buried History under "processed 0, changed 0" rows. The run is still logged |
+| A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
@@ -147,7 +156,9 @@ Read-only. Safe to run against a live instance.
 
 | Test | What it checks |
 |---|---|
-| History filters and page size render | Level filters and the rows-per-page control render |
+| History filters and page size render | Level filters (All / Info / Warning — no Error, which nothing writes) and the rows-per-page control render |
+| History type filter is a fixed set of categories | All types, Monitoring, Cleanup, Shows, and Sync render, rather than one button per action string in the database |
+| History category filter updates the URL | Selecting Cleanup writes `?category=cleanup` |
 | History level filter updates the URL | Selecting Warning writes `?level=warn` |
 
 ## Adding New Tests
