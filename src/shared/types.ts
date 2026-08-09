@@ -397,7 +397,7 @@ export interface DashboardResponse {
     reclaimedFiles: number;
   };
   activeShows: DashboardShowActivity[];
-  recentChanges: HistoryEvent[];
+  recentActivity: HistoryEvent[];
   jobs: JobInfo[];
   dryRun: boolean;
 }

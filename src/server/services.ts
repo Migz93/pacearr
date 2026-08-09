@@ -1357,9 +1357,11 @@ export class PacearrServices {
     const activeSince = new Date(Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
     const postersBySeriesId = new Map((this.db.getSonarrLibraryCache()?.items ?? []).map((item) => [item.series.id, item.posterUrl]));
     const reclaimed = this.db.getReclaimedStorageTotals();
-    const recentChanges = this.db.listHistory(50).filter((event) =>
-      event.level !== "info" || ["sonarr.expand_season", "cleanup.progressive", "show.enrolled", "show.unenrolled", "show.reset", "dry_run.show.reset"].includes(event.action)
-    ).slice(0, 6);
+    // History used to be filtered here against a whitelist that omitted every dry_run.*
+    // action, so the dashboard's activity panel was empty by construction in the default
+    // dry-run mode. Now that no-op job runs aren't recorded at all (see checkSessions and
+    // reconcileRollingShows), the newest entries are already the interesting ones.
+    const recentActivity = this.db.listHistory(3);
     return {
       stats: {
         enrolledShows: rollingShows.length,
@@ -1370,7 +1372,7 @@ export class PacearrServices {
         reclaimedFiles: reclaimed.fileCount,
       },
       activeShows: this.db.listDashboardShowActivity(activeSince).map((show) => ({ ...show, posterUrl: postersBySeriesId.get(show.sonarrSeriesId) ?? null })),
-      recentChanges,
+      recentActivity,
       jobs,
       dryRun: settings.dryRun,
     };
