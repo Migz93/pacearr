@@ -522,7 +522,7 @@ test("scheduled reconciliation leaves stale prefetches alone when progressive cl
 test("listRecommendations computes precise per-season savings, excludes enrolled/fully-retained shows, and sorts by savings descending", async () => {
   const { db, services, cleanup } = createHarness();
 
-  // Candidate A: no watchers, both seasons drop to pilot-only. Bigger savings.
+  // Candidate A: no viewers, both seasons drop to pilot-only. Bigger savings.
   const showA: SonarrSeries = {
     id: 500,
     title: "Warehouse 13",
@@ -622,12 +622,12 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     assert.deepEqual(candidateA!.retainedSeasons, []);
     assert.deepEqual(candidateA!.droppedSeasons, [1, 2]);
     assert.equal(candidateA!.projectedSavingsBytes, 1_100_000_000 + 1_600_000_000);
-    assert.equal(candidateA!.watcherCount, 0);
+    assert.equal(candidateA!.viewerCount, 0);
 
     assert.deepEqual(candidateB!.retainedSeasons, [2]);
     assert.deepEqual(candidateB!.droppedSeasons, [1]);
     assert.equal(candidateB!.projectedSavingsBytes, 100_000_000);
-    assert.equal(candidateB!.watcherCount, 1);
+    assert.equal(candidateB!.viewerCount, 1);
     assert.equal(candidateA!.ignored, false);
     assert.equal(result.ignoredCount, 0);
 
@@ -725,8 +725,8 @@ test("recommendation refresh keeps the previous cache when every candidate fails
       sizeOnDiskBytes: 2_000,
       retainedSeasons: [],
       droppedSeasons: [1],
-      watcherCount: 0,
-      watchers: [],
+      viewerCount: 0,
+      viewers: [],
       projectedSavingsBytes: 1_000,
       ignored: false,
     }]);

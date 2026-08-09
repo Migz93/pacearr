@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, Ref
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
 import { Field, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   AboutInfo,
@@ -68,13 +69,8 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   }
 
   return (
-    <div className="mx-auto max-w-[1180px] p-7">
-      <div className="mb-6 flex items-start justify-between gap-5">
-        <div>
-          <h1 className="font-headline text-[28px] font-bold">Settings</h1>
-          <p className="text-on-surface-variant">Configure automation, integrations, background jobs, and runtime diagnostics.</p>
-        </div>
-      </div>
+    <Page>
+      <PageHeader title="Settings" />
 
       <SelectInput className="hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
@@ -88,9 +84,9 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         ))}
       </div>
 
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error" role="alert">{error}</div>}
+      {error && <ErrorBanner message={error} />}
       {loading ? (
-        <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading settings...</div>
+        <PageLoading label="Loading settings..." />
       ) : (
         <>
           {activeTab === "general" && settings && <GeneralTab settings={settings} onSave={async () => { await loadSettings(); await onSaved(); }} />}
@@ -102,7 +98,7 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
           {activeTab === "about" && <AboutTab />}
         </>
       )}
-    </div>
+    </Page>
   );
 }
 

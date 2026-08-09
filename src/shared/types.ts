@@ -220,8 +220,8 @@ export interface ShowListItem {
   seasonCount: number;
   episodeCount: number;
   sizeOnDiskBytes: number;
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
 }
 
 export interface ShowSeasonSummary {
@@ -316,8 +316,8 @@ export interface ShowRecommendation {
   sizeOnDiskBytes: number;
   retainedSeasons: number[];
   droppedSeasons: number[];
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
   projectedSavingsBytes: number;
   ignored: boolean;
 }

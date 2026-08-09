@@ -28,8 +28,8 @@ function commonFields(item: ShowBrowserItem) {
     year: data.year,
     status: data.status,
     seasonCount: data.seasonCount,
-    watcherCount: data.watcherCount,
-    watchers: data.watchers.map((watcher) => ({ ...watcher, isHistory: false })),
+    viewerCount: data.viewerCount,
+    viewers: data.viewers.map((viewer) => ({ ...viewer, isHistory: false })),
   };
 }
 
@@ -47,7 +47,7 @@ export function ShowCard({ item, returnTo }: { item: ShowBrowserItem; returnTo: 
           <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
           <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
           <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
-          {common.watchers.length > 0 && <AvatarStack viewers={common.watchers} size={18} />}
+          {common.viewers.length > 0 && <AvatarStack viewers={common.viewers} size={18} />}
         </div>
       </div>
     </Link>
@@ -81,9 +81,9 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
         <span>{seasonLabel(common.seasonCount)}</span>
       )}
       <span className="flex items-center gap-2">
-        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Watchers</RowLabel>
-        <AvatarStack viewers={common.watchers} size={22} />
-        {common.watcherCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
+        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Viewers</RowLabel>
+        <AvatarStack viewers={common.viewers} size={22} />
+        {common.viewerCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
       </span>
       {item.kind === "recommendation" && (
         <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>

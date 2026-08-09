@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { Avatar } from "../components/Avatar";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import type { UserRecord } from "../../shared/types";
 
 const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
@@ -75,27 +76,26 @@ export default function Users() {
 
   if (loading && users.length === 0) {
     return (
-      <div className="mx-auto max-w-[1280px] p-7">
-        <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading users...</div>
-      </div>
+      <Page>
+        <PageLoading label="Loading users..." />
+      </Page>
     );
   }
 
   return (
-    <div className="mx-auto max-w-[1280px] p-7">
-      <div className="mb-[22px] flex items-center justify-between gap-[18px] max-[820px]:flex-col max-[820px]:items-stretch">
-        <h1 className="font-headline text-[28px] font-bold">Users</h1>
+    <Page>
+      <PageHeader title="Users">
         <button type="button" className={secondaryButton} disabled={discovering} onClick={() => void discover()}>
           <RefreshCw size={16} className={discovering ? "animate-spin" : ""} />
-          {discovering ? "Refreshing..." : "Refresh Users"}
+          {discovering ? "Refreshing..." : "Refresh"}
         </button>
-      </div>
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+      </PageHeader>
+      {error && <ErrorBanner message={error} />}
 
       {selectedIds.length > 0 && (
         <div className="mb-[18px] flex flex-wrap items-center gap-2">
-          <button type="button" className={compactPrimaryButton} onClick={() => void bulkSetEnabled(true)}>Enable Selected</button>
-          <button type="button" className={compactSecondaryButton} onClick={() => void bulkSetEnabled(false)}>Disable Selected</button>
+          <button type="button" className={compactPrimaryButton} onClick={() => void bulkSetEnabled(true)}>Enable selected</button>
+          <button type="button" className={compactSecondaryButton} onClick={() => void bulkSetEnabled(false)}>Disable selected</button>
         </div>
       )}
 
@@ -140,7 +140,7 @@ export default function Users() {
           )
         )}
       </div>
-    </div>
+    </Page>
   );
 }
 

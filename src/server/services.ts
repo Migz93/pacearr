@@ -292,7 +292,7 @@ export class PacearrServices {
     series: SonarrSeries,
     rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,
     posterUrl: string | null,
-    watchers: ShowUserProgress[] = []
+    viewers: ShowUserProgress[] = []
   ): ShowListItem {
     return {
       sonarrSeriesId: series.id,
@@ -309,8 +309,8 @@ export class PacearrServices {
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
       sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
-      watcherCount: new Set(watchers.map((item) => item.userId)).size,
-      watchers,
+      viewerCount: new Set(viewers.map((item) => item.userId)).size,
+      viewers,
     };
   }
 
@@ -482,8 +482,8 @@ export class PacearrServices {
           sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
           retainedSeasons: plan.retainedSeasons,
           droppedSeasons,
-          watcherCount: new Set(enabledProgress.map((item) => item.userId)).size,
-          watchers: enabledProgress,
+          viewerCount: new Set(enabledProgress.map((item) => item.userId)).size,
+          viewers: enabledProgress,
           projectedSavingsBytes,
           ignored: ignoredIds.has(series.id),
         };
@@ -1370,7 +1370,7 @@ export class PacearrServices {
     series: SonarrSeries,
     rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,
     sonarr: SonarrIntegration,
-    watchers: ShowUserProgress[] = []
+    viewers: ShowUserProgress[] = []
   ): Promise<ShowListItem> {
     const posterUrl = await this.imageCache.ensureSonarrPosterCached(series.id, sonarr.getPosterUrl(series), sonarr.getPosterRequestHeaders(series));
     return {
@@ -1388,8 +1388,8 @@ export class PacearrServices {
       seasonCount: series.seasons?.filter((season) => season.seasonNumber > 0).length ?? 0,
       episodeCount: series.seasons?.reduce((sum, season) => sum + (season.statistics?.episodeCount ?? 0), 0) ?? 0,
       sizeOnDiskBytes: series.statistics?.sizeOnDisk ?? 0,
-      watcherCount: new Set(watchers.map((item) => item.userId)).size,
-      watchers,
+      viewerCount: new Set(viewers.map((item) => item.userId)).size,
+      viewers,
     };
   }
 }

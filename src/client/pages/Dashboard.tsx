@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Download, HardDrive, PlayCircle, ShieldAlert, UsersRound } from "lucide-react";
+import { HardDrive, ShieldAlert, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
-import { apiGet, apiPost } from "../lib/api";
+import { apiGet } from "../lib/api";
 import { formatBytes, formatRelativeTime } from "../lib/utils";
 import { Poster } from "../components/ShowVisuals";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import type { DashboardResponse, HistoryEvent, JobInfo } from "../../shared/types";
 
 const actionLabels: Record<string, string> = {
@@ -32,7 +33,6 @@ function jobLabel(job: JobInfo | undefined) {
 
 export default function Dashboard() {
   const [data, setData] = useState<DashboardResponse | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
@@ -44,43 +44,22 @@ export default function Dashboard() {
     }
   }
 
-  async function run(path: string, key: string) {
-    setBusy(key);
-    try {
-      await apiPost(path);
-      await load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   useEffect(() => {
     void load();
     const id = setInterval(() => void load(), 15000);
     return () => clearInterval(id);
   }, []);
 
-  if (!data) return <div className="grid min-h-screen place-items-center p-6 text-on-surface-variant">Loading dashboard...</div>;
+  if (!data) return <Page><PageLoading label="Loading dashboard..." /></Page>;
 
   const historyJob = data.jobs.find((job) => job.id === "history-import");
   const reconcileJob = data.jobs.find((job) => job.id === "rolling-reconcile");
   const attentionJobs = data.jobs.filter((job) => job.running || job.lastRunStatus === "error");
 
   return (
-    <div className="mx-auto max-w-[1440px] p-7">
-      <div className="mb-6 flex items-start justify-between gap-5 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div>
-          <h1 className="font-headline text-[28px] font-bold tracking-normal">Dashboard</h1>
-          <p className="text-on-surface-variant">What Pacearr is managing, what changed, and what needs attention.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={busy !== null} onClick={() => run("/api/jobs/session-check/run", "sessions")}><PlayCircle size={16} /> Check sessions</button>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={busy !== null} onClick={() => run("/api/jobs/history-import/run", "history")}><Download size={16} /> Import history</button>
-        </div>
-      </div>
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+    <Page>
+      <PageHeader title="Dashboard" />
+      {error && <ErrorBanner message={error} />}
 
       <div className="mb-[18px] grid grid-cols-4 gap-3 max-[820px]:grid-cols-1">
         <Stat label="Enrolled shows" value={data.stats.enrolledShows} detail={`${data.stats.enabledUsers} enabled users`} />
@@ -134,7 +113,7 @@ export default function Dashboard() {
           </section>
         </aside>
       </div>
-    </div>
+    </Page>
   );
 }
 

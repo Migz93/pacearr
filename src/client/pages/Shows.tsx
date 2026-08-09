@@ -8,6 +8,7 @@ import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
 import { ToggleField } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
@@ -26,7 +27,7 @@ const TABS: { id: ShowsTab; label: string }[] = [
 
 const SORT_MODES: SortMode[] = ["title-asc", "title-desc", "size-desc", "size-asc"];
 
-// Recommendations/Ignored are led by projected savings (see TAB_SUBTITLES), not raw size on
+// Recommendations/Ignored are led by projected savings (see TAB_CAPTIONS), not raw size on
 // disk, so the "size" sort modes rank by that metric there — labeled "Savings" rather than
 // "Size" so the control doesn't imply it matches the "Size on disk" column shown in-list.
 const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
@@ -63,11 +64,12 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
   return sort === "size-asc" ? cmp : -cmp;
 }
 
-const TAB_SUBTITLES: Record<ShowsTab, string> = {
-  enrolled: "Shows currently controlled by Pacearr.",
-  recommendations: "Un-enrolled Sonarr shows, ranked by how much disk space enrolling would free up.",
-  ignored: "Recommendations you've chosen to ignore.",
-  sonarr: "Every show in your Sonarr library.",
+// Enrolled and Sonarr are self-explanatory from the tab label; the two recommendation
+// tabs are not, so they keep a caption under the tab bar. Page headers carry no
+// subtitle (see components/Page.tsx), which is why this sits with the tabs instead.
+const TAB_CAPTIONS: Partial<Record<ShowsTab, string>> = {
+  recommendations: "Shows you haven't enrolled yet, ranked by how much space enrolling would free up.",
+  ignored: "Recommendations you've chosen to hide.",
 };
 
 const PAGE_SIZE = 24;
@@ -247,28 +249,22 @@ function ShowsBrowser() {
 
   function emptyMessage() {
     if (refreshing && items.length === 0) return "The Sonarr library is being prepared in the background. This page will update automatically.";
-    if (tab === "enrolled") return "No controlled shows match that search. Use Enroll show to add one from Sonarr.";
+    if (tab === "enrolled") return "No enrolled shows match that search. Use Enroll show to add one from Sonarr.";
     if (tab === "sonarr") return "No Sonarr shows match that search.";
     if (tab === "recommendations") return "No recommendations right now — every un-enrolled show would stay fully retained, or every show is already enrolled.";
     return "No ignored recommendations.";
   }
 
   return (
-    <div className="mx-auto max-w-[1440px] p-7">
-      <div className="mb-6 flex items-start justify-between gap-5 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div>
-          <h1 className="font-headline text-[28px] font-bold">Shows</h1>
-          <p className="text-on-surface-variant">{TAB_SUBTITLES[tab]}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className={primaryButton} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
-          <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
-            <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-      </div>
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
-      <fieldset className="m-0 mb-[18px] flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+    <Page>
+      <PageHeader title="Shows">
+        <button type="button" className={primaryButton} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
+        <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
+          <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
+        </button>
+      </PageHeader>
+      {error && <ErrorBanner message={error} />}
+      <fieldset className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
         <legend className="sr-only">Show category</legend>
         {TABS.map((entry) => (
           <button
@@ -282,7 +278,8 @@ function ShowsBrowser() {
           </button>
         ))}
       </fieldset>
-      <div className="mb-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
+      {TAB_CAPTIONS[tab] && <p className="mt-2.5 text-xs text-on-surface-variant">{TAB_CAPTIONS[tab]}</p>}
+      <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />
           <input className="h-full w-full border-0 bg-transparent p-0 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none" aria-label="Search shows" value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
@@ -309,7 +306,7 @@ function ShowsBrowser() {
         </div>
       )}
       {loading ? (
-        <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading shows...</div>
+        <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
         <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]">
           {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
@@ -319,11 +316,11 @@ function ShowsBrowser() {
         <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
           {isRecommendationTab ? (
             <div className="grid grid-cols-[minmax(220px,1.6fr)_110px_170px_140px_140px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[1170px]:hidden">
-              <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Watchers</span><span>Projected savings</span>
+              <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Viewers</span><span>Projected savings</span>
             </div>
           ) : (
             <div className="grid grid-cols-[minmax(220px,1.6fr)_170px_220px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[970px]:hidden">
-              <span>Show</span><span>Seasons</span><span>Watchers</span>
+              <span>Show</span><span>Seasons</span><span>Viewers</span>
             </div>
           )}
           {visibleItems.map((item) => <ShowListRow item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
@@ -343,7 +340,7 @@ function ShowsBrowser() {
         </div>
       )}
       {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} trigger={addTriggerRef.current} />}
-    </div>
+    </Page>
   );
 }
 
@@ -449,22 +446,22 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
 
   if (!detail) {
     return (
-      <div className="mx-auto max-w-[1280px] p-7">
+      <Page>
         <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        {error ? <div className="mt-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div> : <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading show...</div>}
-      </div>
+        {error ? <ErrorBanner message={error} className="mb-0 mt-4" /> : <PageLoading label="Loading show..." />}
+      </Page>
     );
   }
 
   const { show } = detail;
 
   return (
-    <div className="mx-auto max-w-[1360px] p-7">
+    <Page>
       <div className="mb-[18px] flex justify-between gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
         <button type="button" className={secondaryButton} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+      {error && <ErrorBanner message={error} />}
       <section className="mb-[22px] grid grid-cols-[220px_minmax(0,1fr)] items-end gap-6 max-[820px]:grid-cols-1">
         <Poster show={show} className="max-w-[220px] rounded-lg object-cover max-[820px]:max-w-[180px]" />
         <div className="grid justify-items-start gap-3 pb-1">
@@ -480,7 +477,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
             </span>
             {detail.recommendation?.ignored && <span className={badgeClass("warning")}>Ignored</span>}
           </div>
-          <h1 className="font-headline text-[34px] font-bold">{show.title}</h1>
+          <h1 className="font-headline text-2xl font-bold">{show.title}</h1>
           <p className="text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"} · {show.episodeCount} episodes · {show.status ?? "unknown status"}</p>
           {detail.recommendation && (
             <div className="mt-0.5 flex gap-2.5 max-[820px]:flex-col">
@@ -556,7 +553,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
           ))}
         </div>
       </section>
-    </div>
+    </Page>
   );
 }
 

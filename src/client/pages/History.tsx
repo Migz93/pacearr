@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
 import { SelectInput } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader } from "../components/Page";
 import type { HistoryEvent, HistoryPageResponse } from "../../shared/types";
 
 type LevelFilter = "all" | HistoryEvent["level"];
@@ -112,13 +113,8 @@ export default function History() {
   const pageInfo = data?.pageInfo;
 
   return (
-    <div className="mx-auto max-w-[1180px] p-7">
-      <div className="mb-6 flex items-start justify-between gap-5 max-[820px]:flex-col">
-        <div>
-          <h1 className="font-headline text-[28px] font-bold">History</h1>
-          <p className="text-on-surface-variant">Audit log for imports, Sonarr mutations, and cleanup.</p>
-        </div>
-      </div>
+    <Page>
+      <PageHeader title="History" />
 
       <div className="mb-3.5 flex flex-wrap items-center gap-2 max-[820px]:flex-col max-[820px]:items-stretch">
         <fieldset className="m-0 flex min-w-0 overflow-hidden rounded-lg border border-outline-variant/30 p-0">
@@ -149,7 +145,7 @@ export default function History() {
         </SelectInput>
       </div>
 
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+      {error && <ErrorBanner message={error} />}
       <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
         {loading && !data ? (
           <div className="p-6 text-center text-on-surface-variant">Loading history...</div>
@@ -168,7 +164,7 @@ export default function History() {
           </div>
         </div>
       )}
-    </div>
+    </Page>
   );
 }
 
