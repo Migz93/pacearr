@@ -79,6 +79,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `updateUser` with an empty patch preserves the current enabled state | Locks in the `patch.enabled ?? current.enabled` fallback this layer relies on, independent of whatever the route above it does with an absent field |
 | A recommendation cache missing any field, not just viewers/viewerCount, is treated as absent | The shape guard used to check only the two fields the last rename broke; a row missing a different field (or a malformed nested viewer) would have passed and then crashed the client downstream |
 | `findUserByTautulliName` prefers an exact username match and refuses to guess between ambiguous display names | `username` has no uniqueness constraint and `display_name` even less so — a single OR query with `.get()` would silently attribute one person's Tautulli history to a different Pacearr user on a tie |
+| `findUserByTautulliName` refuses to guess between two users whose usernames collide case-insensitively | The username step trusted a bare `.get()` as if a match always meant one row; it did not, since username has no uniqueness constraint either and the lookup is case-insensitive |
 | `findUserByTautulliName` falls back to an unambiguous display name match | The case the fallback exists for — a Tautulli friendly name that matches nobody's username but exactly one display name |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes

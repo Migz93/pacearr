@@ -56,6 +56,24 @@ test("findUserByTautulliName prefers an exact username match and refuses to gues
   }
 });
 
+test("findUserByTautulliName refuses to guess between two users whose usernames collide case-insensitively", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // The username step used to trust a bare .get() as if a match there always meant
+    // exactly one row — but username has no uniqueness constraint either, and the
+    // lookup is case-insensitive, so "Kid" and "kid" collide. Matches the display-name
+    // fallback's own "refuse to guess on a tie" rule rather than picking whichever row
+    // SQLite returns first.
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "Kid", displayName: "Kid A", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Kid B", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName("KID"), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("findUserByTautulliName falls back to an unambiguous display name match", () => {
   const { db, cleanup } = createDb();
   try {

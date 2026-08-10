@@ -511,15 +511,17 @@ export class PacearrDatabase {
    */
   findUserByTautulliName(username?: string | null): UserRecord | null {
     if (!username) return null;
-    // username has no uniqueness constraint in the schema (only plex_user_id does), and
-    // display_name is even less constrained — Plex Home profiles commonly share generic
-    // names like "Kid". A single OR query with a bare .get() would pick whichever
-    // matching row SQLite returns first, silently misattributing one person's watch
-    // history to a different account when two rows match. Username is checked first and
-    // must match exactly one row; display_name is only trusted as a fallback when it too
-    // is unambiguous, rather than guessing between multiple matches.
-    const usernameMatch = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").get(username);
-    if (usernameMatch) return userFromRow(usernameMatch);
+    // Neither username nor display_name has a uniqueness constraint in the schema (only
+    // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
+    // and nothing stops two distinct usernames from colliding case-insensitively either
+    // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
+    // SQLite returns first, silently misattributing one person's watch history to a
+    // different account. Both the username check and the display_name fallback require
+    // exactly one match; either an empty or an ambiguous result falls through instead of
+    // guessing.
+    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(username);
+    if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
+    if (usernameMatches.length > 1) return null;
     const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(username);
     return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
   }
