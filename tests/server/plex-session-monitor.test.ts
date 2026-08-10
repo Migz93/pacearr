@@ -55,7 +55,9 @@ test("Plex SSE playback notifications trigger a session check without Plex", asy
 });
 
 test("Plex SSE connection failures leave polling fallback active", async () => {
+  let requests = 0;
   const server = createServer((_req, res) => {
+    requests++;
     res.writeHead(503, { "content-type": "text/plain" });
     res.end("Plex is unavailable");
   });
@@ -64,9 +66,11 @@ test("Plex SSE connection failures leave polling fallback active", async () => {
     () => ({ serverUrl: `http://127.0.0.1:${port}`, machineIdentifier: "plex", token: "test-token" }),
     silentLogger(),
     () => assert.fail("A failed SSE connection must not trigger a session check."),
+    { initialReconnectMs: 10 },
   );
   try {
     monitor.start();
+    await waitFor(() => requests >= 2);
     await waitFor(() => monitor.getStatus().mode === "polling-fallback");
     assert.match(monitor.getStatus().description, /polling fallback/i);
   } finally {
