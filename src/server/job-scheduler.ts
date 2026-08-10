@@ -13,8 +13,10 @@ type ScheduledJob = {
   activeRuns: number;
   timeout: ReturnType<typeof setTimeout> | null;
   intervalMs: number;
-  task: () => Promise<void>;
+  task: (context: JobRunContext) => Promise<void>;
 };
+
+export type JobRunContext = { scheduled: boolean };
 
 export class JobScheduler {
   private readonly jobs = new Map<string, ScheduledJob>();
@@ -35,7 +37,7 @@ export class JobScheduler {
     this.savePersistedState = options.save;
   }
 
-  registerRecurringJob(options: { id: string; intervalMs: number; enabled?: boolean; task: () => Promise<void> }) {
+  registerRecurringJob(options: { id: string; intervalMs: number; enabled?: boolean; task: (context: JobRunContext) => Promise<void> }) {
     const persisted = this.loadPersistedState?.(options.id);
     const job: ScheduledJob = {
       id: options.id,
@@ -65,6 +67,10 @@ export class JobScheduler {
   runNow(id: string) {
     const job = this.jobs.get(id);
     if (!job) return false;
+    if (job.activeRuns > 0) {
+      this.logger?.debug("Skipped overlapping manual job run", { id, activeRuns: job.activeRuns });
+      return false;
+    }
     this.logger?.info("Scheduled job triggered manually", { id });
     void this.execute(job, false);
     return true;
@@ -113,11 +119,17 @@ export class JobScheduler {
   }
 
   private async execute(job: ScheduledJob, scheduled: boolean) {
+    // Schedule the next tick before deciding whether this one overlaps. Otherwise a
+    // single collision would leave a recurring job with no timer at all.
     if (scheduled) this.reschedule(job);
+    if (job.activeRuns > 0) {
+      this.logger?.debug("Skipped overlapping scheduled job run", { id: job.id, scheduled, activeRuns: job.activeRuns });
+      return false;
+    }
     job.activeRuns += 1;
     this.logger?.info("Scheduled job started", { id: job.id, scheduled, activeRuns: job.activeRuns });
     try {
-      await job.task();
+      await job.task({ scheduled });
       job.lastRunAt = new Date().toISOString();
       job.lastRunStatus = "success";
       this.savePersistedState?.(job.id, { lastRunAt: job.lastRunAt, lastRunStatus: job.lastRunStatus });

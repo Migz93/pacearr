@@ -15,6 +15,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
+import { normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
 
@@ -139,8 +140,8 @@ function buildPlexSettingsFromPayload(token: string, payload: PlexConfigPayload 
 
 const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings: AppSettings) => string; nextRunLabel?: string }> = {
   "session-check": {
-    name: "Plex session check",
-    intervalDescription: (settings) => `Every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
+    name: "Plex session fallback check",
+    intervalDescription: (settings) => `Fallback every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
   "history-import": {
     name: "History import",
@@ -301,6 +302,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/settings/plex", requireAuth, asyncRoute(async (req, res) => {
     const owner = db.getPlexOwner();
     if (!owner) throw new Error("Plex owner is not configured.");
+    const previousSettings = db.getPlexSettings();
     const settings = buildPlexSettingsFromPayload(owner.plexToken, req.body as PlexConfigPayload);
     const result = await new PlexIntegration(settings, logger).testConnection();
     if (!result.ok) {
@@ -311,6 +313,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
+    if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
     await services.discoverPlexUsers();
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
@@ -375,8 +378,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const retentionDays = Number(body.historyRetentionDays);
       patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
     }
-    if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
-    if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
+    if (body.sessionPollIntervalMinutes !== undefined) {
+      patch.sessionPollIntervalMinutes = normaliseScheduleIntervalMinutes(body.sessionPollIntervalMinutes, DEFAULT_APP_SETTINGS.sessionPollIntervalMinutes);
+    }
+    if (body.historyImportIntervalHours !== undefined) {
+      patch.historyImportIntervalHours = normaliseScheduleIntervalHours(body.historyImportIntervalHours, DEFAULT_APP_SETTINGS.historyImportIntervalHours);
+    }
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);
@@ -462,12 +469,17 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const settings = db.getAppSettings();
     const jobs: JobInfo[] = (scheduler?.listJobs() ?? []).map((job) => {
       const label = JOB_LABELS[job.id];
+      const sessionMonitorStatus = job.id === "session-check" ? services.getPlexSessionMonitorStatus() : null;
       return {
         ...job,
         name: label?.name ?? job.id,
         intervalDescription: label?.intervalDescription(settings) ?? "Manual",
         nextRunLabel: label?.nextRunLabel,
         isRunning: job.running,
+        ...(sessionMonitorStatus ? {
+          statusMode: sessionMonitorStatus.mode,
+          statusDescription: sessionMonitorStatus.description,
+        } : {}),
       };
     });
     res.json(jobs);
@@ -478,8 +490,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {
-    const intervalMinutes = Math.max(1, Math.floor(Number((req.body as { intervalMinutes?: number }).intervalMinutes) || 0));
-    if (!intervalMinutes) {
+    const intervalMinutes = parseScheduleIntervalMinutes((req.body as { intervalMinutes?: number }).intervalMinutes);
+    if (intervalMinutes === null) {
       res.status(400).json({ error: "intervalMinutes is required." });
       return;
     }

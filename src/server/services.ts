@@ -24,6 +24,7 @@ import { TautulliIntegration, type TautulliHistoryRecord } from "./integrations/
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
+import { PlexSessionMonitor, type PlexSessionMonitorStatus } from "./plex-session-monitor.js";
 
 function normalizeTitle(title: string) {
   return title.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
@@ -143,12 +144,32 @@ export function calculateProjectedSavings(
 
 export class PacearrServices {
   private readonly plexArtwork: PlexArtworkService;
+  private readonly sessionMonitor: PlexSessionMonitor;
+  private sessionCheckTrigger?: () => void;
   /** Serializes all Sonarr and rolling-state mutations for an individual series. */
   private readonly activeSeriesOperations = new Map<number, number>();
   private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
     this.plexArtwork = new PlexArtworkService(db, logger, dataDir);
+    this.sessionMonitor = new PlexSessionMonitor(() => this.db.getPlexSettings(), logger, () => this.sessionCheckTrigger?.());
+  }
+
+  startPlexSessionMonitor(triggerSessionCheck: () => void): void {
+    this.sessionCheckTrigger = triggerSessionCheck;
+    this.sessionMonitor.start();
+  }
+
+  restartPlexSessionMonitor(): void {
+    this.sessionMonitor.restart();
+  }
+
+  getPlexSessionMonitorStatus(): PlexSessionMonitorStatus {
+    return this.sessionMonitor.getStatus();
+  }
+
+  isPlexSessionMonitorLive(): boolean {
+    return this.sessionMonitor.getStatus().mode === "live";
   }
 
   private getSonarr() {

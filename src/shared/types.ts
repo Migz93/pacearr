@@ -442,6 +442,8 @@ export interface JobInfo {
   lastRunStatus: "success" | "error" | null;
   running: boolean;
   isRunning?: boolean;
+  statusDescription?: string;
+  statusMode?: "live" | "polling-fallback" | "unavailable";
 }
 
 export interface AboutInfo {
