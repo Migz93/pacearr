@@ -141,6 +141,14 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 ---
 
+### `tests/server/tautulli-integration.test.ts` — Tautulli history field mapping
+
+| Test | What it checks |
+|---|---|
+| `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
+
+---
+
 ### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior
 
 | Test | What it checks |
