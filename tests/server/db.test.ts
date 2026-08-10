@@ -56,7 +56,7 @@ test("findUserByTautulliName prefers an exact username match and refuses to gues
   }
 });
 
-test("findUserByTautulliName refuses to guess between two users whose usernames collide case-insensitively", () => {
+test("findUserByTautulliName refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie", () => {
   const { db, cleanup } = createDb();
   try {
     // The username step used to trust a bare .get() as if a match there always meant
@@ -67,6 +67,13 @@ test("findUserByTautulliName refuses to guess between two users whose usernames 
     db.upsertUsers([
       { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "Kid", displayName: "Kid A", avatarUrl: null },
       { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Kid B", avatarUrl: null },
+      // Third user has an unambiguous display_name equal to the same query string. If
+      // the ambiguous-username case ever regressed into falling through to the
+      // display_name step instead of returning null immediately, this user would be
+      // matched and the assertion below would catch it — without this user, "kid" also
+      // matches nobody's display_name, so a query returning null wouldn't distinguish
+      // "refused to guess" from "found nothing either way."
+      { plexUserId: "plex-kid-3", plexAccountId: "3", tautulliUserId: null, username: "someone-else", displayName: "KID", avatarUrl: null },
     ]);
     assert.equal(db.findUserByTautulliName("KID"), null);
   } finally {

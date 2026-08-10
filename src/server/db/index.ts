@@ -516,9 +516,11 @@ export class PacearrDatabase {
     // and nothing stops two distinct usernames from colliding case-insensitively either
     // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
     // SQLite returns first, silently misattributing one person's watch history to a
-    // different account. Both the username check and the display_name fallback require
-    // exactly one match; either an empty or an ambiguous result falls through instead of
-    // guessing.
+    // different account. No match on username falls through to try display_name; an
+    // ambiguous username returns null immediately instead — a display_name match on that
+    // same string can't disambiguate an already-ambiguous username, so it isn't worth
+    // trying. The display_name fallback itself has no further fallback: an ambiguous or
+    // empty result there is simply null.
     const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(username);
     if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
     if (usernameMatches.length > 1) return null;
