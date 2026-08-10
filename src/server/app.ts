@@ -4,7 +4,8 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
+import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
+import { isHistoryCategory } from "../shared/history.js";
 import { createSessionId, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
 import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
@@ -138,23 +139,23 @@ function buildPlexSettingsFromPayload(token: string, payload: PlexConfigPayload 
 
 const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings: AppSettings) => string; nextRunLabel?: string }> = {
   "session-check": {
-    name: "Plex Session Check",
+    name: "Plex session check",
     intervalDescription: (settings) => `Every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
   "history-import": {
-    name: "History Import",
+    name: "History import",
     intervalDescription: (settings) => `Every ${settings.historyImportIntervalHours} hour${settings.historyImportIntervalHours !== 1 ? "s" : ""}`,
   },
   "full-history-reconcile": {
-    name: "Full History Reconciliation",
+    name: "Full history reconciliation",
     intervalDescription: () => "Every 30 days",
   },
   "rolling-reconcile": {
-    name: "Rolling Monitoring Reconciliation",
+    name: "Rolling reconciliation",
     intervalDescription: () => "Every 6 hours",
   },
   "recommendation-refresh": {
-    name: "Sonarr Library & Recommendation Refresh",
+    name: "Sonarr library refresh",
     intervalDescription: () => "Every 6 hours",
   },
 };
@@ -376,7 +377,6 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
-    if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);
@@ -507,13 +507,47 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ users: await services.listUsers() });
   }));
   app.post("/api/users/discover", requireAuth, asyncRoute(async (_req, res) => {
-    const users = await services.discoverPlexUsers();
-    logger.info("Plex user discovery requested", { users: users.length });
-    res.json({ users });
+    const discovered = await services.discoverPlexUsers();
+    logger.info("Plex user discovery requested", { users: discovered.length });
+    // discoverPlexUsers returns the raw UserRecord shape; the client needs the
+    // UserListItem shape (activeShowCount, lastWatchedAt) it renders. Re-fetch through
+    // listUsers rather than adding those fields to discovery's own return, so there is
+    // one place that computes per-user activity.
+    res.json({ users: await services.listUsers() });
   }));
+  app.get("/api/users/:id/shows", requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
+    res.json({ shows: services.listShowsDrivenByUser(id) });
+  });
   app.patch("/api/users/:id", requireAuth, (req, res) => {
-    const user = db.updateUser(Number(req.params.id), req.body as { enabled?: boolean; tautulliUserId?: string | null });
-    logger.info("User settings updated", { userId: user.id, enabled: user.enabled, tautulliLinked: Boolean(user.tautulliUserId) });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
+    // Coercing an absent field with Boolean(undefined) would send `enabled: false` to
+    // updateUser on every call, including a body that never mentioned it — silently
+    // disabling the user instead of leaving them as they were. Only pass `enabled`
+    // through when the request actually included it, so updateUser's own
+    // patch.enabled ?? current.enabled can do its job. And Boolean(value) on a value
+    // that IS present would accept any truthy non-boolean ("no", {}, ...) as true, so a
+    // present field must be an actual boolean rather than merely coerced.
+    const body = req.body as { enabled?: unknown };
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be a boolean." });
+      return;
+    }
+    if (!db.getUser(id)) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
+    const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: body.enabled } : {};
+    const user = db.updateUser(id, patch);
+    logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });
   });
 
@@ -580,23 +614,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json(result);
   }));
 
-  app.post("/api/jobs/session-check/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.checkSessions());
-  }));
-  app.post("/api/jobs/history-import/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.importHistory());
-  }));
-  app.post("/api/jobs/full-history-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileFullHistory());
-  }));
-  app.post("/api/jobs/rolling-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  // Preserve the old endpoint for callers that have not yet refreshed their UI.
-  app.post("/api/jobs/inactive-reset/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  app.post("/api/jobs/:id/run", requireAuth, (req, res) => res.json({ triggered: scheduler?.runNow(String(req.params.id)) ?? false }));
+  // Manual job triggers live at /api/settings/jobs/:id/run, which is what Settings → Jobs
+  // calls. The parallel /api/jobs/* endpoints that used to back the Dashboard's quick
+  // actions are gone with those buttons — they had no remaining callers, and two routes
+  // for one action is how they drift apart.
 
   app.get("/api/history", requireAuth, (req, res) => {
     const requestedPage = Math.floor(Number(req.query.page));
@@ -604,17 +625,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1;
     const pageSize = Number.isFinite(requestedPageSize) ? Math.min(100, Math.max(1, requestedPageSize)) : 10;
     const requestedLevel = String(req.query.level ?? "all");
-    const level = requestedLevel === "info" || requestedLevel === "warn" || requestedLevel === "error"
-      ? requestedLevel
-      : undefined;
-    const action = typeof req.query.action === "string" && req.query.action !== "all"
-      ? req.query.action
-      : undefined;
-    const { results, total, actions } = db.listHistoryPaginated({ page, pageSize, level, action });
+    // No code path writes an error-level history event — every addHistory call uses info
+    // or warn — so "error" is deliberately not an accepted level here either.
+    const level = requestedLevel === "info" || requestedLevel === "warn" ? requestedLevel : undefined;
+    const category = isHistoryCategory(req.query.category) ? req.query.category : undefined;
+    const { results, total } = db.listHistoryPaginated({ page, pageSize, level, category });
 
     res.json({
       results,
-      actions,
       pageInfo: {
         page,
         pageSize,

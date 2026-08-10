@@ -69,24 +69,91 @@ export function SelectInput({ value, onChange, className = "", children, ...rest
   );
 }
 
+// Geometry matches hubarr's toggle exactly: a 40x24 borderless track with a 16px knob
+// inset by 4px. The previous version added a border and used an 18px knob, which left the
+// knob visually crowding the track edge.
 export function ToggleField({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <label className="flex cursor-pointer items-start gap-3">
       <input className="peer sr-only" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span className={`relative mt-0.5 h-6 w-[42px] shrink-0 rounded-full border border-on-surface-variant/50 transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary ${checked ? "bg-primary-dim" : "bg-background-container-highest"}`}><span className={`absolute top-[3px] left-[3px] size-[18px] rounded-full bg-on-surface transition-transform ${checked ? "translate-x-[18px]" : ""}`} /></span>
+      <span className={`relative mt-0.5 h-6 w-10 shrink-0 rounded-full transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary ${checked ? "bg-primary-dim" : "bg-outline-variant"}`}>
+        <span className={`absolute top-1 size-4 rounded-full transition-all ${checked ? "translate-x-5 bg-on-surface" : "translate-x-1 bg-on-surface-variant"}`} />
+      </span>
       <span>
-        <strong className="block text-sm text-on-surface">{label}</strong>
+        <strong className="block text-sm font-medium text-on-surface">{label}</strong>
         {hint && <small className="mt-0.5 block text-xs leading-relaxed text-on-surface-variant">{hint}</small>}
       </span>
     </label>
   );
 }
 
-export function SaveBar({ saving, success, error, label, onSave }: { saving: boolean; success: boolean; error: string | null; label: string; onSave: () => void }) {
+/**
+ * A number input with its unit beside it, rather than "(days)" tacked onto the label.
+ * Doesn't reuse Field: Field clones its single child to attach the id, which would put
+ * the label's htmlFor on the flex wrapper instead of the input.
+ */
+export function NumberField({ label, hint, unit, value, onChange, min = 0, step = 1, id }: {
+  label: string;
+  hint?: string;
+  unit: string;
+  value: number | string;
+  onChange: (value: string) => void;
+  min?: number;
+  step?: number;
+  id?: string;
+}) {
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
+  const hintId = hint ? `${inputId}-hint` : undefined;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-      <div aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</div>
-      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving} aria-busy={saving} onClick={onSave}>
+    <div>
+      <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor={inputId}>{label}</label>
+      {hint && <p id={hintId} className="mb-2 text-xs leading-relaxed text-on-surface-variant">{hint}</p>}
+      <div className="flex items-center gap-2">
+        <TextInput id={inputId} aria-describedby={hintId} className="w-28" type="number" min={min} step={step} value={String(value)} onChange={onChange} />
+        <span className="text-sm text-on-surface-variant">{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+export interface TestConnectionState {
+  testing: boolean;
+  disabled: boolean;
+  result: { ok: boolean; message: string } | null;
+  onTest: () => void;
+}
+
+/**
+ * The footer for every settings form. The three integration tabs used to hand-roll this
+ * markup and had drifted apart (only one of them had a chevron on its save button), so
+ * the optional connection test lives here too rather than in each tab.
+ */
+export function SaveBar({ saving, success, error, label, onSave, test, saveDisabled = false, divider = true }: {
+  saving: boolean;
+  success: boolean;
+  error: string | null;
+  label: string;
+  onSave: () => void;
+  test?: TestConnectionState;
+  saveDisabled?: boolean;
+  /** Off when the bar is its own card rather than the last row inside one. */
+  divider?: boolean;
+}) {
+  return (
+    <div className={cn("flex flex-wrap items-center justify-between gap-4 max-[820px]:flex-col max-[820px]:items-stretch", divider && "border-t border-outline-variant/30 pt-4")}>
+      <div className="flex flex-wrap items-center gap-2">
+        {test && (
+          <>
+            <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={test.testing || test.disabled} onClick={test.onTest}>
+              {test.testing ? "Testing..." : "Test connection"}
+            </button>
+            <span aria-live="polite">{test.result && <span className={`text-[13px] font-bold ${test.result.ok ? "text-success" : "text-error"}`}>{test.result.message}</span>}</span>
+          </>
+        )}
+        <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
+      </div>
+      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving || saveDisabled} aria-busy={saving} onClick={onSave}>
         {saving ? "Saving..." : label}
         {!saving && <ChevronRight size={15} />}
       </button>

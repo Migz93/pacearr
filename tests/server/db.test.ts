@@ -31,6 +31,88 @@ function backdateHistoryEvent(dir: string, title: string, createdAt: string) {
   raw.close();
 }
 
+test("findUserByTautulliName prefers an exact username match and refuses to guess between ambiguous display names", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // username has no uniqueness constraint in the schema, and display_name even less
+    // so — Plex Home profiles commonly share generic names. A bare OR query with .get()
+    // would pick an arbitrary row on a tie, silently attributing one person's Tautulli
+    // history to a different Pacearr user.
+    const [alice, bob] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
+    ]);
+
+    // Exact username match wins even when it would also match another user's display name.
+    assert.equal(db.findUserByTautulliName("alice_h")?.id, alice.id);
+    assert.equal(db.findUserByTautulliName("bob_h")?.id, bob.id);
+
+    // Two users share this display name and neither has it as a username — ambiguous,
+    // so the lookup must refuse to guess rather than returning whichever row SQLite
+    // happens to return first.
+    assert.equal(db.findUserByTautulliName("Kid"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // The username step used to trust a bare .get() as if a match there always meant
+    // exactly one row — but username has no uniqueness constraint either, and the
+    // lookup is case-insensitive, so "Kid" and "kid" collide. Matches the display-name
+    // fallback's own "refuse to guess on a tie" rule rather than picking whichever row
+    // SQLite returns first.
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "Kid", displayName: "Kid A", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Kid B", avatarUrl: null },
+      // Third user has an unambiguous display_name equal to the same query string. If
+      // the ambiguous-username case ever regressed into falling through to the
+      // display_name step instead of returning null immediately, this user would be
+      // matched and the assertion below would catch it — without this user, "kid" also
+      // matches nobody's display_name, so a query returning null wouldn't distinguish
+      // "refused to guess" from "found nothing either way."
+      { plexUserId: "plex-kid-3", plexAccountId: "3", tautulliUserId: null, username: "someone-else", displayName: "KID", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName("KID"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName falls back to an unambiguous display name match", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol87", displayName: "Carol", avatarUrl: null },
+    ]);
+    // Tautulli reported "Carol" (a custom friendly name), which matches nobody's username
+    // but exactly one display_name — the case this method exists for.
+    assert.equal(db.findUserByTautulliName("carol")?.id, carol.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("updateUser with an empty patch preserves the current enabled state", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // The route that calls this (PATCH /api/users/:id) used to coerce a genuinely absent
+    // `enabled` field into `false` before it ever reached this method — that bug lived in
+    // app.ts, not here, but this locks in that updateUser's own `patch.enabled ??
+    // current.enabled` does the right thing when nothing overrides it.
+    const [user] = db.upsertUsers([
+      { plexUserId: "plex-frank", plexAccountId: "6", tautulliUserId: null, username: "frank", displayName: "Frank", avatarUrl: null },
+    ]);
+    db.updateUser(user.id, { enabled: true });
+    const unchanged = db.updateUser(user.id, {});
+    assert.equal(unchanged.enabled, true);
+  } finally {
+    cleanup();
+  }
+});
+
 test("rolling show enrollment is idempotent by Sonarr series id", () => {
   const { db, cleanup } = createDb();
   try {
@@ -137,22 +219,228 @@ test("season inactivity timestamps persist until a viewer returns or the season 
   }
 });
 
+test("per-user activity windows the show count but not the last-watched timestamp", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice, bob] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
+    ]);
+    const fringe = db.upsertRollingShow({ id: 10, title: "Fringe" });
+    const wire = db.upsertRollingShow({ id: 11, title: "The Wire" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    db.upsertRollingUserProgress(fringe.id, alice.id, 2, 4, recent);
+    db.upsertRollingUserProgress(wire.id, alice.id, 1, 1, old);
+    db.upsertRollingUserProgress(fringe.id, bob.id, 1, 3, old);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    // Alice drives one show inside the window, but her other, older watch still counts
+    // toward "last watched" — a quiet viewer shows when they were last seen, not "never".
+    assert.equal(activity.get(alice.id)?.activeShowCount, 1);
+    assert.equal(activity.get(alice.id)?.lastWatchedAt, recent);
+    assert.equal(activity.get(bob.id)?.activeShowCount, 0);
+    assert.equal(activity.get(bob.id)?.lastWatchedAt, old);
+
+    assert.deepEqual(db.listShowsDrivenByUser(alice.id).map((show) => show.title), ["Fringe", "The Wire"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a disabled user's recent watch does not count as an active show, but still counts as last watched", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // A disabled viewer's progress can't keep a season expanded — every retention
+    // calculation in services.ts filters on user.enabled — so counting their shows as
+    // "active" here would claim an effect the switch doesn't actually have.
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol", displayName: "Carol", avatarUrl: null },
+    ]);
+    db.updateUser(carol.id, { enabled: false });
+    const show = db.upsertRollingShow({ id: 12, title: "Deadwood" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.upsertRollingUserProgress(show.id, carol.id, 1, 1, recent);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    assert.equal(activity.get(carol.id)?.activeShowCount, 0);
+    assert.equal(activity.get(carol.id)?.lastWatchedAt, recent);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recent special (season 0) does not count as an active show, but still counts as last watched", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Specials never expand a season (see the seasonNumber > 0 gate in processWatchEvent),
+    // so counting one here as "active" would tell a viewer their switch is keeping a show
+    // expanded when it isn't.
+    const [dana] = db.upsertUsers([
+      { plexUserId: "plex-dana", plexAccountId: "6", tautulliUserId: null, username: "dana", displayName: "Dana", avatarUrl: null },
+    ]);
+    const show = db.upsertRollingShow({ id: 13, title: "Doctor Who" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.upsertRollingUserProgress(show.id, dana.id, 0, 1, recent);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    assert.equal(activity.get(dana.id)?.activeShowCount, 0);
+    assert.equal(activity.get(dana.id)?.lastWatchedAt, recent);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache written in an older field shape is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // Recommendations are cached as whole objects in JSON, so renaming a field (watchers
+    // -> viewers) leaves existing installs holding rows the client reads as undefined.
+    // Reporting the stale cache as absent makes the callers trigger a refresh instead.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const legacy = [{ sonarrSeriesId: 1, title: "Fringe", watchers: [], watcherCount: 0 }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(legacy), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+
+    db.saveRecommendationCache([
+      { sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null, seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0, retainedSeasons: [], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false },
+    ]);
+    assert.equal(db.getRecommendationCache()?.candidates.length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache missing any field, not just viewers/viewerCount, is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // The guard used to check only the two fields that broke last time (viewers,
+    // viewerCount). A row with those two present but sizeOnDiskBytes missing would have
+    // passed the old check and then crashed formatBytes(undefined) downstream. Same for a
+    // malformed entry nested inside viewers — a real client crash either way.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const missingField = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, retainedSeasons: [], droppedSeasons: [2],
+      viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false,
+      // sizeOnDiskBytes intentionally omitted
+    }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(missingField), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+
+    const raw2 = new Database(path.join(dir, "pacearr.db"));
+    const malformedViewer = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0, retainedSeasons: [], droppedSeasons: [2],
+      viewerCount: 1, viewers: [{ userId: 1, displayName: "Alice" }], // missing enabled, seasonNumber, etc.
+      projectedSavingsBytes: 1, ignored: false,
+    }];
+    raw2.prepare("UPDATE recommendation_cache SET candidates = ? WHERE id = 1").run(JSON.stringify(malformedViewer));
+    raw2.close();
+    assert.equal(db.getRecommendationCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache row with corrupted JSON is treated as absent, not as zero candidates", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // getRecommendationCache used to parse through a helper whose fallback-on-error
+    // returned [], which passes the array/shape check vacuously and reads as a genuine
+    // "0 candidates" cache instead of triggering the refresh callers expect from null.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run("{not valid json", new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache with non-numeric season entries is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const badSeasons = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0,
+      retainedSeasons: ["2"], droppedSeasons: [2], // retainedSeasons entry is a string, not a number
+      viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false,
+    }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(badSeasons), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("history supports filtered server-side pagination", () => {
   const { db, cleanup } = createDb();
   try {
     db.addHistory("info", "history.import", "First import", { processed: 10 });
     db.addHistory("warn", "history.import", "Second import", { errors: ["timeout"] });
-    db.addHistory("error", "sessions.check", "Session failure", "Plex unavailable");
+    db.addHistory("info", "sessions.check", "Plex sessions", { changed: 1 });
 
     const firstPage = db.listHistoryPaginated({ page: 1, pageSize: 2 });
     assert.equal(firstPage.total, 3);
     assert.equal(firstPage.results.length, 2);
-    assert.equal(firstPage.results[0]?.title, "Session failure");
-    assert.deepEqual(firstPage.actions, ["history.import", "sessions.check"]);
+    assert.equal(firstPage.results[0]?.title, "Plex sessions");
 
-    const warningImports = db.listHistoryPaginated({ page: 1, pageSize: 10, level: "warn", action: "history.import" });
-    assert.equal(warningImports.total, 1);
-    assert.equal(warningImports.results[0]?.title, "Second import");
+    const warnings = db.listHistoryPaginated({ page: 1, pageSize: 10, level: "warn" });
+    assert.equal(warnings.total, 1);
+    assert.equal(warnings.results[0]?.title, "Second import");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a history category filter matches an action and its dry-run twin, and nothing outside the category", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.addHistory("info", "sonarr.expand_season", "Fringe", { seasonNumber: 2 });
+    db.addHistory("info", "dry_run.sonarr.expand_season", "The Wire", { seasonNumber: 3 });
+    db.addHistory("info", "cleanup.progressive", "Deadwood", { seasonNumber: 1 });
+    db.addHistory("info", "history.import", "Import", { processed: 4 });
+
+    const monitoring = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "monitoring" });
+    assert.equal(monitoring.total, 2);
+    assert.deepEqual(monitoring.results.map((event) => event.title).sort(), ["Fringe", "The Wire"]);
+
+    const cleanup_ = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "cleanup" });
+    assert.deepEqual(cleanup_.results.map((event) => event.title), ["Deadwood"]);
+
+    // Level and category stack rather than replacing each other.
+    assert.equal(db.listHistoryPaginated({ page: 1, pageSize: 10, category: "monitoring", level: "warn" }).total, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a legacy watch_events.reconciled row, from before that action stopped being written, still appears under the Sync category", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Nothing writes this action any more (see history-noise.test.ts), but an install
+    // that ran an older version can already have rows with it, and it was always sync
+    // activity — dropping it from CATEGORY_BY_ACTION would make those existing rows
+    // disappear from the Sync filter, not just stop new ones from being added.
+    db.addHistory("info", "watch_events.reconciled", "Reconciled", { matchedEvents: 2 });
+    const sync = db.listHistoryPaginated({ page: 1, pageSize: 10, category: "sync" });
+    assert.deepEqual(sync.results.map((event) => event.title), ["Reconciled"]);
   } finally {
     cleanup();
   }

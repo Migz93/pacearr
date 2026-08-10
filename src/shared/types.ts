@@ -83,8 +83,6 @@ export interface AppSettings {
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
-  inactivityResetDays: number;
-  autoResetEnabled: boolean;
   progressiveCleanupEnabled: boolean;
   progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;
@@ -148,6 +146,24 @@ export interface UserRecord {
   avatarUrl: string | null;
   enabled: boolean;
   lastSeenAt: string | null;
+}
+
+/** A user plus the activity the Users page shows. UserRecord stays the raw row shape. */
+export interface UserListItem extends UserRecord {
+  /** Enrolled shows this viewer is currently keeping expanded. */
+  activeShowCount: number;
+  /** Most recent watch on any enrolled show, regardless of the activity window. */
+  lastWatchedAt: string | null;
+}
+
+export interface UserShowActivity {
+  sonarrSeriesId: number;
+  title: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  watchedAt: string;
+  /** False once the watch falls outside the viewer activity window. */
+  active: boolean;
 }
 
 export interface SonarrSeries {
@@ -220,8 +236,8 @@ export interface ShowListItem {
   seasonCount: number;
   episodeCount: number;
   sizeOnDiskBytes: number;
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
 }
 
 export interface ShowSeasonSummary {
@@ -316,8 +332,8 @@ export interface ShowRecommendation {
   sizeOnDiskBytes: number;
   retainedSeasons: number[];
   droppedSeasons: number[];
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
   projectedSavingsBytes: number;
   ignored: boolean;
 }
@@ -379,7 +395,6 @@ export interface HistoryEvent {
 
 export interface HistoryPageResponse {
   results: HistoryEvent[];
-  actions: string[];
   pageInfo: {
     page: number;
     pageSize: number;
@@ -398,7 +413,7 @@ export interface DashboardResponse {
     reclaimedFiles: number;
   };
   activeShows: DashboardShowActivity[];
-  recentChanges: HistoryEvent[];
+  recentActivity: HistoryEvent[];
   jobs: JobInfo[];
   dryRun: boolean;
 }

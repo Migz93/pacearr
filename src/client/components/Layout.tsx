@@ -66,7 +66,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
           <div className="grid size-8 shrink-0 place-items-center"><img className="block size-8" src="/pacearr-logo.svg" alt="Pacearr" /></div>
           <div className="min-w-0">
             <div className="font-headline text-sm font-bold leading-[1.1]">Pacearr</div>
-            <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">Rolling Episode Control</div>
+            <div className="mt-0.5 text-xs leading-tight text-on-surface-variant">Episodes at your pace</div>
           </div>
         </div>
         <nav className="grid flex-1 content-start gap-0.5 overflow-y-auto px-3 py-4">

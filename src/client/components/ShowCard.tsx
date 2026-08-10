@@ -2,7 +2,7 @@ import { HardDrive } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ShowListItem, ShowRecommendation } from "../../shared/types";
 import { badgeClass, formatBytes } from "../lib/utils";
-import { AvatarStack, Poster } from "./ShowVisuals";
+import { AvatarStack, ExpandedSeasons, Poster, PosterTile, PosterTileBadge } from "./ShowVisuals";
 
 export type ShowBrowserItem =
   | { kind: "library"; data: ShowListItem }
@@ -28,29 +28,26 @@ function commonFields(item: ShowBrowserItem) {
     year: data.year,
     status: data.status,
     seasonCount: data.seasonCount,
-    watcherCount: data.watcherCount,
-    watchers: data.watchers.map((watcher) => ({ ...watcher, isHistory: false })),
+    viewerCount: data.viewerCount,
+    viewers: data.viewers.map((viewer) => ({ ...viewer, isHistory: false })),
   };
 }
 
 export function ShowCard({ item, returnTo }: { item: ShowBrowserItem; returnTo: string }) {
   const common = commonFields(item);
   return (
-    <Link className="group relative block rounded-xl text-on-surface no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background" to={`/shows/${common.sonarrSeriesId}`} state={{ from: returnTo }}>
-      <div className="relative aspect-[2/3] overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container shadow-lg transition group-hover:scale-[1.035] group-hover:border-primary/55">
-        <Poster show={item.data} className="h-full w-full rounded-none object-cover transition duration-500 group-hover:scale-[1.025]" />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent to-background opacity-0 transition-opacity group-hover:opacity-95 group-focus-visible:opacity-95 pointer-coarse:opacity-95" aria-hidden="true" />
-        {item.kind === "recommendation" && (
-          <div className="absolute left-1/2 top-2 z-[1] inline-flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-md border border-success/45 bg-success/20 px-2 py-0.5 text-[11px] font-extrabold text-on-surface shadow-lg backdrop-blur-sm"><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</div>
-        )}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex translate-y-1 flex-col items-start gap-0.5 p-2.5 opacity-0 transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 pointer-coarse:translate-y-0 pointer-coarse:opacity-100">
-          <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
-          <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
-          <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
-          {common.watchers.length > 0 && <AvatarStack viewers={common.watchers} size={18} />}
-        </div>
-      </div>
-    </Link>
+    <PosterTile
+      show={item.data}
+      to={`/shows/${common.sonarrSeriesId}`}
+      state={{ from: returnTo }}
+      topBadge={item.kind === "recommendation" && <PosterTileBadge><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</PosterTileBadge>}
+    >
+      <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
+      <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
+      <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
+      {item.kind === "library" && item.data.enrolled && <ExpandedSeasons seasons={item.data.expandedSeasons} />}
+      {common.viewers.length > 0 && <AvatarStack viewers={common.viewers} size={18} />}
+    </PosterTile>
   );
 }
 
@@ -81,9 +78,9 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
         <span>{seasonLabel(common.seasonCount)}</span>
       )}
       <span className="flex items-center gap-2">
-        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Watchers</RowLabel>
-        <AvatarStack viewers={common.watchers} size={22} />
-        {common.watcherCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
+        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Viewers</RowLabel>
+        <AvatarStack viewers={common.viewers} size={22} />
+        {common.viewerCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
       </span>
       {item.kind === "recommendation" && (
         <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>

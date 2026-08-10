@@ -28,7 +28,7 @@ This table is the only place the projects differ — when a rule below refers to
 | Workspace path | `/workspaces/pacearr` (same as `app/` on the host at `/opt/vscode/node/pacearr/app/`) |
 | Version files | `package.json` and `package-lock.json` (`src/server/version.ts` reads the version from `package.json` at runtime, so there is nothing else to update) |
 | Checks to run before closing out work | `npm run check` |
-| Test suite | Server tests — `npm test` and `npm run test:server`. No Playwright suite yet ([#50](https://github.com/Migz93/pacearr/issues/50)). |
+| Test suite | Server tests — `npm test` and `npm run test:server`. Playwright — `npm run test:e2e` against a live instance (see `TESTING.md`). |
 | Integrations to flag in review | Plex, Sonarr, Tautulli |
 
 ## Before You Start — What To Read

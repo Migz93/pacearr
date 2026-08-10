@@ -24,6 +24,7 @@ import type {
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
 } from "../../shared/types.js";
+import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
 import { createSecret } from "../auth.js";
 import type { Logger } from "../logger.js";
@@ -47,8 +48,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 5,
   historyImportIntervalHours: 24,
-  inactivityResetDays: 7,
-  autoResetEnabled: true,
   progressiveCleanupEnabled: true,
   progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
@@ -109,6 +108,41 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 
 function bool(value: number | boolean) {
   return value === true || value === 1;
+}
+
+function isCurrentShapeShowUserProgress(candidate: unknown): candidate is ShowUserProgress {
+  const value = candidate as Partial<ShowUserProgress> | null;
+  return Boolean(value)
+    && typeof value?.userId === "number"
+    && typeof value?.displayName === "string"
+    && (value?.avatarUrl === null || typeof value?.avatarUrl === "string")
+    && typeof value?.enabled === "boolean"
+    && typeof value?.seasonNumber === "number"
+    && typeof value?.episodeNumber === "number"
+    && typeof value?.watchedAt === "string";
+}
+
+// Checks every field, not just the ones a past rename happened to touch (viewers/
+// viewerCount, when watchers/watcherCount were renamed) — a guard that only re-validates
+// the one field that broke last time doesn't catch the next rename, and a partial match
+// still crashes the client on whichever field it missed (e.g. formatBytes(undefined)).
+function isCurrentShapeRecommendation(candidate: unknown): candidate is ShowRecommendation {
+  const value = candidate as Partial<ShowRecommendation> | null;
+  return Boolean(value)
+    && typeof value?.sonarrSeriesId === "number"
+    && typeof value?.title === "string"
+    && (value?.year === null || typeof value?.year === "number")
+    && (value?.posterUrl === null || typeof value?.posterUrl === "string")
+    && (value?.status === null || typeof value?.status === "string")
+    && typeof value?.seasonCount === "number"
+    && typeof value?.episodeCount === "number"
+    && typeof value?.sizeOnDiskBytes === "number"
+    && Array.isArray(value?.retainedSeasons) && value.retainedSeasons.every((season) => typeof season === "number")
+    && Array.isArray(value?.droppedSeasons) && value.droppedSeasons.every((season) => typeof season === "number")
+    && typeof value?.viewerCount === "number"
+    && Array.isArray(value?.viewers) && value.viewers.every(isCurrentShapeShowUserProgress)
+    && typeof value?.projectedSavingsBytes === "number"
+    && typeof value?.ignored === "boolean";
 }
 
 function userFromRow(row: any): UserRecord {
@@ -226,10 +260,31 @@ export class PacearrDatabase {
     this.db.prepare("DELETE FROM ignored_recommendations WHERE sonarr_series_id = ?").run(seriesId);
   }
 
+  /**
+   * This cache stores whole ShowRecommendation objects as JSON, so a release that renames
+   * a field leaves every existing install holding rows in the old shape — which the client
+   * then reads as `undefined` and crashes on. Treat a cache whose entries don't match the
+   * current shape as absent: the callers of this method already kick off a
+   * recommendation-refresh when it returns null, so the stale rows heal themselves.
+   */
   getRecommendationCache(): { candidates: ShowRecommendation[]; generatedAt: string } | null {
     const row = this.db.prepare("SELECT candidates, generated_at FROM recommendation_cache WHERE id = 1").get() as
       { candidates: string; generated_at: string } | undefined;
-    return row ? { candidates: parseJson<ShowRecommendation[]>(row.candidates, []), generatedAt: row.generated_at } : null;
+    if (!row) return null;
+    // Parsed directly rather than through parseJson: that helper's fallback-on-error
+    // would turn corrupted JSON into an empty array, which passes the shape check below
+    // and gets treated as a real "0 candidates" cache instead of triggering a refresh.
+    let candidates: unknown;
+    try {
+      candidates = JSON.parse(row.candidates);
+    } catch {
+      return null;
+    }
+    // Not against invalid JSON syntax (handled above), but against valid JSON that isn't
+    // an array (e.g. a legacy shape that stored an object) — .every() would throw on that
+    // rather than falling through to the shape check below.
+    if (!Array.isArray(candidates) || !candidates.every(isCurrentShapeRecommendation)) return null;
+    return { candidates, generatedAt: row.generated_at };
   }
 
   saveRecommendationCache(candidates: ShowRecommendation[]): string {
@@ -414,11 +469,11 @@ export class PacearrDatabase {
     return (this.db.prepare("SELECT * FROM users WHERE enabled = 1 ORDER BY display_name").all() as any[]).map(userFromRow);
   }
 
-  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled" | "tautulliUserId">>): UserRecord {
+  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled">>): UserRecord {
     const current = this.getUser(id);
     if (!current) throw new Error("User not found");
-    this.db.prepare("UPDATE users SET enabled = ?, tautulli_user_id = ?, updated_at = ? WHERE id = ?")
-      .run(patch.enabled ?? current.enabled ? 1 : 0, patch.tautulliUserId ?? current.tautulliUserId, now(), id);
+    this.db.prepare("UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?")
+      .run((patch.enabled ?? current.enabled) ? 1 : 0, now(), id);
     return this.getUser(id)!;
   }
 
@@ -455,11 +510,30 @@ export class PacearrDatabase {
     `).all(userId) as Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }>;
   }
 
-  findUserByTautulliId(tautulliUserId?: string | null, username?: string | null): UserRecord | null {
-    let row: any;
-    if (tautulliUserId) row = this.db.prepare("SELECT * FROM users WHERE tautulli_user_id = ?").get(tautulliUserId);
-    if (!row && username) row = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?) OR lower(display_name) = lower(?)").get(username, username);
-    return row ? userFromRow(row) : null;
+  /**
+   * Tautulli takes its users from Plex, so the name it reports is the Plex username or
+   * the Plex title (its friendly-name default) — both of which are what discovery already
+   * stored. This used to check a `tautulli_user_id` column first, but nothing ever
+   * populated it: discovery inserts NULL and there was no UI to set one, so that branch
+   * could never match. The column is left in place rather than migrated away.
+   */
+  findUserByTautulliName(username?: string | null): UserRecord | null {
+    if (!username) return null;
+    // Neither username nor display_name has a uniqueness constraint in the schema (only
+    // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
+    // and nothing stops two distinct usernames from colliding case-insensitively either
+    // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
+    // SQLite returns first, silently misattributing one person's watch history to a
+    // different account. No match on username falls through to try display_name; an
+    // ambiguous username returns null immediately instead — a display_name match on that
+    // same string can't disambiguate an already-ambiguous username, so it isn't worth
+    // trying. The display_name fallback itself has no further fallback: an ambiguous or
+    // empty result there is simply null.
+    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(username);
+    if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
+    if (usernameMatches.length > 1) return null;
+    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(username);
+    return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
   }
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {
@@ -683,6 +757,44 @@ export class PacearrDatabase {
       FROM rolling_show_users
       WHERE rolling_show_id = ? AND user_id = ?
     `).get(rollingShowId, userId) as RollingShowUserRecord | null;
+  }
+
+  /**
+   * Per-user answer to "what is this person keeping expanded?" — the count of enrolled
+   * shows where they are still an active viewer, plus when they last watched anything.
+   * Every enabled viewer inside the activity window is a reason some season stays on
+   * disk, which is what makes the enable/disable switch on the Users page meaningful.
+   */
+  countActiveShowsByUser(activeSince: string): Map<number, { activeShowCount: number; lastWatchedAt: string | null }> {
+    // The count is windowed but the timestamp deliberately is not: a viewer who has gone
+    // quiet should still show when they were last seen, not "never". The count is also
+    // conditioned on the user still being enabled — a disabled viewer's watches don't
+    // keep anything expanded (see the `.enabled` filters throughout the retention
+    // calculation in services.ts), so counting them here would show "N shows active" for
+    // someone whose switch has no effect on any of them.
+    const rows = this.db.prepare(`
+      SELECT rsu.user_id AS userId,
+        SUM(CASE WHEN rsu.last_watched_at >= ? AND rsu.last_watched_season > 0 AND users.enabled = 1 THEN 1 ELSE 0 END) AS activeShowCount,
+        MAX(rsu.last_watched_at) AS lastWatchedAt
+      FROM rolling_show_users rsu
+      JOIN users ON users.id = rsu.user_id
+      GROUP BY rsu.user_id
+    `).all(activeSince) as Array<{ userId: number; activeShowCount: number; lastWatchedAt: string | null }>;
+    return new Map(rows.map((row) => [row.userId, { activeShowCount: row.activeShowCount, lastWatchedAt: row.lastWatchedAt }]));
+  }
+
+  listShowsDrivenByUser(userId: number): Array<{ sonarrSeriesId: number; title: string; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
+    return this.db.prepare(`
+      SELECT rs.sonarr_series_id AS sonarrSeriesId,
+        rs.title,
+        rsu.last_watched_season AS seasonNumber,
+        rsu.last_watched_episode AS episodeNumber,
+        rsu.last_watched_at AS watchedAt
+      FROM rolling_show_users rsu
+      JOIN rolling_shows rs ON rs.id = rsu.rolling_show_id
+      WHERE rsu.user_id = ?
+      ORDER BY rsu.last_watched_at DESC
+    `).all(userId) as Array<{ sonarrSeriesId: number; title: string; seasonNumber: number; episodeNumber: number; watchedAt: string }>;
   }
 
   listLatestUserProgressForSeries(sonarrSeriesId: number, since?: string) {
@@ -944,8 +1056,8 @@ export class PacearrDatabase {
     page: number;
     pageSize: number;
     level?: HistoryEvent["level"];
-    action?: string;
-  }): { results: HistoryEvent[]; total: number; actions: string[] } {
+    category?: HistoryCategory;
+  }): { results: HistoryEvent[]; total: number } {
     const conditions: string[] = [];
     const parameters: Array<string | number> = [];
 
@@ -953,9 +1065,12 @@ export class PacearrDatabase {
       conditions.push("level = ?");
       parameters.push(options.level);
     }
-    if (options.action) {
-      conditions.push("action = ?");
-      parameters.push(options.action);
+    if (options.category) {
+      // A category is a fixed set of action names (live plus their dry-run twins), so it
+      // filters as an IN list rather than needing a column on the table.
+      const actions = actionsInCategory(options.category);
+      conditions.push(`action IN (${actions.map(() => "?").join(", ")})`);
+      parameters.push(...actions);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -967,10 +1082,8 @@ export class PacearrDatabase {
       ORDER BY id DESC
       LIMIT ? OFFSET ?
     `).all(...parameters, options.pageSize, offset) as any[]).map(historyFromRow);
-    const actions = (this.db.prepare("SELECT DISTINCT action FROM history_events ORDER BY action").all() as Array<{ action: string }>)
-      .map((row) => row.action);
 
-    return { results, total, actions };
+    return { results, total };
   }
 
   getJobRunState(id: string) {

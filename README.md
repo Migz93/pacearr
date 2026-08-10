@@ -2,6 +2,8 @@
 
 <img src="./public/logo.png" alt="Pacearr logo" width="256" height="256" />
 
+**Episodes at your pace.**
+
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]][license]
 [![Project Maintainer][maintainer-shield]][user_profile]

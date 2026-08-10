@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
-import { Field, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { Field, NumberField, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   AboutInfo,
@@ -68,13 +69,8 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   }
 
   return (
-    <div className="mx-auto max-w-[1180px] p-7">
-      <div className="mb-6 flex items-start justify-between gap-5">
-        <div>
-          <h1 className="font-headline text-[28px] font-bold">Settings</h1>
-          <p className="text-on-surface-variant">Configure automation, integrations, background jobs, and runtime diagnostics.</p>
-        </div>
-      </div>
+    <Page>
+      <PageHeader title="Settings" />
 
       <SelectInput className="hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
@@ -88,9 +84,9 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         ))}
       </div>
 
-      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error" role="alert">{error}</div>}
+      {error && <ErrorBanner message={error} />}
       {loading ? (
-        <div className="grid min-h-[220px] place-items-center text-on-surface-variant">Loading settings...</div>
+        <PageLoading label="Loading settings..." />
       ) : (
         <>
           {activeTab === "general" && settings && <GeneralTab settings={settings} onSave={async () => { await loadSettings(); await onSaved(); }} />}
@@ -102,7 +98,7 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
           {activeTab === "about" && <AboutTab />}
         </>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -138,7 +134,42 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         setError("Early prefetch values must be positive whole numbers.");
         return;
       }
-      await apiPatch("/api/settings/app", { ...form, earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count });
+      // The server clamps every one of these to a safe value regardless (see
+      // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
+      // without this check it fails silently: the field just snaps to the clamped number
+      // after the save completes, with no indication anything was wrong.
+      if (!Number.isInteger(form.viewerActivityWindowDays) || form.viewerActivityWindowDays < 1) {
+        setError("Viewer activity window must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(form.historyRetentionDays) || form.historyRetentionDays < 1) {
+        setError("History retention must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(form.progressiveCleanupDelayDays) || form.progressiveCleanupDelayDays < 0) {
+        setError("Cleanup delay must be a whole number of days, zero or more.");
+        return;
+      }
+      if (!Number.isFinite(form.recommendationMinimumSavingsGb) || form.recommendationMinimumSavingsGb < 0) {
+        setError("Minimum savings must be zero or more.");
+        return;
+      }
+      // Only the fields this tab owns. Spreading the whole form would PATCH back the
+      // job intervals as they were when the tab loaded, silently undoing a schedule
+      // changed on the Jobs tab in the meantime.
+      await apiPatch("/api/settings/app", {
+        dryRun: form.dryRun,
+        artworkEnabled: form.artworkEnabled,
+        viewerActivityWindowDays: form.viewerActivityWindowDays,
+        historyRetentionDays: form.historyRetentionDays,
+        progressiveCleanupEnabled: form.progressiveCleanupEnabled,
+        progressiveCleanupDelayDays: form.progressiveCleanupDelayDays,
+        recommendationMinimumSavingsGb: form.recommendationMinimumSavingsGb,
+        trustProxy: form.trustProxy,
+        earlyPrefetchEnabled: form.earlyPrefetchEnabled,
+        earlyPrefetchTriggerEpisodesRemaining: trigger,
+        earlyPrefetchEpisodeCount: count,
+      });
       setSuccess(true);
       await onSave();
     } catch (caught) {
@@ -148,43 +179,112 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
     }
   }
 
+  // One card per concern, one control per row. Hints say what the setting does to your
+  // shows, not how the mechanism works — anything longer than a line belongs in docs/.
   return (
-    <SectionCard title="Automation" description="Control Pacearr's monitoring behavior, history import, and cleanup rules.">
-      <ToggleField label="Dry run mode" hint="Enabled by default. Pacearr records and logs planned Sonarr changes but does not monitor, unmonitor, search, or delete anything." checked={form.dryRun} onChange={(value) => setForm({ ...form, dryRun: value })} />
-      <ToggleField label="Rolling artwork" hint="When live, Pacearr marks the Plex show as rolling and labels pilot-only seasons and their episode-one thumbnails. Original artwork is restored when a season expands or the show is unenrolled." checked={form.artworkEnabled} onChange={(value) => setForm({ ...form, artworkEnabled: value })} />
-      <div className="grid grid-cols-2 gap-[18px] max-[820px]:grid-cols-1">
-        <Field label="History import hours" hint="How often playback history is imported.">
-          <TextInput type="number" min={1} value={String(form.historyImportIntervalHours)} onChange={(value) => setForm({ ...form, historyImportIntervalHours: Number(value) })} />
-        </Field>
-        <Field label="Viewer activity window days" hint="Only viewers active in this window count as current progress or keep a season expanded. Shows without any current viewers return to pilots.">
-          <TextInput type="number" min={1} value={String(form.viewerActivityWindowDays)} onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })} />
-        </Field>
-        <Field label="History retention days" hint="How long History audit entries are kept before being pruned. Watch history and reclaimed-storage totals are never pruned.">
-          <TextInput type="number" min={1} value={String(form.historyRetentionDays)} onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })} />
-        </Field>
-        <Field label="Recommendation minimum savings (GB)" hint="Shows with projected savings below this amount are hidden from Recommendations.">
-          <TextInput type="number" min={0} step={1} value={String(form.recommendationMinimumSavingsGb)} onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })} />
-        </Field>
-      </div>
-      <div className="flex items-center gap-3 text-xs font-extrabold uppercase text-on-surface-variant after:h-px after:flex-1 after:bg-outline-variant/30"><span>Early season prefetch</span></div>
-      <ToggleField label="Early season prefetch" hint="Before a season ends, monitor and search the next season's first episodes so Plex can build a longer playback queue." checked={form.earlyPrefetchEnabled} onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })} />
-      <div className="grid grid-cols-2 gap-[18px] max-[820px]:grid-cols-1">
-        <Field id="early-prefetch-trigger" label="Episodes remaining trigger" hint="Start prefetching when this many episodes remain after the watched episode.">
-          <TextInput id="early-prefetch-trigger" type="number" min={1} value={form.earlyPrefetchTriggerEpisodesRemaining} onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })} />
-        </Field>
-        <Field id="early-prefetch-count" label="Episodes to prefetch" hint="Number of episodes after E01 to monitor and search in the next season.">
-          <TextInput id="early-prefetch-count" type="number" min={1} value={form.earlyPrefetchEpisodeCount} onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })} />
-        </Field>
-      </div>
-      <div className="flex items-center gap-3 text-xs font-extrabold uppercase text-on-surface-variant after:h-px after:flex-1 after:bg-outline-variant/30"><span>Cleanup</span></div>
-      <ToggleField label="Progressive cleanup" hint="While processing watch activity and scheduled reconciliation, Pacearr can return older expanded seasons and stale prefetched seasons to pilot-only monitoring once no enabled viewer still needs them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
-      <Field label="Inactive-season cleanup delay (days)" hint="Wait this long after an expanded season or stale prefetch has no active viewers before returning it to pilot-only. Set to 0 for immediate cleanup.">
-        <TextInput type="number" min={0} step={1} value={String(form.progressiveCleanupDelayDays)} onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: Number(value) })} />
-      </Field>
-      <p className="text-xs leading-relaxed text-on-surface-variant">Every six hours, Pacearr reconciles every enrolled show with current enabled-viewer progress and inactivity delays. In live mode it unmonitors and permanently deletes non-pilot episodes that are no longer needed; Dry Run is the safety boundary for previewing those actions.</p>
-      <ToggleField label="Trust proxy" hint="Enable when Pacearr is behind a reverse proxy. Requires a container restart." checked={form.trustProxy} onChange={(value) => setForm({ ...form, trustProxy: value })} />
-      <SaveBar saving={saving} success={success} error={error} label="Save General" onSave={() => void save()} />
-    </SectionCard>
+    <div className="grid gap-4">
+      <SectionCard title="Safety">
+        <ToggleField
+          label="Dry run"
+          hint="Show what Pacearr would do without actually changing or deleting anything. On by default."
+          checked={form.dryRun}
+          onChange={(value) => setForm({ ...form, dryRun: value })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Rolling behaviour">
+        <ToggleField
+          label="Rolling artwork"
+          hint="Mark managed shows in Plex so you can tell at a glance which ones Pacearr is trimming."
+          checked={form.artworkEnabled}
+          onChange={(value) => setForm({ ...form, artworkEnabled: value })}
+        />
+        <NumberField
+          label="Viewer activity window"
+          hint="How recently someone must have watched to still count as watching a show."
+          unit="days"
+          min={1}
+          value={form.viewerActivityWindowDays}
+          onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })}
+        />
+        <ToggleField
+          label="Early season prefetch"
+          hint="Start downloading the next season before someone finishes the current one, so playback never stalls."
+          checked={form.earlyPrefetchEnabled}
+          onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })}
+        />
+        {/* Both numbers only describe how prefetch behaves, so they are meaningless
+            while it is off. */}
+        {form.earlyPrefetchEnabled && (
+          <>
+            <NumberField
+              id="early-prefetch-trigger"
+              label="Episodes remaining trigger"
+              hint="How close to the end of a season this kicks in."
+              unit="episodes left"
+              min={1}
+              value={form.earlyPrefetchTriggerEpisodesRemaining}
+              onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })}
+            />
+            <NumberField
+              id="early-prefetch-count"
+              label="Episodes to prefetch"
+              hint="How many episodes of the next season to grab."
+              unit="episodes"
+              min={1}
+              value={form.earlyPrefetchEpisodeCount}
+              onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
+            />
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Cleanup">
+        <ToggleField
+          label="Progressive cleanup"
+          hint="Trim seasons back to the first episode once nobody is watching them any more."
+          checked={form.progressiveCleanupEnabled}
+          onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })}
+        />
+        <NumberField
+          label="Cleanup delay"
+          hint="How long to wait before trimming a season nobody is watching. 0 trims straight away."
+          unit="days"
+          min={0}
+          value={form.progressiveCleanupDelayDays}
+          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: Number(value) })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Recommendations">
+        <NumberField
+          label="Minimum savings"
+          hint="Hide recommendations that wouldn't free up at least this much space."
+          unit="GB"
+          min={0}
+          value={form.recommendationMinimumSavingsGb}
+          onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Data and access">
+        <NumberField
+          label="History retention"
+          hint="How long to keep entries on the History page."
+          unit="days"
+          min={1}
+          value={form.historyRetentionDays}
+          onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })}
+        />
+        <ToggleField
+          label="Trust proxy"
+          hint="Turn on if Pacearr sits behind a reverse proxy. Needs a restart to take effect."
+          checked={form.trustProxy}
+          onChange={(value) => setForm({ ...form, trustProxy: value })}
+        />
+        <SaveBar saving={saving} success={success} error={error} label="Save general" onSave={() => void save()} />
+      </SectionCard>
+    </div>
   );
 }
 
@@ -196,7 +296,6 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   const [hostname, setHostname] = useState(settings.plex?.hostname ?? "");
   const [port, setPort] = useState(String(settings.plex?.port ?? 32400));
   const [useSsl, setUseSsl] = useState(settings.plex?.useSsl ?? false);
-  const [sessionPollIntervalMinutes, setSessionPollIntervalMinutes] = useState(settings.app.sessionPollIntervalMinutes);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -238,7 +337,10 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setTestResult(null);
     try {
       const result = await apiPost<{ ok: boolean; message?: string; error?: string }>("/api/settings/plex/test", buildPayload());
-      setTestResult({ ok: true, message: result.message ?? "Test Succeeded" });
+      setTestResult({
+        ok: result.ok,
+        message: result.message ?? result.error ?? (result.ok ? "Test Succeeded" : "Test failed"),
+      });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
     } finally {
@@ -251,10 +353,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setSuccess(false);
     setError(null);
     try {
-      await Promise.all([
-        apiPost("/api/settings/plex", buildPayload()),
-        apiPatch("/api/settings/app", { sessionPollIntervalMinutes }),
-      ]);
+      await apiPost("/api/settings/plex", buildPayload());
       setSuccess(true);
       await onSave();
     } catch (caught) {
@@ -265,10 +364,9 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   }
 
   return (
-    <SectionCard title="Plex Settings" description="Connect Pacearr to your Plex server. Load available servers or enter the host manually.">
+    <SectionCard title="Plex" description="Connect Pacearr to your Plex server. Load your available servers, or enter the address yourself.">
       <div>
         <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-server-select">Server</label>
-        <p className="mb-2 text-xs leading-relaxed text-on-surface-variant">Press the button to load available Plex servers.</p>
         <div className="grid grid-cols-[minmax(0,1fr)_42px] items-end gap-2">
           <SelectInput id="plex-server-select" value={selectedServerUri} onChange={(value) => {
             const match = groupedServers.find((entry) => entry.value === value)?.option;
@@ -303,22 +401,14 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
         </Field>
       </div>
       <ToggleField label="Use SSL" checked={useSsl} onChange={(value) => { switchToManual(); setUseSsl(value); }} />
-      <div className="flex items-center gap-3 text-xs font-extrabold uppercase text-on-surface-variant after:h-px after:flex-1 after:bg-outline-variant/30"><span>Session Monitoring</span></div>
-      <Field label="Session poll minutes" hint="How often Pacearr checks Plex for active episode sessions. New season-one watches can expand a season immediately.">
-        <TextInput type="number" min={1} value={String(sessionPollIntervalMinutes)} onChange={(value) => setSessionPollIntervalMinutes(Math.max(1, Number(value) || 1))} />
-      </Field>
-      <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || (!selectedServerUri && !hostname.trim())} onClick={() => void testConnection()}>
-            {testing ? "Testing..." : "Test Connection"}
-          </button>
-          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Plex"} {!saving && <ChevronRight size={15} />}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Plex"
+        onSave={() => void save()}
+        test={{ testing, disabled: !selectedServerUri && !hostname.trim(), result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -363,11 +453,11 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   }
 
   return (
-    <SectionCard title="Sonarr Integration" description="Connect Sonarr so Pacearr can monitor and clean rolling shows.">
+    <SectionCard title="Sonarr" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
       <Field label="Base URL" hint="Example: http://sonarr:8989">
         <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
       </Field>
-      <Field label="API Key" hint="Leave unchanged to keep the configured key.">
+      <Field label="API key" hint="Leave unchanged to keep the configured key.">
         <input
           type="password"
           className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
@@ -376,16 +466,15 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
           onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
         />
       </Field>
-      <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void save()}>{saving ? "Saving..." : "Save Sonarr"}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Sonarr"
+        onSave={() => void save()}
+        saveDisabled={!form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)}
+        test={{ testing, disabled: !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured), result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -430,12 +519,12 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   }
 
   return (
-    <SectionCard title="Tautulli Integration" description="Optionally import richer watch history from Tautulli.">
+    <SectionCard title="Tautulli" description="Optional. Import richer watch history than Plex alone provides.">
       <ToggleField label="Enable Tautulli import" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
       <Field label="Base URL" hint="Example: http://tautulli:8181">
         <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://tautulli:8181" />
       </Field>
-      <Field label="API Key" hint="Leave unchanged to keep the configured key.">
+      <Field label="API key" hint="Leave unchanged to keep the configured key.">
         <input
           type="password"
           className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
@@ -444,16 +533,15 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
           onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
         />
       </Field>
-      <div className="flex flex-wrap items-center justify-between gap-4 border-t border-outline-variant/30 pt-4 max-[820px]:flex-col max-[820px]:items-stretch">
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          <span aria-live="polite">{testResult && <span className={`text-[13px] font-bold ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</span>}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving || (form.enabled && (!form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)))} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Tautulli"
+        onSave={() => void save()}
+        saveDisabled={form.enabled && (!form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured))}
+        test={{ testing, disabled: !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured), result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -512,7 +600,7 @@ function LogsTab() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close log details" onClick={() => setActiveLog(null)} />
           <div ref={logDialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log Details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
             <div className="grid gap-2.5">
               <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
               <InfoRow label="Level"><span className={LEVEL_BADGE[activeLog.level]}>{activeLog.level}</span></InfoRow>
@@ -523,7 +611,7 @@ function LogsTab() {
           </div>
         </div>
       )}
-      <SectionCard title="Logs" description="Recent application logs. Disk logs are written under /config/logs.">
+      <SectionCard title="Logs" description="Recent application logs. Full logs are written to /config/logs.">
         <div className="flex flex-wrap items-center gap-2">
           <TextInput className="w-auto flex-[1_1_220px]" value={search} onChange={setSearch} placeholder="Search logs..." />
           <SelectInput className="w-auto basis-[140px]" value={filter} onChange={(value) => setFilter(value as LogFilter)}>
@@ -624,30 +712,33 @@ function JobsTab() {
     }
   }
 
-  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, () => setEditingJob(null));
+  // A save in flight must not be dismissable — Close/Cancel/Escape all route through
+  // here so none of them can back out of a dialog whose PATCH will land anyway.
+  const requestCloseJobDialog = () => { if (!saving) setEditingJob(null); };
+  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, requestCloseJobDialog);
 
   return (
     <>
       {editingJob && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit Schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)} aria-label="Close"><X size={18} /></button></div>
-            <Field label="New Frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
+            <Field label="New frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
               <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
               </SelectInput>
             </Field>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => setEditingJob(null)}>Cancel</button>
+              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
               <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>
         </div>
       )}
-      <SectionCard title="Jobs" description="Background jobs and their next scheduled execution.">
+      <SectionCard title="Jobs" description="Pacearr's background jobs. Run one now, or change how often the schedulable ones run.">
         {loading ? <div className="p-6 text-center text-on-surface-variant">Loading jobs...</div> : (
           <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-            <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(130px,.7fr)_minmax(160px,.8fr)_minmax(210px,auto)] items-center gap-4 border-b border-outline-variant/30 px-4 py-[13px] text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden"><span>Job Name</span><span>Next Execution</span><span>Last Run</span><span /></div>
+            <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(130px,.7fr)_minmax(160px,.8fr)_minmax(210px,auto)] items-center gap-4 border-b border-outline-variant/30 px-4 py-[13px] text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden"><span>Job</span><span>Next run</span><span>Last run</span><span /></div>
             {jobs.map((job) => {
               const active = runningId === job.id || Boolean(job.running || job.isRunning);
               return (
@@ -657,7 +748,7 @@ function JobsTab() {
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {JOB_PRESETS[job.id] && <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run Now"}</button>
+                    <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
                   </div>
                 </div>
               );
@@ -733,22 +824,21 @@ function AboutTab() {
       <SectionCard title="About Pacearr">
         <div className="grid gap-2.5">
           <InfoRow label="Version"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
-          <InfoRow label="Build Channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
+          <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
           {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
           <InfoRow label="Platform"><code className={codeClass}>{info?.platform ?? "..."}</code></InfoRow>
-          <InfoRow label="Data Directory"><code className={codeClass}>{info?.dataDir ?? "..."}</code></InfoRow>
+          <InfoRow label="Data directory"><code className={codeClass}>{info?.dataDir ?? "..."}</code></InfoRow>
           <InfoRow label="Timezone"><code className={codeClass}>{info?.tz ?? "..."}</code></InfoRow>
         </div>
       </SectionCard>
-      <SectionCard title="Getting Support">
+      <SectionCard title="Getting support">
         <div className="grid gap-2.5">
           <InfoRow label="GitHub"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
-          <InfoRow label="Configuration"><span className="text-on-surface-variant">Data and logs are stored under /config in the container.</span></InfoRow>
-          <InfoRow label="Health Check"><code className={codeClass}>/api/health</code></InfoRow>
+          <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
-      <SectionCard title="Releases" description="Release notes are fetched from the public Pacearr GitHub repository.">
+      <SectionCard title="Releases" description="Fetched from the public Pacearr repository on GitHub.">
         {releasesError && <p className="text-on-surface-variant">Release data is currently unavailable.</p>}
         {!releases && !releasesError && <p className="text-on-surface-variant">Loading releases...</p>}
         {releases?.length === 0 && <p className="text-on-surface-variant">No releases found.</p>}
