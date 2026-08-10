@@ -144,6 +144,26 @@ test("findUserByTautulliName refuses to guess when the Plex username is ambiguou
   }
 });
 
+test("findUserByTautulliName tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
+    ]);
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol87", displayName: "Carol", avatarUrl: null },
+    ]);
+    // "Kid" matches nobody's real username, and only ambiguously matches two users'
+    // display_name as a fallback — a failed primary lookup, not the kind of conflict on
+    // the strong signal that should block trying the independent friendly name, which
+    // uniquely identifies Carol here.
+    assert.equal(db.findUserByTautulliName("Kid", "carol87")?.id, carol.id);
+  } finally {
+    cleanup();
+  }
+});
+
 test("updateUser with an empty patch preserves the current enabled state", () => {
   const { db, cleanup } = createDb();
   try {
