@@ -40,7 +40,7 @@ function createHarness() {
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function installFetchStub(sessionsXml: string) {
+function installFetchStub(sessionsXml: string, seriesJson = "[]") {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
@@ -48,7 +48,7 @@ function installFetchStub(sessionsXml: string) {
       return new Response(sessionsXml, { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.pathname === "/api/v3/series") {
-      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(seriesJson, { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error(`Unhandled fetch in test: ${url.toString()}`);
   }) as typeof fetch;
@@ -62,6 +62,39 @@ test("a session check that moved nobody's progress records no history event", as
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
     assert.deepEqual(db.listHistory(10), []);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event", async () => {
+  const { db, services, cleanup } = createHarness();
+  const [gina] = db.upsertUsers([
+    { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
+  ]);
+  const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
+  // A watch of episode 2 already resolves at a newer timestamp than this seed, so
+  // upsertRollingUserProgress persists a change. It isn't a premiere (skips
+  // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason
+  // before it ever calls Sonarr), so processWatchEvent reports changed: false even
+  // though a viewer's progress genuinely moved.
+  db.upsertRollingUserProgress(wire.id, gina.id, 1, 1, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+
+  const sessionsXml = `<?xml version="1.0"?>
+    <MediaContainer size="1">
+      <Video type="episode" sessionKey="1" ratingKey="100" grandparentRatingKey="10" grandparentTitle="The Wire" parentIndex="1" index="2">
+        <User id="42" title="gina" />
+      </Video>
+    </MediaContainer>`;
+  const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
+  const restoreFetch = installFetchStub(sessionsXml, seriesJson);
+  try {
+    const result = await services.checkSessions();
+    assert.equal(result.changed, 0);
+    const history = db.listHistory(10);
+    assert.equal(history.length, 1);
+    assert.equal(history[0]!.action, "sessions.check");
   } finally {
     restoreFetch();
     cleanup();

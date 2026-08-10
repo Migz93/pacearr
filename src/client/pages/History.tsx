@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { apiGet } from "../lib/api";
@@ -56,6 +56,7 @@ export default function History() {
   const [data, setData] = useState<HistoryPageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   function setParam(key: string, value: string, resetPage = false) {
     setSearchParams((previous) => {
@@ -68,6 +69,7 @@ export default function History() {
   }
 
   const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     const params = new URLSearchParams({
       page: String(page),
@@ -76,12 +78,15 @@ export default function History() {
       category,
     });
     try {
-      setData(await apiGet<HistoryPageResponse>(`/api/history?${params.toString()}`));
+      const result = await apiGet<HistoryPageResponse>(`/api/history?${params.toString()}`);
+      if (requestId !== requestIdRef.current) return;
+      setData(result);
       setError(null);
     } catch (caught) {
+      if (requestId !== requestIdRef.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [category, level, page, pageSize]);
 

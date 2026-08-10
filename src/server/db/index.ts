@@ -766,7 +766,7 @@ export class PacearrDatabase {
     // someone whose switch has no effect on any of them.
     const rows = this.db.prepare(`
       SELECT rsu.user_id AS userId,
-        SUM(CASE WHEN rsu.last_watched_at >= ? AND users.enabled = 1 THEN 1 ELSE 0 END) AS activeShowCount,
+        SUM(CASE WHEN rsu.last_watched_at >= ? AND rsu.last_watched_season > 0 AND users.enabled = 1 THEN 1 ELSE 0 END) AS activeShowCount,
         MAX(rsu.last_watched_at) AS lastWatchedAt
       FROM rolling_show_users rsu
       JOIN users ON users.id = rsu.user_id

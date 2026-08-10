@@ -68,3 +68,23 @@ test("the shows-driven-by-user dialog reports a recent watch as active for an en
     cleanup();
   }
 });
+
+test("the shows-driven-by-user dialog reports a recent special (season 0) as inactive", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    // Specials don't expand a season, so they shouldn't read as "keeping this show
+    // active" here either — matches the countActiveShowsByUser card-level fix.
+    const [frank] = db.upsertUsers([
+      { plexUserId: "plex-frank", plexAccountId: "7", tautulliUserId: null, username: "frank", displayName: "Frank", avatarUrl: null },
+    ]);
+    const show = db.upsertRollingShow({ id: 22, title: "Doctor Who" });
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    db.upsertRollingUserProgress(show.id, frank.id, 0, 1, recent);
+
+    const shows = await services.listShowsDrivenByUser(frank.id);
+    assert.equal(shows.length, 1);
+    assert.equal(shows[0]!.active, false);
+  } finally {
+    cleanup();
+  }
+});

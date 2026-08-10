@@ -275,6 +275,29 @@ test("a disabled user's recent watch does not count as an active show, but still
   }
 });
 
+test("a recent special (season 0) does not count as an active show, but still counts as last watched", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Specials never expand a season (see the seasonNumber > 0 gate in processWatchEvent),
+    // so counting one here as "active" would tell a viewer their switch is keeping a show
+    // expanded when it isn't.
+    const [dana] = db.upsertUsers([
+      { plexUserId: "plex-dana", plexAccountId: "6", tautulliUserId: null, username: "dana", displayName: "Dana", avatarUrl: null },
+    ]);
+    const show = db.upsertRollingShow({ id: 13, title: "Doctor Who" });
+
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.upsertRollingUserProgress(show.id, dana.id, 0, 1, recent);
+
+    const activity = db.countActiveShowsByUser(cutoff);
+    assert.equal(activity.get(dana.id)?.activeShowCount, 0);
+    assert.equal(activity.get(dana.id)?.lastWatchedAt, recent);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a recommendation cache written in an older field shape is treated as absent", () => {
   const { db, dir, cleanup } = createDb();
   try {

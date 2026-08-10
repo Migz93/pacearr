@@ -269,7 +269,7 @@ export class PacearrServices {
     // as "Active" here regardless of how recent it was — matching countActiveShowsByUser,
     // which gates the same way for the card this dialog opens from.
     const enabled = this.db.getUser(userId)?.enabled ?? false;
-    return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: enabled && show.watchedAt >= cutoff }));
+    return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: enabled && show.seasonNumber > 0 && show.watchedAt >= cutoff }));
   }
 
   private activityCutoff(): string {
@@ -1027,29 +1027,29 @@ export class PacearrServices {
     return true;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean }> {
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
-    if (!stored.inserted) return { inserted: false, changed: false };
+    if (!stored.inserted) return { inserted: false, changed: false, progressUpdated: false };
     // Complete history is retained for audit and the History tab, but replaying
     // old pilot watches must not expand seasons or retrigger Sonarr actions.
-    if (!applyRolling) return { inserted: true, changed: false };
-    if (!input.userId || !input.sonarrSeriesId) return { inserted: true, changed: false };
+    if (!applyRolling) return { inserted: true, changed: false, progressUpdated: false };
+    if (!input.userId || !input.sonarrSeriesId) return { inserted: true, changed: false, progressUpdated: false };
     const user = this.db.getUser(input.userId);
     const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
-    if (!user?.enabled || !rolling) return { inserted: true, changed: false };
+    if (!user?.enabled || !rolling) return { inserted: true, changed: false, progressUpdated: false };
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
-    if (!progressUpdated) return { inserted: true, changed: false };
+    if (!progressUpdated) return { inserted: true, changed: false, progressUpdated: false };
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
-    if (operation === null) return { inserted: true, changed: false };
+    if (operation === null) return { inserted: true, changed: false, progressUpdated: true };
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       if (input.episodeNumber === 1 && input.seasonNumber > 0) {
-        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache) };
+        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache), progressUpdated: true };
       }
-      return { inserted: true, changed: await this.prefetchNextSeason(input, rolling.id, episodeCache) };
+      return { inserted: true, changed: await this.prefetchNextSeason(input, rolling.id, episodeCache), progressUpdated: true };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
@@ -1286,6 +1286,7 @@ export class PacearrServices {
     }
 
     let changed = 0;
+    let progressUpdated = false;
     for (const { event, series } of matched) {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
       const result = await this.processWatchEvent({
@@ -1302,11 +1303,13 @@ export class PacearrServices {
         rawPayload: event.raw,
       }, "plex-session", true, episodeCache);
       if (result.changed) changed++;
+      if (result.progressUpdated) progressUpdated = true;
     }
     // This job can run as often as every minute, so an unconditional entry here buried
     // History under thousands of "processed 0, changed 0" rows. Only a check that moved
-    // someone's progress is worth an audit entry; every run is still logged.
-    if (changed > 0) {
+    // someone's progress is worth an audit entry; every run is still logged. A watch that
+    // only updated rolling_show_users (no season expansion/prefetch) still counts.
+    if (changed > 0 || progressUpdated) {
       this.db.addHistory("info", "sessions.check", "Plex sessions", { processed: events.length, changed });
     }
     this.logger.info("Plex session check complete", { processed: events.length, changed });

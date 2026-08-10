@@ -337,7 +337,10 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setTestResult(null);
     try {
       const result = await apiPost<{ ok: boolean; message?: string; error?: string }>("/api/settings/plex/test", buildPayload());
-      setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
+      setTestResult({
+        ok: result.ok,
+        message: result.message ?? result.error ?? (result.ok ? "Test Succeeded" : "Test failed"),
+      });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
     } finally {

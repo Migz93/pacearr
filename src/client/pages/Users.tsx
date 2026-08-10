@@ -335,7 +335,7 @@ function UserShowsDialog({ user, onClose }: { user: UserListItem; onClose: () =>
         ))}
       </fieldset>
 
-      {shows === null ? (
+      {error ? null : shows === null ? (
         <p className="py-4 text-center text-on-surface-variant">Loading...</p>
       ) : visible.length === 0 ? (
         <p className="py-4 text-center text-on-surface-variant">
