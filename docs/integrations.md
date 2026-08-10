@@ -138,6 +138,23 @@ Tautulli events are normalised into the same `watch_events` table as Plex events
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 
+### User Matching
+
+`get_history` reports two names per event, and Pacearr treats them as independent signals with different trust levels:
+
+| Tautulli field | Meaning | Trust |
+|---|---|---|
+| `username` | The real Plex username. Empty for Plex Home/managed users. | Tried first |
+| `user` | The friendly name, editable per user in Tautulli's admin UI at any time. | Fallback only |
+
+Matching order, against Pacearr's `users.username` then `users.display_name` (both sourced from Plex, case-insensitively):
+
+1. Try `username`. An unambiguous match wins outright.
+2. A `username` match that is ambiguous (colliding case-insensitively across multiple Pacearr users) stops the lookup — the friendly name is not tried, since a coincidental match there could attribute the event to an unrelated third user.
+3. If `username` produced no match at all (not ambiguous, just nothing), try the friendly name the same way.
+
+A duplicate event (same `source_event_id`) that was previously imported with `user_id = NULL` is repaired in place once a later import resolves a match, and that user's rolling progress is refreshed — otherwise `INSERT OR IGNORE` would leave it orphaned forever.
+
 ## Failure Behaviour
 
 External API failures should:

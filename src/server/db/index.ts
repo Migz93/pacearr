@@ -497,6 +497,23 @@ export class PacearrDatabase {
     `).run(userId, plexAccountId).changes;
   }
 
+  /**
+   * Repairs one previously-imported Tautulli watch event whose user_id is still NULL.
+   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_event_id), so a
+   * duplicate — including an event first imported before the #75 matching fix, when the
+   * resolved name didn't match anything yet — is silently skipped on every later import and
+   * never revisited on its own. Scoped to a single event by its unique key rather than a
+   * broader relink like linkUnassignedWatchEventsByPlexAccount, since Tautulli events carry
+   * no stable account identifier to relink by.
+   */
+  repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
+    return this.db.prepare(`
+      UPDATE watch_events
+      SET user_id = ?
+      WHERE source = 'tautulli' AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, sourceEventId).changes > 0;
+  }
+
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
     return this.db.prepare(`
       SELECT sonarr_series_id AS sonarrSeriesId, season_number AS seasonNumber, episode_number AS episodeNumber, watched_at AS watchedAt

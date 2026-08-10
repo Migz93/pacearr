@@ -643,6 +643,29 @@ test("server-local Plex owner history can be linked and used to rebuild progress
   }
 });
 
+test("a previously orphaned Tautulli watch event can be repaired once its user resolves", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Regression for #75: before the matching fix, a Tautulli event whose friendly name
+    // matched nobody imported with user_id = NULL and INSERT OR IGNORE means it's never
+    // revisited on its own — this is the targeted repair for that orphaned row.
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.insertWatchEvent({
+      source: "tautulli", sourceEventId: "tautulli-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+      sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 3,
+      watchedAt: "2026-04-12T10:00:00.000Z", rawPayload: {},
+    });
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), true);
+    assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 3, watchedAt: "2026-04-12T10:00:00.000Z" }]);
+    // Already-assigned events must not be re-attributed by a later, different resolution.
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {
