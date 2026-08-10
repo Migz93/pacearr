@@ -14,12 +14,17 @@ export type PlexSessionMonitorStatus = {
   description: string;
 };
 
-type NotificationEnvelope = {
-  PlaySessionStateNotification?: { state?: string } | Array<{ state?: string }>;
-  NotificationContainer?: {
-    PlaySessionStateNotification?: { state?: string } | Array<{ state?: string }>;
-  };
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function playbackStates(payload: unknown): string[] {
+  if (!isRecord(payload)) return [];
+  const container = isRecord(payload.NotificationContainer) ? payload.NotificationContainer : null;
+  const notifications = payload.PlaySessionStateNotification ?? container?.PlaySessionStateNotification;
+  const entries = Array.isArray(notifications) ? notifications : [notifications];
+  return entries.flatMap((entry) => isRecord(entry) && typeof entry.state === "string" ? [entry.state] : []);
+}
 
 export type PlexSessionMonitorOptions = {
   initialReconnectMs?: number;
@@ -127,13 +132,12 @@ export class PlexSessionMonitor {
 
   private handleMessage = (event: MessageEvent<string>): void => {
     this.resetHeartbeat();
-    let payload: NotificationEnvelope;
-    try { payload = JSON.parse(event.data) as NotificationEnvelope; } catch {
+    let payload: unknown;
+    try { payload = JSON.parse(event.data); } catch {
       this.logger.debug("Ignoring malformed Plex SSE notification");
       return;
     }
-    const notifications = payload.PlaySessionStateNotification ?? payload.NotificationContainer?.PlaySessionStateNotification;
-    const states = (Array.isArray(notifications) ? notifications : notifications ? [notifications] : []).map((notification) => notification.state);
+    const states = playbackStates(payload);
     if (states.some((state) => state === "playing" || state === "buffering")) {
       this.logger.debug("Live Plex playback notification received", { states });
       this.onPlayback();
