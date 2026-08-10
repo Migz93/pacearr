@@ -98,7 +98,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| A local SSE playback notification triggers a session check | The monitor authenticates its local stream with the Plex token, records a live connection, and accepts Plex's named `playing` event with its root `PlaySessionStateNotification` payload without requiring a Plex server or an active viewer |
+| A local SSE playback notification triggers a session check | The monitor authenticates its local stream with the Plex token, records a live connection, and accepts both Plex's named `playing` event with its root `PlaySessionStateNotification` payload and the legacy generic/nested notification shape without requiring a Plex server or an active viewer |
 | A failed local SSE connection reports polling fallback | A Plex connection failure does not trigger a session check and leaves the scheduled fallback visible |
 | An idle live SSE connection falls back to polling | A reverse proxy or Plex stream that stays open but stops producing heartbeats is reconnected rather than suppressing polling indefinitely |
 | A monitor that begins before Plex is configured reconnects later | The live monitor does not become permanently unavailable when configuration appears after startup |

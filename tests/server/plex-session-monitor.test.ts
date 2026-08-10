@@ -45,6 +45,8 @@ test("Plex SSE playback notifications trigger a session check without Plex", asy
     await waitFor(() => monitor.getStatus().mode === "live");
     streams[0]?.write(`event: playing\ndata: ${JSON.stringify({ PlaySessionStateNotification: { state: "playing" } })}\n\n`);
     await waitFor(() => triggers === 1);
+    streams[0]?.write(`data: ${JSON.stringify({ NotificationContainer: { PlaySessionStateNotification: [{ state: "playing" }] } })}\n\n`);
+    await waitFor(() => triggers === 2);
     assert.equal(monitor.getStatus().mode, "live");
   } finally {
     monitor.stop();
