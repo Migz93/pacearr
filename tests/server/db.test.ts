@@ -354,6 +354,41 @@ test("a recommendation cache missing any field, not just viewers/viewerCount, is
   }
 });
 
+test("a recommendation cache row with corrupted JSON is treated as absent, not as zero candidates", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    // getRecommendationCache used to parse through a helper whose fallback-on-error
+    // returned [], which passes the array/shape check vacuously and reads as a genuine
+    // "0 candidates" cache instead of triggering the refresh callers expect from null.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run("{not valid json", new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a recommendation cache with non-numeric season entries is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const badSeasons = [{
+      sonarrSeriesId: 1, title: "Fringe", year: 2008, posterUrl: null, status: null,
+      seasonCount: 5, episodeCount: 100, sizeOnDiskBytes: 0,
+      retainedSeasons: ["2"], droppedSeasons: [2], // retainedSeasons entry is a string, not a number
+      viewerCount: 0, viewers: [], projectedSavingsBytes: 1, ignored: false,
+    }];
+    raw.prepare("INSERT INTO recommendation_cache (id, candidates, generated_at) VALUES (1, ?, ?)")
+      .run(JSON.stringify(badSeasons), new Date().toISOString());
+    raw.close();
+    assert.equal(db.getRecommendationCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("history supports filtered server-side pagination", () => {
   const { db, cleanup } = createDb();
   try {

@@ -227,7 +227,10 @@ function UserEditDialog({ user, onClose, onSaved }: {
   const [enabled, setEnabled] = useState(user.enabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useDialogA11y<HTMLDivElement>(true, onClose);
+  // A save in flight must not be dismissable — Cancel/backdrop/X/Escape all route
+  // through here so none of them can back out of a dialog whose PATCH will land anyway.
+  const requestClose = () => { if (!saving) onClose(); };
+  const dialogRef = useDialogA11y<HTMLDivElement>(true, requestClose);
 
   async function save() {
     setSaving(true);
@@ -244,7 +247,7 @@ function UserEditDialog({ user, onClose, onSaved }: {
   }
 
   return (
-    <DialogShell titleId="user-edit-title" onClose={onClose} dialogRef={dialogRef} maxWidth="460px" user={user} title={user.username}>
+    <DialogShell titleId="user-edit-title" onClose={requestClose} dialogRef={dialogRef} maxWidth="460px" user={user} title={user.username}>
       {error && <ErrorBanner message={error} />}
       <div className="grid gap-5">
         <ToggleField
@@ -255,7 +258,7 @@ function UserEditDialog({ user, onClose, onSaved }: {
         />
       </div>
       <div className="mt-5 flex justify-end gap-2">
-        <button type="button" className={compactSecondaryButton} onClick={onClose}>Cancel</button>
+        <button type="button" className={compactSecondaryButton} disabled={saving} onClick={requestClose}>Cancel</button>
         <button type="button" className={compactPrimaryButton} disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
       </div>
     </DialogShell>

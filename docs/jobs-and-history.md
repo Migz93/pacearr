@@ -31,8 +31,8 @@ One endpoint, for any scheduler-registered job:
 | `POST /api/settings/jobs/:id/run` | Run a job now |
 | `PATCH /api/settings/jobs/:id` | Change a job's interval (`session-check` and `history-import` only) |
 
-The parallel `/api/jobs/*` routes were removed with the Dashboard quick actions
-they existed for.
+The parallel `/api/jobs/*` routes and the Dashboard quick actions they
+supported were removed.
 
 Settings → Jobs is the only UI surface for running a job now or changing a
 schedule. `session-check` and `history-import` intervals are stored in

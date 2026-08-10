@@ -40,15 +40,32 @@ function createHarness() {
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function installFetchStub(sessionsXml: string, seriesJson = "[]") {
+function installFetchStub(sessionsXml: string, options: { seriesJson?: string; seriesByIdJson?: Record<number, string>; episodesBySeriesJson?: Record<number, string> } = {}) {
+  const { seriesJson = "[]", seriesByIdJson = {}, episodesBySeriesJson = {} } = options;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.hostname === "plex" && url.pathname === "/status/sessions") {
       return new Response(sessionsXml, { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.pathname === "/api/v3/series") {
       return new Response(seriesJson, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
+    if (byIdMatch && seriesByIdJson[Number(byIdMatch[1])]) {
+      return new Response(seriesByIdJson[Number(byIdMatch[1])], { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/api/v3/episode") {
+      const seriesId = Number(url.searchParams.get("seriesId"));
+      return new Response(episodesBySeriesJson[seriesId] ?? "[]", { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/api/v3/episodefile") {
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    }
+    // Sonarr mutation requests (PUT/POST) - the test only cares that they were
+    // attempted, tracked separately via changedSomething, not their response body.
+    if ((init?.method ?? "GET").toUpperCase() !== "GET") {
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }
     throw new Error(`Unhandled fetch in test: ${url.toString()}`);
   }) as typeof fetch;
@@ -88,7 +105,7 @@ test("a session check that only advances a viewer's progress, without expanding 
       </Video>
     </MediaContainer>`;
   const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
-  const restoreFetch = installFetchStub(sessionsXml, seriesJson);
+  const restoreFetch = installFetchStub(sessionsXml, { seriesJson });
   try {
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
@@ -110,6 +127,35 @@ test("a rolling reconcile with nothing to change and no errors records no histor
     assert.equal(result.changed, 0);
     assert.deepEqual(result.errors, []);
     assert.deepEqual(db.listHistory(10), []);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event", async () => {
+  const { db, services, cleanup } = createHarness();
+  // Season 1 already sits at its target (unretained, unmonitored) and episode 1
+  // already matches its target monitored state with a file on disk, so nothing in
+  // calculateRollingPlan's episode/season/search/file outputs differs. Only
+  // series.monitored (false, should be true) differs - changedSomething used to miss
+  // that, so applyMonitoringPlan mutated Sonarr but sonarr.baseline never appeared in
+  // History for a scheduled sweep that genuinely changed something.
+  db.updateAppSettings({ dryRun: false });
+  const series = { id: 40, title: "Baseline Show", monitored: false, monitorNewItems: "none", seasons: [{ seasonNumber: 1, monitored: false }] };
+  const episodes = [{ id: 4001, seriesId: 40, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 1 }];
+  db.upsertRollingShow({ id: 40, title: "Baseline Show" });
+  const restoreFetch = installFetchStub('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', {
+    seriesJson: JSON.stringify([series]),
+    seriesByIdJson: { 40: JSON.stringify(series) },
+    episodesBySeriesJson: { 40: JSON.stringify(episodes) },
+  });
+  try {
+    const result = await services.reconcileRollingShows();
+    assert.equal(result.changed, 0);
+    const history = db.listHistory(10);
+    assert.equal(history.length, 1);
+    assert.equal(history[0]!.action, "sonarr.baseline");
   } finally {
     restoreFetch();
     cleanup();

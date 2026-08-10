@@ -75,9 +75,12 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
+| A recent special (season 0) does not count as an active show, but still counts as last watched | Specials never expand a season (`processWatchEvent` gates expansion on `seasonNumber > 0`), so counting one as "active" here would tell a viewer their switch is keeping a show expanded when it isn't |
 | A legacy `watch_events.reconciled` row still appears under the Sync category | That action stopped being written, but an install that ran an older version can already have rows with it, and dropping it from the category map would make them disappear from the Sync filter |
 | `updateUser` with an empty patch preserves the current enabled state | Locks in the `patch.enabled ?? current.enabled` fallback this layer relies on, independent of whatever the route above it does with an absent field |
 | A recommendation cache missing any field, not just viewers/viewerCount, is treated as absent | The shape guard used to check only the two fields the last rename broke; a row missing a different field (or a malformed nested viewer) would have passed and then crashed the client downstream |
+| A recommendation cache row with corrupted JSON is treated as absent, not as zero candidates | `getRecommendationCache` used to parse through a helper whose fallback-on-error returned `[]`, which passes the shape check vacuously and reads as a genuine "0 candidates" cache instead of triggering the refresh callers expect from `null` |
+| A recommendation cache with non-numeric season entries is treated as absent | The shape guard checked `retainedSeasons`/`droppedSeasons` were arrays but never that their elements were numbers, unlike every other field in the same guard |
 | `findUserByTautulliName` prefers an exact username match and refuses to guess between ambiguous display names | `username` has no uniqueness constraint and `display_name` even less so — a single OR query with `.get()` would silently attribute one person's Tautulli history to a different Pacearr user on a tie |
 | `findUserByTautulliName` refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie | The username step trusted a bare `.get()` as if a match always meant one row; it did not, since username has no uniqueness constraint either and the lookup is case-insensitive. A third user with a matching display_name proves the null result is the designed refusal, not a coincidence — without it, the test couldn't tell "refused to guess" from "found nothing either way" |
 | `findUserByTautulliName` falls back to an unambiguous display name match | The case the fallback exists for — a Tautulli friendly name that matches nobody's username but exactly one display name |
@@ -87,7 +90,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | A session check that moved nobody's progress records no history event | `session-check` can run once a minute; an unconditional entry buried History under "processed 0, changed 0" rows. The run is still logged |
+| A session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event | `processWatchEvent` can persist a `rolling_show_users` update while returning `changed: false` (no premiere, or `earlyPrefetchEnabled` is off) — the audit-log gate must also react to `progressUpdated`, not just `changed`, or a genuine progress move goes unlogged |
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
+| A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
@@ -171,6 +176,7 @@ Read-only. Safe to run against a live instance.
 |---|---|
 | The shows-driven-by-user dialog reports nothing as active for a disabled viewer, even a recent watch | Must agree with the card's `activeShowCount` — a disabled viewer's watches can't keep anything expanded, so the dialog can't show the same shows as "Active" that the card just called inactive |
 | The shows-driven-by-user dialog reports a recent watch as active for an enabled viewer | The positive case, so the negative one above is checking a real gate and not a query that always returns false |
+| The shows-driven-by-user dialog reports a recent special (season 0) as inactive | Matches the `countActiveShowsByUser` card-level fix — specials don't expand a season, so they shouldn't read as "keeping this show active" here either |
 
 ### `tests/playwright/history.spec.ts` — History filters
 

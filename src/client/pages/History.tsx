@@ -71,6 +71,8 @@ export default function History() {
   const load = useCallback(async () => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
+    setData(null);
+    setError(null);
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),

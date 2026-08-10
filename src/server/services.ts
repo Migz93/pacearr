@@ -861,7 +861,14 @@ export class PacearrServices {
     // unconditionally wrote one "Baseline set" row per show per run — the same
     // heartbeat-in-the-audit-log problem as sessions.check. Enrolment and manual resets
     // are always worth an entry; a scheduled sweep only is when it did something.
-    const changedSomething = updates.length > 0 || plan.filesToDelete.length > 0 || seasonSearches.length > 0 || (searchAllPilots && plan.pilotSearches.length > 0);
+    const changedSomething =
+      plan.seriesMonitoringUpdate ||
+      plan.seasonMonitoringToDisable.length > 0 ||
+      plan.seasonMonitoringToEnable.length > 0 ||
+      updates.length > 0 ||
+      plan.filesToDelete.length > 0 ||
+      seasonSearches.length > 0 ||
+      (searchAllPilots && plan.pilotSearches.length > 0);
     if (reason !== "scheduled-reconcile" || changedSomething) {
       this.db.addHistory("info", dryRun ? "dry_run.sonarr.baseline" : "sonarr.baseline", series.title, {
         reason,

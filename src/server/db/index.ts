@@ -137,8 +137,8 @@ function isCurrentShapeRecommendation(candidate: unknown): candidate is ShowReco
     && typeof value?.seasonCount === "number"
     && typeof value?.episodeCount === "number"
     && typeof value?.sizeOnDiskBytes === "number"
-    && Array.isArray(value?.retainedSeasons)
-    && Array.isArray(value?.droppedSeasons)
+    && Array.isArray(value?.retainedSeasons) && value.retainedSeasons.every((season) => typeof season === "number")
+    && Array.isArray(value?.droppedSeasons) && value.droppedSeasons.every((season) => typeof season === "number")
     && typeof value?.viewerCount === "number"
     && Array.isArray(value?.viewers) && value.viewers.every(isCurrentShapeShowUserProgress)
     && typeof value?.projectedSavingsBytes === "number"
@@ -271,10 +271,18 @@ export class PacearrDatabase {
     const row = this.db.prepare("SELECT candidates, generated_at FROM recommendation_cache WHERE id = 1").get() as
       { candidates: string; generated_at: string } | undefined;
     if (!row) return null;
-    const candidates = parseJson<ShowRecommendation[]>(row.candidates, []);
-    // parseJson only guards against invalid JSON syntax, not against valid JSON that
-    // isn't an array (e.g. a legacy shape that stored an object) — .every() would throw
-    // on that rather than falling through to the shape check below.
+    // Parsed directly rather than through parseJson: that helper's fallback-on-error
+    // would turn corrupted JSON into an empty array, which passes the shape check below
+    // and gets treated as a real "0 candidates" cache instead of triggering a refresh.
+    let candidates: unknown;
+    try {
+      candidates = JSON.parse(row.candidates);
+    } catch {
+      return null;
+    }
+    // Not against invalid JSON syntax (handled above), but against valid JSON that isn't
+    // an array (e.g. a legacy shape that stored an object) — .every() would throw on that
+    // rather than falling through to the shape check below.
     if (!Array.isArray(candidates) || !candidates.every(isCurrentShapeRecommendation)) return null;
     return { candidates, generatedAt: row.generated_at };
   }

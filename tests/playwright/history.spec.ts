@@ -8,14 +8,17 @@ test("history filters and page size render", async ({ page }) => {
   for (const level of ["All levels", "Info", "Warning"]) {
     await expect(page.getByRole("button", { name: level, exact: true })).toBeVisible();
   }
+  await expect(page.getByRole("button", { name: "Error", exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Rows per page" })).toBeVisible();
 });
 
 test("history type filter is a fixed set of categories, not one button per action", async ({ page }) => {
   await openPage(page, "/history", "History");
-  for (const category of ["All types", "Monitoring", "Cleanup", "Shows", "Sync"]) {
+  const categories = ["All types", "Monitoring", "Cleanup", "Shows", "Sync"];
+  for (const category of categories) {
     await expect(page.getByRole("button", { name: category, exact: true })).toBeVisible();
   }
+  await expect(page.getByRole("group", { name: "Event type" }).getByRole("button")).toHaveCount(categories.length);
 });
 
 test("history category filter updates the URL", async ({ page }) => {

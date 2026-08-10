@@ -516,9 +516,19 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ users: await services.listUsers() });
   }));
   app.get("/api/users/:id/shows", requireAuth, (req, res) => {
-    res.json({ shows: services.listShowsDrivenByUser(Number(req.params.id)) });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
+    res.json({ shows: services.listShowsDrivenByUser(id) });
   });
   app.patch("/api/users/:id", requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
     // Coercing an absent field with Boolean(undefined) would send `enabled: false` to
     // updateUser on every call, including a body that never mentioned it — silently
     // disabling the user instead of leaving them as they were. Only pass `enabled`
@@ -531,8 +541,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       res.status(400).json({ error: "enabled must be a boolean." });
       return;
     }
+    if (!db.getUser(id)) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
     const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: body.enabled } : {};
-    const user = db.updateUser(Number(req.params.id), patch);
+    const user = db.updateUser(id, patch);
     logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });
   });
