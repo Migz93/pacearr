@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   DashboardResponse,
   RecommendationsResponse,
   RunResult,
@@ -483,13 +484,32 @@ export class PacearrServices {
     };
   }
 
-  async refreshRecommendations(): Promise<void> {
+  async refreshRecommendations(options: { cacheOnly?: boolean } = {}): Promise<void> {
     this.logger.info("Recommendation refresh started");
     const sonarr = this.getSonarr();
     const appSettings = this.db.getAppSettings();
     const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
 
-    const allSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await sonarr.getSeries();
+    const libraryCache = this.db.getSonarrLibraryCache();
+    if (!libraryCache) {
+      if (options.cacheOnly) {
+        // The scheduled calculation never owns a whole-library fetch: that is the
+        // library job's responsibility, avoiding duplicate Sonarr requests.
+        this.logger.warn("Skipped recommendation refresh; Sonarr library cache is empty");
+        return;
+      }
+      const allSeries = await sonarr.getSeries();
+      return this.refreshRecommendationsFromSeries(allSeries, sonarr, appSettings, cutoff);
+    }
+    return this.refreshRecommendationsFromSeries(libraryCache.items.map((item) => item.series), sonarr, appSettings, cutoff);
+  }
+
+  private async refreshRecommendationsFromSeries(
+    allSeries: SonarrSeries[],
+    sonarr: SonarrIntegration,
+    appSettings: AppSettings,
+    cutoff: string
+  ): Promise<void> {
     const enrolledIds = new Set(this.db.listRollingShows().map((show) => show.sonarrSeriesId));
     const ignoredIds = new Set(this.db.listIgnoredRecommendationIds());
     const candidates = allSeries.filter((series) => !enrolledIds.has(series.id));
@@ -1157,7 +1177,10 @@ export class PacearrServices {
     let imported = 0;
     let matched = 0;
     let unmatched = 0;
-    const sonarrSeries = await this.getSonarr().getSeries();
+    // Incremental imports normally reuse the shared library snapshot. A direct fetch is
+    // only needed before the first library refresh, when there is no cache to match
+    // incoming history against yet.
+    const sonarrSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries();
     const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
     changed += this.reconcileAllUnmatchedWatchEvents(seriesIndex);
     const plex = this.getPlex();

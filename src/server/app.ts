@@ -15,7 +15,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
-import { normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
+import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
 
@@ -149,15 +149,19 @@ const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings:
   },
   "full-history-reconcile": {
     name: "Full history reconciliation",
-    intervalDescription: () => "Every 30 days",
+    intervalDescription: (settings) => `Every ${settings.fullHistoryReconcileIntervalDays} day${settings.fullHistoryReconcileIntervalDays !== 1 ? "s" : ""}`,
   },
   "rolling-reconcile": {
     name: "Rolling reconciliation",
-    intervalDescription: () => "Every 6 hours",
+    intervalDescription: (settings) => `Every ${settings.rollingReconcileIntervalHours} hour${settings.rollingReconcileIntervalHours !== 1 ? "s" : ""}`,
+  },
+  "sonarr-library-refresh": {
+    name: "Sonarr library refresh",
+    intervalDescription: (settings) => `Every ${settings.sonarrLibraryRefreshIntervalHours} hour${settings.sonarrLibraryRefreshIntervalHours !== 1 ? "s" : ""}`,
   },
   "recommendation-refresh": {
-    name: "Sonarr library refresh",
-    intervalDescription: () => "Every 6 hours",
+    name: "Recommendation calculation",
+    intervalDescription: (settings) => `Every ${settings.recommendationRefreshIntervalHours} hour${settings.recommendationRefreshIntervalHours !== 1 ? "s" : ""}`,
   },
 };
 
@@ -168,6 +172,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   const services = new PacearrServices(db, logger, imageCache, config.dataDir);
   const app = express();
   const sessionSecret = db.getSessionSecret();
+
+  function isAnyJobRunning(...ids: string[]) {
+    return scheduler?.listJobs().some((job) => ids.includes(job.id) && job.running) ?? false;
+  }
 
   if (db.getAppSettings().trustProxy) app.set("trust proxy", 1);
 
@@ -341,7 +349,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.saveSonarrSettings(settings);
     logger.info("Sonarr settings saved", { baseUrl: settings.baseUrl });
-    scheduler?.runNow("recommendation-refresh");
+    scheduler?.runNow("sonarr-library-refresh");
     res.json({ ok: true, sonarr: db.getSonarrSettingsView() });
   }));
 
@@ -384,6 +392,21 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.historyImportIntervalHours !== undefined) {
       patch.historyImportIntervalHours = normaliseScheduleIntervalHours(body.historyImportIntervalHours, DEFAULT_APP_SETTINGS.historyImportIntervalHours);
     }
+    if (body.fullHistoryReconcileIntervalDays !== undefined) {
+      patch.fullHistoryReconcileIntervalDays = normaliseScheduleIntervalDays(
+        body.fullHistoryReconcileIntervalDays,
+        DEFAULT_APP_SETTINGS.fullHistoryReconcileIntervalDays
+      );
+    }
+    if (body.rollingReconcileIntervalHours !== undefined) {
+      patch.rollingReconcileIntervalHours = normaliseScheduleIntervalHours(body.rollingReconcileIntervalHours, DEFAULT_APP_SETTINGS.rollingReconcileIntervalHours);
+    }
+    if (body.sonarrLibraryRefreshIntervalHours !== undefined) {
+      patch.sonarrLibraryRefreshIntervalHours = normaliseScheduleIntervalHours(body.sonarrLibraryRefreshIntervalHours, DEFAULT_APP_SETTINGS.sonarrLibraryRefreshIntervalHours);
+    }
+    if (body.recommendationRefreshIntervalHours !== undefined) {
+      patch.recommendationRefreshIntervalHours = normaliseScheduleIntervalHours(body.recommendationRefreshIntervalHours, DEFAULT_APP_SETTINGS.recommendationRefreshIntervalHours);
+    }
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);
@@ -414,6 +437,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
     scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("full-history-reconcile", { intervalMs: appSettings.fullHistoryReconcileIntervalDays * 24 * 60 * 60 * 1000 });
+    scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("sonarr-library-refresh", { intervalMs: appSettings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("recommendation-refresh", { intervalMs: appSettings.recommendationRefreshIntervalHours * 60 * 60 * 1000 });
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
       scheduler?.runNow("rolling-reconcile");
@@ -495,20 +522,26 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       res.status(400).json({ error: "intervalMinutes is required." });
       return;
     }
-    if (req.params.id === "session-check") {
-      const appSettings = db.updateAppSettings({ sessionPollIntervalMinutes: intervalMinutes });
-      scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
-      res.json({ updated: true });
+    const schedules: Record<string, { setting: keyof AppSettings; intervalMs: (value: number) => number }> = {
+      "session-check": { setting: "sessionPollIntervalMinutes", intervalMs: (value) => value * 60 * 1000 },
+      "history-import": { setting: "historyImportIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
+      "full-history-reconcile": { setting: "fullHistoryReconcileIntervalDays", intervalMs: (value) => value * 24 * 60 * 60 * 1000 },
+      "rolling-reconcile": { setting: "rollingReconcileIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
+      "sonarr-library-refresh": { setting: "sonarrLibraryRefreshIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
+      "recommendation-refresh": { setting: "recommendationRefreshIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
+    };
+    const jobId = String(req.params.id);
+    const schedule = schedules[jobId];
+    if (!schedule) {
+      res.status(400).json({ error: "This job schedule cannot be edited." });
       return;
     }
-    if (req.params.id === "history-import") {
-      const hours = Math.max(1, Math.floor(intervalMinutes / 60));
-      const appSettings = db.updateAppSettings({ historyImportIntervalHours: hours });
-      scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
-      res.json({ updated: true });
-      return;
-    }
-    res.status(400).json({ error: "This job schedule cannot be edited." });
+    const configuredValue = schedule.setting === "sessionPollIntervalMinutes" ? intervalMinutes
+      : schedule.setting === "fullHistoryReconcileIntervalDays" ? Math.max(1, Math.floor(intervalMinutes / (24 * 60)))
+        : Math.max(1, Math.floor(intervalMinutes / 60));
+    const appSettings = db.updateAppSettings({ [schedule.setting]: configuredValue } as Partial<AppSettings>);
+    scheduler?.updateJob(jobId, { intervalMs: schedule.intervalMs(configuredValue) });
+    res.json({ updated: true });
   });
 
   app.get("/api/dashboard", requireAuth, asyncRoute(async (_req, res) => {
@@ -564,8 +597,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   });
 
   app.get("/api/shows", requireAuth, asyncRoute(async (req, res) => {
-    const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    if (!db.getSonarrLibraryCache() && !refreshing) scheduler?.runNow("recommendation-refresh");
+    const refreshing = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
+    if (!db.getSonarrLibraryCache() && !refreshing) scheduler?.runNow("sonarr-library-refresh");
     res.json({
       shows: services.listShows({
         enrolledOnly: req.query.enrolled === "true",
@@ -576,8 +609,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   }));
   app.post("/api/shows/refresh", requireAuth, (_req, res) => {
-    const alreadyRunning = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("recommendation-refresh") ?? false });
+    const alreadyRunning = isAnyJobRunning("sonarr-library-refresh");
+    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("sonarr-library-refresh") ?? false });
   });
   app.get("/api/shows/:seriesId", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.getShowDetail(Number(req.params.seriesId)));
@@ -599,13 +632,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   }));
   app.get("/api/recommendations", requireAuth, asyncRoute(async (req, res) => {
-    const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow("recommendation-refresh");
+    const refreshing = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
+    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh");
     res.json(services.listRecommendations(req.query.includeIgnored === "true", refreshing || !db.getRecommendationCache()));
   }));
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
-    const alreadyRunning = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("recommendation-refresh") ?? false });
+    const alreadyRunning = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
+    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh") ?? false });
   });
   app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";

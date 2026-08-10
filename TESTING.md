@@ -115,8 +115,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Oversized finite intervals are clamped | Values that are finite as minutes or hours but invalid as milliseconds are bounded before persistence or scheduler conversion |
-| Invalid interval forms stay safe | App-settings fall back safely for non-finite values and direct Jobs edits reject them |
+| Oversized finite intervals are clamped | Values that are finite as minutes, hours, or days but invalid as milliseconds are bounded before persistence or scheduler conversion |
+| Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values and direct Jobs edits reject them |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
@@ -155,6 +155,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
+| Scheduled recommendation refresh is cache-only | The calculation job defers to the library refresh job on a cold cache rather than issuing another whole-library Sonarr request |
 | A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |

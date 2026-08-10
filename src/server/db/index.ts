@@ -48,6 +48,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
+  fullHistoryReconcileIntervalDays: 30,
+  rollingReconcileIntervalHours: 6,
+  sonarrLibraryRefreshIntervalHours: 6,
+  recommendationRefreshIntervalHours: 6,
   progressiveCleanupEnabled: true,
   progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
@@ -201,7 +205,7 @@ export class PacearrDatabase {
   private seedDefaults() {
     this.getSessionSecret();
     if (!this.getSetting("app")) this.setSetting("app", DEFAULT_APP_SETTINGS);
-    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile"]) {
+    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile", "sonarr-library-refresh", "recommendation-refresh"]) {
       this.db.prepare(`
         INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)
         VALUES (?, NULL, NULL, ?)

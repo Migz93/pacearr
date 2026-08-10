@@ -51,7 +51,7 @@ scheduler.registerRecurringJob({
 scheduler.registerRecurringJob({
   id: "full-history-reconcile",
   // A full source read is intentionally infrequent; normal imports remain incremental.
-  intervalMs: 30 * 24 * 60 * 60 * 1000,
+  intervalMs: settings.fullHistoryReconcileIntervalDays * 24 * 60 * 60 * 1000,
   task: requiresSetup(async () => {
     await services.reconcileFullHistory();
     scheduler.runNow("recommendation-refresh");
@@ -59,20 +59,27 @@ scheduler.registerRecurringJob({
 });
 scheduler.registerRecurringJob({
   id: "rolling-reconcile",
-  intervalMs: 6 * 60 * 60 * 1000,
+  intervalMs: settings.rollingReconcileIntervalHours * 60 * 60 * 1000,
   task: requiresSetup(() => services.reconcileRollingShows().then(() => undefined)),
 });
 scheduler.registerRecurringJob({
-  id: "recommendation-refresh",
-  intervalMs: 6 * 60 * 60 * 1000,
+  id: "sonarr-library-refresh",
+  intervalMs: settings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000,
   task: requiresSetup(async () => {
     await services.refreshSonarrLibrary();
-    await services.refreshRecommendations();
+    scheduler.runNow("recommendation-refresh");
   }),
+});
+// Recommendation calculation only reads the library cache. It can run after history
+// changes without fetching every Sonarr series again, while the library job owns that IO.
+scheduler.registerRecurringJob({
+  id: "recommendation-refresh",
+  intervalMs: settings.recommendationRefreshIntervalHours * 60 * 60 * 1000,
+  task: requiresSetup(() => services.refreshRecommendations({ cacheOnly: true })),
 });
 if (isReady() && (!db.getSonarrLibraryCache() || !db.getRecommendationCache())) {
   logger.info("Sonarr library or recommendation cache is empty; scheduling initial refresh");
-  scheduler.runNow("recommendation-refresh");
+  scheduler.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh");
 }
 if (isReady() && !settings.dryRun) {
   logger.info("Live mode detected at startup; scheduling rolling monitoring reconciliation");

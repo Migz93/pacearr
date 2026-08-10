@@ -83,6 +83,10 @@ export interface AppSettings {
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
+  fullHistoryReconcileIntervalDays: number;
+  rollingReconcileIntervalHours: number;
+  sonarrLibraryRefreshIntervalHours: number;
+  recommendationRefreshIntervalHours: number;
   progressiveCleanupEnabled: boolean;
   progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;
