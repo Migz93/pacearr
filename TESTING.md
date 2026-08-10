@@ -100,8 +100,11 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | A local SSE playback notification triggers a session check | The monitor authenticates its local stream with the Plex token, records a live connection, and accepts a representative `playing` notification without requiring a Plex server or an active viewer |
 | A failed local SSE connection reports polling fallback | A Plex connection failure does not trigger a session check and leaves the scheduled fallback visible |
+| An idle live SSE connection falls back to polling | A reverse proxy or Plex stream that stays open but stops producing heartbeats is reconnected rather than suppressing polling indefinitely |
+| A monitor that begins before Plex is configured reconnects later | The live monitor does not become permanently unavailable when configuration appears after startup |
 | A session-check trigger is coalesced while that job is running | Live notifications, schedules, and manual actions cannot cause overlapping session checks |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
+| A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 

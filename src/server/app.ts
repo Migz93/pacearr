@@ -301,6 +301,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/settings/plex", requireAuth, asyncRoute(async (req, res) => {
     const owner = db.getPlexOwner();
     if (!owner) throw new Error("Plex owner is not configured.");
+    const previousSettings = db.getPlexSettings();
     const settings = buildPlexSettingsFromPayload(owner.plexToken, req.body as PlexConfigPayload);
     const result = await new PlexIntegration(settings, logger).testConnection();
     if (!result.ok) {
@@ -311,7 +312,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
-    services.restartPlexSessionMonitor();
+    if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
     await services.discoverPlexUsers();
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });

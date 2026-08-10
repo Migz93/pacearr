@@ -67,6 +67,10 @@ export class JobScheduler {
   runNow(id: string) {
     const job = this.jobs.get(id);
     if (!job) return false;
+    if (job.activeRuns > 0) {
+      this.logger?.debug("Skipped overlapping manual job run", { id, activeRuns: job.activeRuns });
+      return false;
+    }
     this.logger?.info("Scheduled job triggered manually", { id });
     void this.execute(job, false);
     return true;
@@ -115,11 +119,13 @@ export class JobScheduler {
   }
 
   private async execute(job: ScheduledJob, scheduled: boolean) {
+    // Schedule the next tick before deciding whether this one overlaps. Otherwise a
+    // single collision would leave a recurring job with no timer at all.
+    if (scheduled) this.reschedule(job);
     if (job.activeRuns > 0) {
       this.logger?.debug("Skipped overlapping scheduled job run", { id: job.id, scheduled, activeRuns: job.activeRuns });
       return false;
     }
-    if (scheduled) this.reschedule(job);
     job.activeRuns += 1;
     this.logger?.info("Scheduled job started", { id: job.id, scheduled, activeRuns: job.activeRuns });
     try {

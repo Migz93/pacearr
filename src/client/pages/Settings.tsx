@@ -37,7 +37,7 @@ const LEVEL_BADGE: Record<LogFilter, string> = {
 };
 
 const JOB_PRESETS: Record<string, { unit: "minutes" | "hours"; values: number[] }> = {
-  "session-check": { unit: "minutes", values: [5, 10, 15, 30, 60] },
+  "session-check": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
   "history-import": { unit: "hours", values: [60, 120, 240, 360, 720, 1440] },
 };
 

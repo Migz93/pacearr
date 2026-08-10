@@ -69,6 +69,11 @@ function unixToIso(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? new Date(parsed * 1000).toISOString() : new Date().toISOString();
 }
 
+export function buildPlexServerUrl(serverUrl: string, pathname: string): URL {
+  const base = serverUrl.endsWith("/") ? serverUrl : `${serverUrl}/`;
+  return new URL(pathname.replace(/^\/+/, ""), base);
+}
+
 function normalizeHistoryVideo(video: any): PlexEpisodeActivity | null {
   const v = attr(video);
   if (v.type !== "episode") return null;
@@ -115,8 +120,7 @@ export class PlexIntegration {
   constructor(private readonly settings: PlexSettingsInput, private readonly logger: Logger) {}
 
   private buildServerUrl(pathname: string) {
-    const base = this.settings.serverUrl.endsWith("/") ? this.settings.serverUrl : `${this.settings.serverUrl}/`;
-    return new URL(pathname.replace(/^\/+/, ""), base);
+    return buildPlexServerUrl(this.settings.serverUrl, pathname);
   }
 
   private async requestServerXml(pathname: string) {

@@ -1,10 +1,13 @@
 import { EventSource, type ErrorEvent } from "eventsource";
 import type { PlexSettingsInput } from "../shared/types.js";
+import { buildPlexServerUrl } from "./integrations/plex.js";
 import type { Logger } from "./logger.js";
+import { PLEX_USER_AGENT } from "./version.js";
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 30_000;
 
 export type PlexSessionMonitorStatus = {
   mode: "live" | "polling-fallback" | "unavailable";
@@ -17,11 +20,21 @@ type NotificationEnvelope = {
   };
 };
 
+export type PlexSessionMonitorOptions = {
+  initialReconnectMs?: number;
+  maxReconnectMs?: number;
+  heartbeatTimeoutMs?: number;
+};
+
 export class PlexSessionMonitor {
   private source: EventSource | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectDelayMs = INITIAL_RECONNECT_MS;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly initialReconnectMs: number;
+  private readonly maxReconnectMs: number;
+  private readonly heartbeatTimeoutMs: number;
+  private reconnectDelayMs: number;
   private stopped = true;
   private status: PlexSessionMonitorStatus = { mode: "unavailable", description: "Live playback will start after Plex is configured." };
 
@@ -29,7 +42,13 @@ export class PlexSessionMonitor {
     private readonly getSettings: () => PlexSettingsInput | null,
     private readonly logger: Logger,
     private readonly onPlayback: () => void,
-  ) {}
+    options: PlexSessionMonitorOptions = {},
+  ) {
+    this.initialReconnectMs = options.initialReconnectMs ?? INITIAL_RECONNECT_MS;
+    this.maxReconnectMs = options.maxReconnectMs ?? MAX_RECONNECT_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    this.reconnectDelayMs = this.initialReconnectMs;
+  }
 
   start(): void {
     this.stopped = false;
@@ -38,7 +57,7 @@ export class PlexSessionMonitor {
 
   restart(): void {
     this.closeConnection();
-    this.reconnectDelayMs = INITIAL_RECONNECT_MS;
+    this.reconnectDelayMs = this.initialReconnectMs;
     this.stopped = false;
     this.connect();
   }
@@ -57,13 +76,13 @@ export class PlexSessionMonitor {
     const settings = this.getSettings();
     if (!settings) {
       this.status = { mode: "unavailable", description: "Live playback will start after Plex is configured." };
+      this.scheduleReconnect();
       return;
     }
     let endpoint: URL;
     try {
-      const base = new URL(settings.serverUrl.endsWith("/") ? settings.serverUrl : `${settings.serverUrl}/`);
-      if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("Plex server URL must use HTTP or HTTPS.");
-      endpoint = new URL(":/eventsource/notifications", base);
+      endpoint = buildPlexServerUrl(settings.serverUrl, ":/eventsource/notifications");
+      if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") throw new Error("Plex server URL must use HTTP or HTTPS.");
     } catch (error) {
       this.status = { mode: "polling-fallback", description: "Live Plex playback is unavailable; using polling fallback." };
       this.logger.warn("Plex SSE endpoint is invalid; using polling fallback", { error: error instanceof Error ? error.message : String(error) });
@@ -77,7 +96,7 @@ export class PlexSessionMonitor {
         const response = await fetch(input, {
           ...init,
           redirect: "error",
-          headers: { ...init.headers, "User-Agent": "Pacearr", "X-Plex-Token": settings.token },
+          headers: { ...init.headers, "User-Agent": PLEX_USER_AGENT, "X-Plex-Token": settings.token },
         });
         if (new URL(response.url).origin !== endpoint.origin) throw new Error("Plex SSE request crossed origins.");
         return response;
@@ -85,6 +104,7 @@ export class PlexSessionMonitor {
     });
     this.source.addEventListener("open", this.handleOpen);
     this.source.addEventListener("message", this.handleMessage);
+    this.source.addEventListener("ping", this.resetHeartbeat);
     this.source.addEventListener("error", this.handleError);
     this.connectionTimer = setTimeout(() => {
       if (this.source?.readyState === EventSource.CONNECTING) {
@@ -97,12 +117,14 @@ export class PlexSessionMonitor {
   private handleOpen = (): void => {
     if (this.connectionTimer) clearTimeout(this.connectionTimer);
     this.connectionTimer = null;
-    this.reconnectDelayMs = INITIAL_RECONNECT_MS;
+    this.reconnectDelayMs = this.initialReconnectMs;
     this.status = { mode: "live", description: "Live Plex playback detection is connected." };
     this.logger.info("Live Plex playback connection established");
+    this.resetHeartbeat();
   };
 
   private handleMessage = (event: MessageEvent<string>): void => {
+    this.resetHeartbeat();
     let payload: NotificationEnvelope;
     try { payload = JSON.parse(event.data) as NotificationEnvelope; } catch {
       this.logger.debug("Ignoring malformed Plex SSE notification");
@@ -128,10 +150,19 @@ export class PlexSessionMonitor {
     this.scheduleReconnect();
   }
 
+  private resetHeartbeat = (): void => {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = setTimeout(() => {
+      if (this.source?.readyState !== EventSource.OPEN) return;
+      this.logger.warn("Live Plex playback connection went idle; using polling fallback");
+      this.disconnectAndReconnect();
+    }, this.heartbeatTimeoutMs);
+  };
+
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
     const delayMs = this.reconnectDelayMs;
-    this.reconnectDelayMs = Math.min(MAX_RECONNECT_MS, this.reconnectDelayMs * 2);
+    this.reconnectDelayMs = Math.min(this.maxReconnectMs, this.reconnectDelayMs * 2);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -142,11 +173,14 @@ export class PlexSessionMonitor {
   private closeConnection(): void {
     if (this.connectionTimer) clearTimeout(this.connectionTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.connectionTimer = null;
     this.reconnectTimer = null;
+    this.heartbeatTimer = null;
     if (!this.source) return;
     this.source.removeEventListener("open", this.handleOpen);
     this.source.removeEventListener("message", this.handleMessage);
+    this.source.removeEventListener("ping", this.resetHeartbeat);
     this.source.removeEventListener("error", this.handleError);
     this.source.close();
     this.source = null;

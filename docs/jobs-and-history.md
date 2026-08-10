@@ -25,7 +25,9 @@ The scheduler tracks:
 Plex playback normally arrives through a persistent SSE connection. Settings →
 Jobs shows whether this live connection is active or Pacearr is using its polling
 fallback. Playback notifications and scheduled/manual requests share the
-`session-check` job; an in-progress run is never duplicated.
+`session-check` job; an in-progress run is never duplicated. An idle live stream
+is treated as disconnected and reconnects, so polling resumes if Plex or a proxy
+silently stalls the connection.
 
 ## Manual Job Triggers
 
