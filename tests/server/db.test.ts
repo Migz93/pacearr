@@ -95,6 +95,36 @@ test("findUserByTautulliName falls back to an unambiguous display name match", (
   }
 });
 
+test("findUserByTautulliName matches on the Plex username even when the Tautulli friendly name matches nobody", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Regression for #75: a Tautulli admin can rename the friendly name ("user") freely
+    // without touching Plex, so the lookup must not depend on it matching anything —
+    // the real Plex username alone has to be enough.
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName("dave_plex", "Big Chief Dave")?.id, dave.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName falls back to the friendly name when the Plex username matches nobody", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Managed/Home Plex users have no real Plex.tv username, so Tautulli's `username`
+    // field for them is frequently empty or unrelated to anything Pacearr stored.
+    const [erin] = db.upsertUsers([
+      { plexUserId: "plex-erin", plexAccountId: "5", tautulliUserId: null, username: "erin_plex", displayName: "Erin", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName(null, "Erin")?.id, erin.id);
+    assert.equal(db.findUserByTautulliName("nonexistent_username", "Erin")?.id, erin.id);
+  } finally {
+    cleanup();
+  }
+});
+
 test("updateUser with an empty patch preserves the current enabled state", () => {
   const { db, cleanup } = createDb();
   try {

@@ -511,14 +511,22 @@ export class PacearrDatabase {
   }
 
   /**
-   * Tautulli takes its users from Plex, so the name it reports is the Plex username or
-   * the Plex title (its friendly-name default) — both of which are what discovery already
-   * stored. This used to check a `tautulli_user_id` column first, but nothing ever
-   * populated it: discovery inserts NULL and there was no UI to set one, so that branch
-   * could never match. The column is left in place rather than migrated away.
+   * Tautulli reports two independent names for the same event: `username`, the real Plex
+   * username (absent for Plex Home/managed users), and `friendlyName`, the Tautulli
+   * admin's editable display name for that user. Either can be renamed without touching
+   * the other, and discovery only ever stores what Plex reports (username, falling back to
+   * Plex's own title for accounts without one) — so a match has to try both independently
+   * rather than trusting whichever one Tautulli happened to report. This used to check a
+   * `tautulli_user_id` column first, but nothing ever populated it: discovery inserts NULL
+   * and there was no UI to set one, so that branch could never match. The column is left in
+   * place rather than migrated away.
    */
-  findUserByTautulliName(username?: string | null): UserRecord | null {
-    if (!username) return null;
+  findUserByTautulliName(username?: string | null, friendlyName?: string | null): UserRecord | null {
+    return this.matchUserByName(username) ?? this.matchUserByName(friendlyName);
+  }
+
+  private matchUserByName(name?: string | null): UserRecord | null {
+    if (!name) return null;
     // Neither username nor display_name has a uniqueness constraint in the schema (only
     // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
     // and nothing stops two distinct usernames from colliding case-insensitively either
@@ -529,10 +537,10 @@ export class PacearrDatabase {
     // same string can't disambiguate an already-ambiguous username, so it isn't worth
     // trying. The display_name fallback itself has no further fallback: an ambiguous or
     // empty result there is simply null.
-    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(username);
+    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(name);
     if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
     if (usernameMatches.length > 1) return null;
-    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(username);
+    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(name);
     return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
   }
 
