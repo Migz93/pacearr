@@ -4,7 +4,10 @@ import type { Logger } from "../logger.js";
 export interface TautulliHistoryRecord {
   referenceId: string;
   userId: string | null;
+  /** The Plex username (Tautulli's `username` field) — absent for Plex Home/managed users. */
   username: string | null;
+  /** Tautulli's admin-editable friendly name (its `user` field) — can be renamed independently of Plex. */
+  friendlyName: string | null;
   showTitle: string;
   seasonNumber: number;
   episodeNumber: number;
@@ -67,7 +70,8 @@ export class TautulliIntegration {
         pageRecords.push({
           referenceId: String(row.reference_id ?? row.id ?? `${row.user_id}:${row.rating_key}:${watchedAtUnix}`),
           userId: row.user_id ? String(row.user_id) : null,
-          username: row.user ?? row.username ?? null,
+          username: row.username ?? null,
+          friendlyName: row.user ?? null,
           showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
           seasonNumber,
           episodeNumber,

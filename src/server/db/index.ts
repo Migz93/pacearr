@@ -497,6 +497,23 @@ export class PacearrDatabase {
     `).run(userId, plexAccountId).changes;
   }
 
+  /**
+   * Repairs one previously-imported Tautulli watch event whose user_id is still NULL.
+   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_event_id), so a
+   * duplicate — including an event first imported before the #75 matching fix, when the
+   * resolved name didn't match anything yet — is silently skipped on every later import and
+   * never revisited on its own. Scoped to a single event by its unique key rather than a
+   * broader relink like linkUnassignedWatchEventsByPlexAccount, since Tautulli events carry
+   * no stable account identifier to relink by.
+   */
+  repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
+    return this.db.prepare(`
+      UPDATE watch_events
+      SET user_id = ?
+      WHERE source = 'tautulli' AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, sourceEventId).changes > 0;
+  }
+
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
     return this.db.prepare(`
       SELECT sonarr_series_id AS sonarrSeriesId, season_number AS seasonNumber, episode_number AS episodeNumber, watched_at AS watchedAt
@@ -511,29 +528,47 @@ export class PacearrDatabase {
   }
 
   /**
-   * Tautulli takes its users from Plex, so the name it reports is the Plex username or
-   * the Plex title (its friendly-name default) — both of which are what discovery already
-   * stored. This used to check a `tautulli_user_id` column first, but nothing ever
-   * populated it: discovery inserts NULL and there was no UI to set one, so that branch
-   * could never match. The column is left in place rather than migrated away.
+   * Tautulli reports two independent names for the same event: `username`, the real Plex
+   * username (absent for Plex Home/managed users), and `friendlyName`, the Tautulli
+   * admin's editable display name for that user. Either can be renamed without touching
+   * the other, and discovery only ever stores what Plex reports (username, falling back to
+   * Plex's own title for accounts without one) — so a match has to try both independently
+   * rather than trusting whichever one Tautulli happened to report. An ambiguous match on
+   * the real username field specifically still has to stop the lookup outright rather than
+   * falling through to the friendly name: the friendly name is a weaker, Tautulli-admin-
+   * editable signal, and a coincidental match there could attribute the event to a third
+   * user unrelated to the ones the username was ambiguous between. An ambiguous match on
+   * display_name during the username candidate's own fallback step doesn't get the same
+   * treatment — that's a failed primary lookup, not a genuine conflict on the strong
+   * signal, so the friendly name (an independent identifier that may resolve cleanly) is
+   * still worth trying. This used to check a `tautulli_user_id` column first, but nothing
+   * ever populated it: discovery inserts NULL and there was no UI to set one, so that
+   * branch could never match. The column is left in place rather than migrated away.
    */
-  findUserByTautulliName(username?: string | null): UserRecord | null {
-    if (!username) return null;
+  findUserByTautulliName(username?: string | null, friendlyName?: string | null): UserRecord | null {
+    const byUsername = this.matchUserByName(username);
+    if (byUsername.user) return byUsername.user;
+    if (byUsername.usernameAmbiguous) return null;
+    return this.matchUserByName(friendlyName).user;
+  }
+
+  private matchUserByName(name?: string | null): { user: UserRecord | null; usernameAmbiguous: boolean } {
+    if (!name) return { user: null, usernameAmbiguous: false };
     // Neither username nor display_name has a uniqueness constraint in the schema (only
     // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
     // and nothing stops two distinct usernames from colliding case-insensitively either
     // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
     // SQLite returns first, silently misattributing one person's watch history to a
     // different account. No match on username falls through to try display_name; an
-    // ambiguous username returns null immediately instead — a display_name match on that
-    // same string can't disambiguate an already-ambiguous username, so it isn't worth
-    // trying. The display_name fallback itself has no further fallback: an ambiguous or
-    // empty result there is simply null.
-    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(username);
-    if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
-    if (usernameMatches.length > 1) return null;
-    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(username);
-    return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
+    // ambiguous username is reported back to the caller instead of trying display_name
+    // itself, since a display_name match on the same string can't disambiguate an
+    // already-ambiguous username. An ambiguous display_name result is not distinguished
+    // from "no match" the same way — both simply return no user.
+    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(name);
+    if (usernameMatches.length === 1) return { user: userFromRow(usernameMatches[0]), usernameAmbiguous: false };
+    if (usernameMatches.length > 1) return { user: null, usernameAmbiguous: true };
+    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(name);
+    return { user: displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null, usernameAmbiguous: false };
   }
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {

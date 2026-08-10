@@ -84,6 +84,11 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `findUserByTautulliName` prefers an exact username match and refuses to guess between ambiguous display names | `username` has no uniqueness constraint and `display_name` even less so — a single OR query with `.get()` would silently attribute one person's Tautulli history to a different Pacearr user on a tie |
 | `findUserByTautulliName` refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie | The username step trusted a bare `.get()` as if a match always meant one row; it did not, since username has no uniqueness constraint either and the lookup is case-insensitive. A third user with a matching display_name proves the null result is the designed refusal, not a coincidence — without it, the test couldn't tell "refused to guess" from "found nothing either way" |
 | `findUserByTautulliName` falls back to an unambiguous display name match | The case the fallback exists for — a Tautulli friendly name that matches nobody's username but exactly one display name |
+| `findUserByTautulliName` matches on the Plex username even when the Tautulli friendly name matches nobody | Regression for #75 — a Tautulli admin can rename the friendly name freely without touching Plex, so a friendly name matching nothing must not block a match on the real Plex username |
+| `findUserByTautulliName` falls back to the friendly name when the Plex username matches nobody | Plex Home/managed users have no real Plex.tv username, so Tautulli's `username` field for them is often empty or unrelated — the friendly name has to be tried independently, not just as a fallback field for the same string |
+| `findUserByTautulliName` refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user | An ambiguous username used to be indistinguishable from "no match" and fell through to the friendly name regardless — a coincidental unique friendly-name match could then attribute the event to a third user unrelated to the ones the username was ambiguous between |
+| `findUserByTautulliName` tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself | Blocking the friendly-name fallback was only meant for a genuine conflict on the strong signal (the real username field) — an ambiguous display_name match during that same lookup's own fallback step is just a failed primary lookup, and the independent friendly name can still resolve it |
+| A previously orphaned Tautulli watch event can be repaired once its user resolves | Regression for #75 — `INSERT OR IGNORE` means a duplicate event is silently skipped forever unless something explicitly repairs its `user_id`; also locks in that repairing an already-assigned event is a no-op, not a re-attribution |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -137,11 +142,20 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 ---
 
+### `tests/server/tautulli-integration.test.ts` — Tautulli history field mapping
+
+| Test | What it checks |
+|---|---|
+| `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
+
+---
+
 ### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior
 
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
 | Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |

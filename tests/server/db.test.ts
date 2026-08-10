@@ -95,6 +95,75 @@ test("findUserByTautulliName falls back to an unambiguous display name match", (
   }
 });
 
+test("findUserByTautulliName matches on the Plex username even when the Tautulli friendly name matches nobody", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Regression for #75: a Tautulli admin can rename the friendly name ("user") freely
+    // without touching Plex, so the lookup must not depend on it matching anything —
+    // the real Plex username alone has to be enough.
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName("dave_plex", "Big Chief Dave")?.id, dave.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName falls back to the friendly name when the Plex username matches nobody", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Managed/Home Plex users have no real Plex.tv username, so Tautulli's `username`
+    // field for them is frequently empty or unrelated to anything Pacearr stored.
+    const [erin] = db.upsertUsers([
+      { plexUserId: "plex-erin", plexAccountId: "5", tautulliUserId: null, username: "erin_plex", displayName: "Erin", avatarUrl: null },
+    ]);
+    assert.equal(db.findUserByTautulliName(null, "Erin")?.id, erin.id);
+    assert.equal(db.findUserByTautulliName("nonexistent_username", "Erin")?.id, erin.id);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "Kid", displayName: "Kid A", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Kid B", avatarUrl: null },
+      { plexUserId: "plex-dave", plexAccountId: "3", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    // The Plex username "Kid" is ambiguous between two users. Tautulli's friendly name for
+    // this event coincidentally matches a completely unrelated third user's username — the
+    // lookup must not fall through to that weaker signal once the stronger one is already
+    // ambiguous, or it silently misattributes the event to whoever the friendly name
+    // happens to match.
+    assert.equal(db.findUserByTautulliName("Kid", "dave_plex"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("findUserByTautulliName tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
+    ]);
+    const [carol] = db.upsertUsers([
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol87", displayName: "Carol", avatarUrl: null },
+    ]);
+    // "Kid" matches nobody's real username, and only ambiguously matches two users'
+    // display_name as a fallback — a failed primary lookup, not the kind of conflict on
+    // the strong signal that should block trying the independent friendly name, which
+    // uniquely identifies Carol here.
+    assert.equal(db.findUserByTautulliName("Kid", "carol87")?.id, carol.id);
+  } finally {
+    cleanup();
+  }
+});
+
 test("updateUser with an empty patch preserves the current enabled state", () => {
   const { db, cleanup } = createDb();
   try {
@@ -569,6 +638,29 @@ test("server-local Plex owner history can be linked and used to rebuild progress
     });
     assert.equal(db.linkUnassignedWatchEventsByPlexAccount(owner.id, "1"), 1);
     assert.deepEqual(db.listLatestWatchProgressForUser(owner.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 11, watchedAt: "2026-04-12T10:00:00.000Z" }]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a previously orphaned Tautulli watch event can be repaired once its user resolves", () => {
+  const { db, cleanup } = createDb();
+  try {
+    // Regression for #75: before the matching fix, a Tautulli event whose friendly name
+    // matched nobody imported with user_id = NULL and INSERT OR IGNORE means it's never
+    // revisited on its own — this is the targeted repair for that orphaned row.
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.insertWatchEvent({
+      source: "tautulli", sourceEventId: "tautulli-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+      sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 3,
+      watchedAt: "2026-04-12T10:00:00.000Z", rawPayload: {},
+    });
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), true);
+    assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 3, watchedAt: "2026-04-12T10:00:00.000Z" }]);
+    // Already-assigned events must not be re-attributed by a later, different resolution.
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), false);
   } finally {
     cleanup();
   }

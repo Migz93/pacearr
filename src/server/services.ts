@@ -991,19 +991,20 @@ export class PacearrServices {
    */
   private insertImmediateWatchEvents(
     prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }>
-  ): { imported: number; matched: number; unmatched: number; rolling: NormalizedWatchEventInput[] } {
+  ): { imported: number; matched: number; unmatched: number; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[] } {
     const immediate = prepared.filter((item) => !item.applyRolling).map((item) => item.input);
     const rolling = prepared.filter((item) => item.applyRolling).map((item) => item.input);
     const results = this.db.insertWatchEventsBatch(immediate);
     let imported = 0;
     let matched = 0;
     let unmatched = 0;
+    const duplicates: NormalizedWatchEventInput[] = [];
     for (let index = 0; index < immediate.length; index++) {
-      if (!results[index]!.inserted) continue;
+      if (!results[index]!.inserted) { duplicates.push(immediate[index]!); continue; }
       imported++;
       if (immediate[index]!.sonarrSeriesId) matched++; else unmatched++;
     }
-    return { imported, matched, unmatched, rolling };
+    return { imported, matched, unmatched, rolling, duplicates };
   }
 
   private async prefetchNextSeason(input: NormalizedWatchEventInput, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
@@ -1218,7 +1219,7 @@ export class PacearrServices {
         const tautulliEvents = await new TautulliIntegration(tautulliSettings, this.logger).getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         for (const event of tautulliEvents) {
-          const user = this.db.findUserByTautulliName(event.username);
+          const user = this.db.findUserByTautulliName(event.username, event.friendlyName);
           const series = await this.matchSeries(event, seriesIndex);
           prepared.push({
             input: {
@@ -1226,7 +1227,7 @@ export class PacearrServices {
               sourceEventId: event.referenceId,
               userId: user?.id ?? null,
               plexAccountId: null,
-              username: event.username,
+              username: event.username ?? event.friendlyName,
               sonarrSeriesId: series?.id ?? null,
               showTitle: event.showTitle,
               seasonNumber: event.seasonNumber,
@@ -1242,13 +1243,36 @@ export class PacearrServices {
         imported += counts.imported;
         matched += counts.matched;
         unmatched += counts.unmatched;
+        const repairedUserIds = new Set<number>();
+        // A duplicate here means this exact event was already imported — most commonly
+        // before it could be matched to a Pacearr user, since #75 let the old friendly-name
+        // preference silently drop the match. INSERT OR IGNORE alone would leave that row
+        // orphaned forever; repair it now that a match resolved.
+        for (const duplicate of counts.duplicates) {
+          if (duplicate.userId && this.db.repairUnmatchedTautulliWatchEvent(duplicate.sourceEventId, duplicate.userId)) {
+            repairedUserIds.add(duplicate.userId);
+            changed++;
+          }
+        }
         for (const input of counts.rolling) {
           const result = await this.processWatchEvent(input, "tautulli", true, episodeCache);
           if (result.inserted) {
             imported++;
             if (input.sonarrSeriesId) matched++; else unmatched++;
+          } else if (input.userId && this.db.repairUnmatchedTautulliWatchEvent(input.sourceEventId, input.userId)) {
+            repairedUserIds.add(input.userId);
+            changed++;
           }
           if (result.changed) changed++;
+        }
+        // A repaired event may be the most recent watch a viewer has for its series, so
+        // rolling progress needs the same refresh discoverPlexUsers does after linking
+        // previously-orphaned Plex owner history.
+        for (const userId of repairedUserIds) {
+          for (const progress of this.db.listLatestWatchProgressForUser(userId)) {
+            const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
+            if (rolling) this.db.upsertRollingUserProgress(rolling.id, userId, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
+          }
         }
         if (!full) {
           syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli") };

@@ -49,6 +49,7 @@ function installFetchStub(routes: {
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
   episodeFileErrorsBySeries?: Record<number, string>;
   plexHistoryXml?: string;
+  tautulliHistory?: unknown[];
   requests?: Array<{ method: string; pathname: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -59,6 +60,9 @@ function installFetchStub(routes: {
       return routes.plexHistoryXml
         ? new Response(routes.plexHistoryXml, { status: 200, headers: { "content-type": "application/xml" } })
         : emptyPlexHistoryXml();
+    }
+    if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
+      return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
     }
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -165,6 +169,55 @@ test("history import batches events outside the activity window while still appl
     const stored = db.listLatestUserProgressForSeries(950);
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.seasonNumber, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const [dave] = db.upsertUsers([{ plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null }]);
+  db.updateUser(dave!.id, { enabled: true });
+
+  const series: SonarrSeries = { id: 960, title: "Repair Test", monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 1, monitored: true }] };
+  db.upsertRollingShow(series);
+
+  // Simulates a row imported before #75's fix: Tautulli's friendly name at the time didn't
+  // resolve to any Pacearr user, so it landed with user_id = NULL.
+  const stored = db.insertWatchEvent({
+    source: "tautulli", sourceEventId: "ref-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+    sonarrSeriesId: 960, showTitle: "Repair Test", seasonNumber: 1, episodeNumber: 2,
+    watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
+  });
+  assert.equal(stored.inserted, true);
+
+  const oldUnix = Math.floor(new Date("2026-04-01T10:00:00.000Z").getTime() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series],
+    seriesById: { 960: series },
+    episodesBySeries: { 960: [] },
+    episodeFilesBySeries: { 960: [] },
+    tautulliHistory: [{
+      reference_id: "ref-orphan-1", user_id: 4, username: "dave_plex", user: "Big Chief Dave",
+      grandparent_title: "Repair Test", parent_media_index: 1, media_index: 2, date: oldUnix,
+      rating_key: "rk-1", grandparent_rating_key: "grk-1",
+    }],
+  });
+  try {
+    // A full reconciliation re-fetches this same event from Tautulli. It's still a
+    // duplicate by (source, source_event_id), so it must be repaired in place rather than
+    // relying on a fresh insert.
+    const result = await services.reconcileFullHistory();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listLatestWatchProgressForUser(dave!.id), [{ sonarrSeriesId: 960, seasonNumber: 1, episodeNumber: 2, watchedAt: "2026-04-01T10:00:00.000Z" }]);
+    // Rolling progress must also be refreshed, not just the raw watch_events row.
+    const progress = db.listProgressForShow(db.getRollingShowBySeriesId(960)!.id);
+    assert.deepEqual(progress.map((item) => ({ userId: item.userId, season: item.lastWatchedSeason, episode: item.lastWatchedEpisode })), [{ userId: dave!.id, season: 1, episode: 2 }]);
   } finally {
     restoreFetch();
     cleanup();
