@@ -15,6 +15,7 @@ export type PlexSessionMonitorStatus = {
 };
 
 type NotificationEnvelope = {
+  PlaySessionStateNotification?: { state?: string } | Array<{ state?: string }>;
   NotificationContainer?: {
     PlaySessionStateNotification?: { state?: string } | Array<{ state?: string }>;
   };
@@ -104,6 +105,7 @@ export class PlexSessionMonitor {
     });
     this.source.addEventListener("open", this.handleOpen);
     this.source.addEventListener("message", this.handleMessage);
+    this.source.addEventListener("playing", this.handleMessage);
     this.source.addEventListener("ping", this.resetHeartbeat);
     this.source.addEventListener("error", this.handleError);
     this.connectionTimer = setTimeout(() => {
@@ -130,7 +132,7 @@ export class PlexSessionMonitor {
       this.logger.debug("Ignoring malformed Plex SSE notification");
       return;
     }
-    const notifications = payload.NotificationContainer?.PlaySessionStateNotification;
+    const notifications = payload.PlaySessionStateNotification ?? payload.NotificationContainer?.PlaySessionStateNotification;
     const states = (Array.isArray(notifications) ? notifications : notifications ? [notifications] : []).map((notification) => notification.state);
     if (states.some((state) => state === "playing" || state === "buffering")) {
       this.logger.debug("Live Plex playback notification received", { states });
@@ -180,6 +182,7 @@ export class PlexSessionMonitor {
     if (!this.source) return;
     this.source.removeEventListener("open", this.handleOpen);
     this.source.removeEventListener("message", this.handleMessage);
+    this.source.removeEventListener("playing", this.handleMessage);
     this.source.removeEventListener("ping", this.resetHeartbeat);
     this.source.removeEventListener("error", this.handleError);
     this.source.close();

@@ -377,7 +377,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const retentionDays = Number(body.historyRetentionDays);
       patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
     }
-    if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 15));
+    if (body.sessionPollIntervalMinutes !== undefined) {
+      const intervalMinutes = Number(body.sessionPollIntervalMinutes);
+      patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number.isFinite(intervalMinutes) ? intervalMinutes : DEFAULT_APP_SETTINGS.sessionPollIntervalMinutes));
+    }
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
@@ -485,11 +488,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {
-    const intervalMinutes = Math.max(1, Math.floor(Number((req.body as { intervalMinutes?: number }).intervalMinutes) || 0));
-    if (!intervalMinutes) {
+    const requestedIntervalMinutes = Number((req.body as { intervalMinutes?: number }).intervalMinutes);
+    if (!Number.isFinite(requestedIntervalMinutes) || requestedIntervalMinutes <= 0) {
       res.status(400).json({ error: "intervalMinutes is required." });
       return;
     }
+    const intervalMinutes = Math.max(1, Math.floor(requestedIntervalMinutes));
     if (req.params.id === "session-check") {
       const appSettings = db.updateAppSettings({ sessionPollIntervalMinutes: intervalMinutes });
       scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
