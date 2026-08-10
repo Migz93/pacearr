@@ -125,6 +125,25 @@ test("findUserByTautulliName falls back to the friendly name when the Plex usern
   }
 });
 
+test("findUserByTautulliName refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user", () => {
+  const { db, cleanup } = createDb();
+  try {
+    db.upsertUsers([
+      { plexUserId: "plex-kid-1", plexAccountId: "1", tautulliUserId: null, username: "Kid", displayName: "Kid A", avatarUrl: null },
+      { plexUserId: "plex-kid-2", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Kid B", avatarUrl: null },
+      { plexUserId: "plex-dave", plexAccountId: "3", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    // The Plex username "Kid" is ambiguous between two users. Tautulli's friendly name for
+    // this event coincidentally matches a completely unrelated third user's username — the
+    // lookup must not fall through to that weaker signal once the stronger one is already
+    // ambiguous, or it silently misattributes the event to whoever the friendly name
+    // happens to match.
+    assert.equal(db.findUserByTautulliName("Kid", "dave_plex"), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("updateUser with an empty patch preserves the current enabled state", () => {
   const { db, cleanup } = createDb();
   try {

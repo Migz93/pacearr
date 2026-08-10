@@ -516,32 +516,38 @@ export class PacearrDatabase {
    * admin's editable display name for that user. Either can be renamed without touching
    * the other, and discovery only ever stores what Plex reports (username, falling back to
    * Plex's own title for accounts without one) — so a match has to try both independently
-   * rather than trusting whichever one Tautulli happened to report. This used to check a
-   * `tautulli_user_id` column first, but nothing ever populated it: discovery inserts NULL
-   * and there was no UI to set one, so that branch could never match. The column is left in
-   * place rather than migrated away.
+   * rather than trusting whichever one Tautulli happened to report. An ambiguous match on
+   * the username still has to stop the lookup outright rather than falling through to the
+   * friendly name: the friendly name is a weaker, Tautulli-admin-editable signal, and a
+   * coincidental match there could attribute the event to a third user unrelated to the
+   * ones the username was ambiguous between. This used to check a `tautulli_user_id`
+   * column first, but nothing ever populated it: discovery inserts NULL and there was no
+   * UI to set one, so that branch could never match. The column is left in place rather
+   * than migrated away.
    */
   findUserByTautulliName(username?: string | null, friendlyName?: string | null): UserRecord | null {
-    return this.matchUserByName(username) ?? this.matchUserByName(friendlyName);
+    const byUsername = this.matchUserByName(username);
+    if (byUsername.user) return byUsername.user;
+    if (byUsername.ambiguous) return null;
+    return this.matchUserByName(friendlyName).user;
   }
 
-  private matchUserByName(name?: string | null): UserRecord | null {
-    if (!name) return null;
+  private matchUserByName(name?: string | null): { user: UserRecord | null; ambiguous: boolean } {
+    if (!name) return { user: null, ambiguous: false };
     // Neither username nor display_name has a uniqueness constraint in the schema (only
     // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
     // and nothing stops two distinct usernames from colliding case-insensitively either
     // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
     // SQLite returns first, silently misattributing one person's watch history to a
     // different account. No match on username falls through to try display_name; an
-    // ambiguous username returns null immediately instead — a display_name match on that
-    // same string can't disambiguate an already-ambiguous username, so it isn't worth
-    // trying. The display_name fallback itself has no further fallback: an ambiguous or
-    // empty result there is simply null.
+    // ambiguous match on either field is reported back to the caller instead, so it can
+    // refuse to guess rather than trying a different, weaker signal.
     const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(name);
-    if (usernameMatches.length === 1) return userFromRow(usernameMatches[0]);
-    if (usernameMatches.length > 1) return null;
+    if (usernameMatches.length === 1) return { user: userFromRow(usernameMatches[0]), ambiguous: false };
+    if (usernameMatches.length > 1) return { user: null, ambiguous: true };
     const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(name);
-    return displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null;
+    if (displayNameMatches.length === 1) return { user: userFromRow(displayNameMatches[0]), ambiguous: false };
+    return { user: null, ambiguous: displayNameMatches.length > 1 };
   }
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {

@@ -86,6 +86,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `findUserByTautulliName` falls back to an unambiguous display name match | The case the fallback exists for — a Tautulli friendly name that matches nobody's username but exactly one display name |
 | `findUserByTautulliName` matches on the Plex username even when the Tautulli friendly name matches nobody | Regression for #75 — a Tautulli admin can rename the friendly name freely without touching Plex, so a friendly name matching nothing must not block a match on the real Plex username |
 | `findUserByTautulliName` falls back to the friendly name when the Plex username matches nobody | Plex Home/managed users have no real Plex.tv username, so Tautulli's `username` field for them is often empty or unrelated — the friendly name has to be tried independently, not just as a fallback field for the same string |
+| `findUserByTautulliName` refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user | An ambiguous username used to be indistinguishable from "no match" and fell through to the friendly name regardless — a coincidental unique friendly-name match could then attribute the event to a third user unrelated to the ones the username was ambiguous between |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
