@@ -1,11 +1,18 @@
 // A one-year ceiling keeps persisted schedules within JavaScript's Date range while
 // still allowing the longest recurring task Pacearr exposes (monthly reconciliation).
 export const MAX_SCHEDULE_INTERVAL_MINUTES = 365 * 24 * 60;
+export const MAX_SCHEDULE_INTERVAL_HOURS = MAX_SCHEDULE_INTERVAL_MINUTES / 60;
 
 export function normaliseScheduleIntervalMinutes(value: unknown, fallbackMinutes: number): number {
   const parsed = Number(value);
   const minutes = Number.isFinite(parsed) ? parsed : fallbackMinutes;
   return Math.min(MAX_SCHEDULE_INTERVAL_MINUTES, Math.max(1, Math.floor(minutes)));
+}
+
+export function normaliseScheduleIntervalHours(value: unknown, fallbackHours: number): number {
+  const parsed = Number(value);
+  const hours = Number.isFinite(parsed) ? parsed : fallbackHours;
+  return Math.min(MAX_SCHEDULE_INTERVAL_HOURS, Math.max(1, Math.floor(hours)));
 }
 
 export function parseScheduleIntervalMinutes(value: unknown): number | null {

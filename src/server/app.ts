@@ -15,7 +15,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
-import { normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
+import { normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
 
@@ -381,7 +381,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.sessionPollIntervalMinutes !== undefined) {
       patch.sessionPollIntervalMinutes = normaliseScheduleIntervalMinutes(body.sessionPollIntervalMinutes, DEFAULT_APP_SETTINGS.sessionPollIntervalMinutes);
     }
-    if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
+    if (body.historyImportIntervalHours !== undefined) {
+      patch.historyImportIntervalHours = normaliseScheduleIntervalHours(body.historyImportIntervalHours, DEFAULT_APP_SETTINGS.historyImportIntervalHours);
+    }
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);

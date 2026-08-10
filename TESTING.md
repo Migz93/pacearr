@@ -110,7 +110,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Oversized finite intervals are clamped | Values that are finite as minutes but invalid as milliseconds are bounded before persistence or scheduler conversion |
+| Oversized finite intervals are clamped | Values that are finite as minutes or hours but invalid as milliseconds are bounded before persistence or scheduler conversion |
 | Invalid interval forms stay safe | App-settings fall back safely for non-finite values and direct Jobs edits reject them |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
