@@ -133,7 +133,7 @@ export default function History() {
       <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
         {loading && !data ? (
           <div className="p-6 text-center text-on-surface-variant">Loading history...</div>
-        ) : events.length === 0 ? (
+        ) : error ? null : events.length === 0 ? (
           <div className="p-6 text-center text-on-surface-variant">No history entries match the current filters.</div>
         ) : events.map((event) => <HistoryRow event={event} key={event.id} />)}
       </div>

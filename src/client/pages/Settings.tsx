@@ -712,21 +712,24 @@ function JobsTab() {
     }
   }
 
-  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, () => setEditingJob(null));
+  // A save in flight must not be dismissable — Close/Cancel/Escape all route through
+  // here so none of them can back out of a dialog whose PATCH will land anyway.
+  const requestCloseJobDialog = () => { if (!saving) setEditingJob(null); };
+  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, requestCloseJobDialog);
 
   return (
     <>
       {editingJob && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setEditingJob(null)} aria-label="Close"><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
             <Field label="New frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
               <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
               </SelectInput>
             </Field>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => setEditingJob(null)}>Cancel</button>
+              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
               <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>

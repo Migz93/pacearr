@@ -82,6 +82,18 @@ export default function Users() {
     );
   }
 
+  // Distinct from "no users match" below: a failed initial load must not render the
+  // grids' empty-state copy, which reads as a genuinely empty result rather than a
+  // request that never actually succeeded.
+  if (error && users.length === 0) {
+    return (
+      <Page>
+        <PageHeader title="Users" />
+        <ErrorBanner message={error} />
+      </Page>
+    );
+  }
+
   return (
     <Page>
       <PageHeader title="Users">

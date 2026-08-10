@@ -24,7 +24,7 @@ The scheduler tracks:
 
 ## Manual Job Triggers
 
-One endpoint, for any scheduler-registered job:
+Endpoints, for any scheduler-registered job:
 
 | Endpoint | Action |
 |---|---|
