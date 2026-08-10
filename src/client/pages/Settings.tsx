@@ -37,7 +37,7 @@ const LEVEL_BADGE: Record<LogFilter, string> = {
 };
 
 const JOB_PRESETS: Record<string, { unit: "minutes" | "hours"; values: number[] }> = {
-  "session-check": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
+  "session-check": { unit: "minutes", values: [5, 10, 15, 30, 60] },
   "history-import": { unit: "hours", values: [60, 120, 240, 360, 720, 1440] },
 };
 
@@ -743,7 +743,7 @@ function JobsTab() {
               const active = runningId === job.id || Boolean(job.running || job.isRunning);
               return (
                 <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(130px,.7fr)_minmax(160px,.8fr)_minmax(210px,auto)] items-center gap-4 border-b border-outline-variant/30 px-4 py-[13px] last:border-b-0 max-[820px]:grid-cols-1" key={job.id}>
-                  <div><strong className="mr-2">{job.name ?? job.id}</strong>{active && <span className="inline-block size-[9px] shrink-0 rounded-full bg-primary" />}<small className="mt-0.5 block text-on-surface-variant">{job.intervalDescription ?? "Manual"}</small></div>
+                  <div><strong className="mr-2">{job.name ?? job.id}</strong>{active && <span className="inline-block size-[9px] shrink-0 rounded-full bg-primary" />}<small className="mt-0.5 block text-on-surface-variant">{job.intervalDescription ?? "Manual"}</small>{job.statusDescription && <small className="mt-0.5 block text-on-surface-variant">{job.statusDescription}</small>}</div>
                   <span>{job.nextRunAt ? formatFutureTime(job.nextRunAt) : job.nextRunLabel ?? "-"}</span>
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">

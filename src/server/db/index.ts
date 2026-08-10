@@ -46,7 +46,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   artworkEnabled: false,
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
-  sessionPollIntervalMinutes: 5,
+  sessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
   progressiveCleanupEnabled: true,
   progressiveCleanupDelayDays: 7,

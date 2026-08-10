@@ -139,8 +139,8 @@ function buildPlexSettingsFromPayload(token: string, payload: PlexConfigPayload 
 
 const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings: AppSettings) => string; nextRunLabel?: string }> = {
   "session-check": {
-    name: "Plex session check",
-    intervalDescription: (settings) => `Every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
+    name: "Plex session fallback check",
+    intervalDescription: (settings) => `Fallback every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
   "history-import": {
     name: "History import",
@@ -311,6 +311,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
+    services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
     await services.discoverPlexUsers();
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
@@ -375,7 +376,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const retentionDays = Number(body.historyRetentionDays);
       patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
     }
-    if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
+    if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 15));
     if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
@@ -462,12 +463,17 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const settings = db.getAppSettings();
     const jobs: JobInfo[] = (scheduler?.listJobs() ?? []).map((job) => {
       const label = JOB_LABELS[job.id];
+      const sessionMonitorStatus = job.id === "session-check" ? services.getPlexSessionMonitorStatus() : null;
       return {
         ...job,
         name: label?.name ?? job.id,
         intervalDescription: label?.intervalDescription(settings) ?? "Manual",
         nextRunLabel: label?.nextRunLabel,
         isRunning: job.running,
+        ...(sessionMonitorStatus ? {
+          statusMode: sessionMonitorStatus.mode,
+          statusDescription: sessionMonitorStatus.description,
+        } : {}),
       };
     });
     res.json(jobs);

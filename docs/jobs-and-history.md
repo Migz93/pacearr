@@ -6,7 +6,7 @@ Pacearr has five scheduler-managed jobs.
 
 | Job | Default schedule | Purpose |
 |---|---:|---|
-| `session-check` | every 5 minutes | Poll Plex live sessions and process active episode playback |
+| `session-check` | every 15 minutes | Poll Plex live sessions only while the live SSE connection is unavailable; process active episode playback |
 | `history-import` | every 24 hours | Import Plex history and optional Tautulli history |
 | `full-history-reconcile` | every 30 days | Re-read all available Plex and Tautulli episode history to recover source gaps |
 | `rolling-reconcile` | every 6 hours | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
@@ -21,6 +21,11 @@ The scheduler tracks:
 - last successful run time
 - last terminal status
 - whether a run is active
+
+Plex playback normally arrives through a persistent SSE connection. Settings →
+Jobs shows whether this live connection is active or Pacearr is using its polling
+fallback. Playback notifications and scheduled/manual requests share the
+`session-check` job; an in-progress run is never duplicated.
 
 ## Manual Job Triggers
 
@@ -37,7 +42,8 @@ supported were removed.
 Settings → Jobs is the only UI surface for running a job now or changing a
 schedule. `session-check` and `history-import` intervals are stored in
 `sessionPollIntervalMinutes` and `historyImportIntervalHours`; editing them there
-writes those settings and reschedules the job.
+writes those settings and reschedules the job. The session interval is the
+polling fallback, not the primary playback trigger.
 
 ## Watch Events
 

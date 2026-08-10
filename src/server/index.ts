@@ -17,13 +17,13 @@ function isReady() {
   return status.configurationValid;
 }
 
-function requiresSetup(task: () => Promise<void>) {
-  return async () => {
+function requiresSetup(task: (context: { scheduled: boolean }) => Promise<void>) {
+  return async (context: { scheduled: boolean }) => {
     if (!isReady()) {
       logger.debug("Skipping scheduled task; setup is incomplete");
       return;
     }
-    await task();
+    await task(context);
   };
 }
 
@@ -31,8 +31,15 @@ const settings = db.getAppSettings();
 scheduler.registerRecurringJob({
   id: "session-check",
   intervalMs: settings.sessionPollIntervalMinutes * 60 * 1000,
-  task: requiresSetup(() => services.checkSessions().then(() => undefined)),
+  task: requiresSetup(async ({ scheduled }) => {
+    if (scheduled && services.isPlexSessionMonitorLive()) {
+      logger.debug("Skipping polling session check while live Plex playback is connected");
+      return;
+    }
+    await services.checkSessions();
+  }),
 });
+services.startPlexSessionMonitor(() => { scheduler.runNow("session-check"); });
 scheduler.registerRecurringJob({
   id: "history-import",
   intervalMs: settings.historyImportIntervalHours * 60 * 60 * 1000,
