@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { Logger } from "../logger.js";
 
@@ -263,15 +264,26 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Session IDs are bearer credentials. Hashing existing rows during the migration
+    // preserves valid logins while ensuring a database read cannot be replayed as one.
+    version: 14,
+    up(db) {
+      const sessions = db.prepare("SELECT id FROM sessions").all() as Array<{ id: string }>;
+      const update = db.prepare("UPDATE sessions SET id = ? WHERE id = ?");
+      for (const { id } of sessions) update.run(crypto.createHash("sha256").update(id).digest("hex"), id);
+    },
+  },
 ];
 
-export function runMigrations(db: Database.Database, logger?: Logger): void {
+export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
   let currentVersion = db.pragma("user_version", { simple: true }) as number;
   const latestVersion = migrations[migrations.length - 1]?.version ?? 0;
-  if (currentVersion >= latestVersion) return;
+  const finalVersion = Math.min(targetVersion ?? latestVersion, latestVersion);
+  if (currentVersion >= finalVersion) return;
 
   for (const migration of migrations) {
-    if (migration.version <= currentVersion) continue;
+    if (migration.version <= currentVersion || migration.version > finalVersion) continue;
     logger?.info("Applying database migration", { from: currentVersion, to: migration.version });
     db.transaction(() => {
       migration.up(db);

@@ -51,6 +51,8 @@ When changing the schema in the future:
 
 - Authentication is Plex-owner based.
 - The first successful Plex login becomes the stored owner account.
+- Session IDs are random bearer tokens but SQLite stores only their SHA-256 hash; upgrading hashes existing rows without invalidating active cookies.
+- Cookies are `HttpOnly`, `SameSite=Strict`, and add `Secure` for HTTPS requests. `trustProxy` must be enabled when TLS terminates at a reverse proxy; changing it takes effect immediately.
 - OAuth popup login is available from the UI; manual token entry is retained as a fallback.
 - Setup flow is currently lightweight:
   1. sign in with Plex
@@ -97,6 +99,8 @@ Pacearr uses Sonarr v3 API endpoints to:
 - trigger `EpisodeSearch`
 - trigger `SeasonSearch`
 - delete episode files during cleanup/reset when enabled
+
+Sonarr and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their API-key requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
 
 ### Frontend
 
