@@ -393,12 +393,28 @@ export class PacearrServices {
         if (decision === "enroll") {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
-            await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+            if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+              this.db.completeNewShowTriageEnrollment(item.id);
+            } else {
+              // A rolling row that Pacearr did not mark pending belongs to a manual
+              // enrollment. Do not apply the automatic pilot baseline to it.
+              this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
+              this.logger.info("Skipped automatic triage for an already manually enrolled Sonarr series", { seriesId: item.id, title: item.title });
+              continue;
+            }
           } else {
+            this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
             await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+            this.db.completeNewShowTriageEnrollment(item.id);
           }
         } else {
-          await this.getSonarr().searchSeries(item.id);
+          const searchStarted = await this.searchNewSonarrSeries(item.id);
+          if (!searchStarted) {
+            this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
+            this.logger.info("Skipped automatic search for an already enrolled Sonarr series", { seriesId: item.id, title: item.title });
+            continue;
+          }
         }
         this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
@@ -418,6 +434,20 @@ export class PacearrServices {
   private isCurrentNewShowTriageActivation(activationAt: string | null): boolean {
     const settings = this.db.getAppSettings();
     return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
+  }
+
+  private async searchNewSonarrSeries(seriesId: number): Promise<boolean> {
+    const operation = this.acquireSeriesOperation(seriesId);
+    if (operation === null) throw new Error("Another operation is already running for this show.");
+    try {
+      // The candidate list is a snapshot. A manual enrollment may have completed
+      // before this search obtained its series lock.
+      if (this.db.getRollingShowBySeriesId(seriesId)) return false;
+      await this.getSonarr().searchSeries(seriesId);
+      return true;
+    } finally {
+      this.releaseSeriesOperation(seriesId, operation);
+    }
   }
 
   private buildCachedShowListItem(

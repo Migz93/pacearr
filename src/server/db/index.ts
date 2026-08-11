@@ -362,6 +362,21 @@ export class PacearrDatabase {
     `).run(input.seriesId, input.title, input.addedAt, input.decision, now());
   }
 
+  hasPendingNewShowTriageEnrollment(seriesId: number): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").get(seriesId));
+  }
+
+  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null }): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at)
+      VALUES (?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, now());
+  }
+
+  completeNewShowTriageEnrollment(seriesId: number): void {
+    this.db.prepare("DELETE FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").run(seriesId);
+  }
+
   getNewShowTriageFallbackBaselineAt(): string | null {
     return this.getSetting<string>("newShowTriageFallbackBaselineAt");
   }

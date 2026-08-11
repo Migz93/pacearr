@@ -244,6 +244,51 @@ test("a failed new-show triage does not block later arrivals", async () => {
   }
 });
 
+test("new-show triage leaves a manual enrollment alone", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const manuallyEnrolled = series(13, "Manual enrollment", 81, "2026-08-11T12:00:01.000Z");
+  const restoreFetch = installSonarrFetchStub({ requests, series: [manuallyEnrolled] });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    db.upsertRollingShow(manuallyEnrolled);
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.some((request) => request.method === "PUT" || request.pathname === "/api/v3/command"), false);
+    assert.equal(db.hasKnownNewShowTriage(13), true);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(13), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage waits for another series operation before starting a full search", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installSonarrFetchStub({ requests, series: [series(14, "Locked search", 1, "2026-08-11T12:00:01.000Z")] });
+  const operations = services as unknown as {
+    acquireSeriesOperation(seriesId: number): number | null;
+    releaseSeriesOperation(seriesId: number, operation: number): void;
+  };
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    const operation = operations.acquireSeriesOperation(14);
+    assert.notEqual(operation, null);
+    await services.triageNewSonarrSeries();
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
+    assert.equal(db.hasKnownNewShowTriage(14), false);
+
+    operations.releaseSeriesOperation(14, operation as number);
+    await services.triageNewSonarrSeries();
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
+    assert.equal(db.hasKnownNewShowTriage(14), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("retrying a partial large-show enrollment resumes without duplicating enrollment history", async () => {
   const { db, services, cleanup } = createHarness();
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
@@ -258,12 +303,14 @@ test("retrying a partial large-show enrollment resumes without duplicating enrol
     await services.triageNewSonarrSeries();
     assert.ok(db.getRollingShowBySeriesId(9));
     assert.equal(db.hasKnownNewShowTriage(9), false);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(9), true);
     assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
 
     state.failingSeriesUpdateIds.clear();
     await services.triageNewSonarrSeries();
 
     assert.equal(db.hasKnownNewShowTriage(9), true);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(9), false);
     assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
     assert.equal(state.series[0]?.monitored, true);
     assert.equal(state.series[0]?.monitorNewItems, "none");

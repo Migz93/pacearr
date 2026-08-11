@@ -290,6 +290,22 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // An automatic enrollment can fail after creating its rolling-show row. Persist
+    // that it was Pacearr-initiated so retries never mistake a manual enrollment for
+    // incomplete automatic work and apply the pilot baseline to it.
+    version: 16,
+    up(db) {
+      db.exec(`
+        CREATE TABLE new_show_triage_pending_enrollments (
+          sonarr_series_id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          added_at TEXT,
+          started_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
