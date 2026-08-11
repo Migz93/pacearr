@@ -522,7 +522,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // prerequisite job also triggers the calculation when it completes, so the UI never
     // reports a successful no-op on a cold cache.
     const targetId = jobId === "recommendation-refresh" ? recommendationRefreshTargetId() : jobId;
-    res.json({ triggered: scheduler?.runNow(targetId) ?? false });
+    res.json({ triggered: scheduler?.runNow(targetId) ?? false, triggeredJobId: targetId });
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {

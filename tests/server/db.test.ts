@@ -270,6 +270,25 @@ test("dry-run mode is enabled by default and live cleanup deletion cannot be dis
   }
 });
 
+test("the split library refresh job inherits the old combined job state on upgrade", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    const lastRunAt = "2026-08-10T12:00:00.000Z";
+    db.saveJobRunState("recommendation-refresh", { lastRunAt, lastRunStatus: "success" });
+
+    // Model an existing installation immediately before this release: its old combined
+    // job row exists, but the newly split library job row has not been seeded yet.
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    raw.prepare("DELETE FROM job_run_state WHERE job_id = 'sonarr-library-refresh'").run();
+    raw.close();
+
+    const upgraded = new PacearrDatabase({ port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1000, logLevel: "error" });
+    assert.deepEqual(upgraded.getJobRunState("sonarr-library-refresh"), { lastRunAt, lastRunStatus: "success" });
+  } finally {
+    cleanup();
+  }
+});
+
 test("season inactivity timestamps persist until a viewer returns or the season is cleaned", () => {
   const { db, cleanup } = createDb();
   try {

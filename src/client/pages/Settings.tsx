@@ -688,7 +688,8 @@ function JobsTab() {
   async function runJob(id: string) {
     setRunningId(id);
     try {
-      await apiPost(`/api/settings/jobs/${id}/run`);
+      const result = await apiPost<{ triggered: boolean; triggeredJobId: string }>(`/api/settings/jobs/${id}/run`);
+      setRunningId(result.triggeredJobId);
       await load(true);
     } finally {
       setRunningId(null);

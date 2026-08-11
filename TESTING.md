@@ -72,6 +72,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
 | Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
+| The split library refresh job inherits old combined-job state | An upgrade carries `recommendation-refresh` run status into `sonarr-library-refresh`, avoiding a misleading “never run” status while the existing cache is warm |
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
