@@ -151,6 +151,25 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
 
+### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
+
+| Test | What it checks |
+|---|---|
+| Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
+| A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
+| Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
+| Dry-run does not persist a fallback baseline | An undated dry-run response cannot suppress that series if Sonarr later supplies a post-activation `added` time in live mode |
+| A changed activation stops an in-flight poll | A poll that started before triage was re-enabled cannot apply its old activation boundary |
+| A missing Sonarr `added` field uses a first-poll ID baseline | The fallback never acts on pre-existing series, but detects a newly appearing ID on a later poll |
+| A pre-existing series remains ignored if its `added` field disappears | An ID recorded from the initial timestamped response cannot become a fallback candidate later |
+| A failing series does not block later arrivals | Per-series failures remain pending and visible in History while later new series continue through triage |
+| A manual enrollment is not resumed by automatic triage | Only an explicitly pending automatic enrollment can receive the pilot baseline on a retry |
+| A failed automatic enrollment cannot mark a later manual enrollment pending | A failure before Pacearr creates its rolling-show row leaves no marker for a later manual enrollment to inherit |
+| A pending-marker write failure releases its enrollment lock | A database error before the mutation phase cannot permanently block later work on that series |
+| Unenrolling a partial automatic enrollment clears its pending marker | A later manual enrollment cannot inherit stale automatic triage state after unenrollment |
+| A full-series search waits for another series operation | Triage retries instead of overlapping a concurrent enrollment or rolling mutation |
+| Retrying a partial large-show enrollment resumes it | A retry reuses the persisted rolling-show row without writing a second enrollment history entry |
+
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
 
 | Test | What it checks |

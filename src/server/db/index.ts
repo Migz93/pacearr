@@ -61,6 +61,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   earlyPrefetchEnabled: false,
   earlyPrefetchTriggerEpisodesRemaining: 3,
   earlyPrefetchEpisodeCount: 2,
+  newShowTriageEnabled: false,
+  newShowTriageEpisodeThreshold: 80,
+  newShowTriageEnabledAt: null,
 };
 
 export interface NormalizedWatchEventInput {
@@ -222,7 +225,7 @@ export class PacearrDatabase {
       FROM job_run_state
       WHERE job_id = 'recommendation-refresh'
     `).run();
-    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile", "sonarr-library-refresh", "recommendation-refresh"]) {
+    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile", "sonarr-library-refresh", "recommendation-refresh", "new-show-triage"]) {
       this.db.prepare(`
         INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)
         VALUES (?, NULL, NULL, ?)
@@ -346,6 +349,40 @@ export class PacearrDatabase {
       ON CONFLICT(id) DO UPDATE SET series = excluded.series, generated_at = excluded.generated_at
     `).run(JSON.stringify(items), generatedAt);
     return generatedAt;
+  }
+
+  hasKnownNewShowTriage(seriesId: number): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage WHERE sonarr_series_id = ?").get(seriesId));
+  }
+
+  recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search" }): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO new_show_triage (sonarr_series_id, title, added_at, decision, completed_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, input.decision, now());
+  }
+
+  hasPendingNewShowTriageEnrollment(seriesId: number): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").get(seriesId));
+  }
+
+  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null }): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at)
+      VALUES (?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, now());
+  }
+
+  completeNewShowTriageEnrollment(seriesId: number): void {
+    this.db.prepare("DELETE FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").run(seriesId);
+  }
+
+  getNewShowTriageFallbackBaselineAt(): string | null {
+    return this.getSetting<string>("newShowTriageFallbackBaselineAt");
+  }
+
+  setNewShowTriageFallbackBaselineAt(value: string | null): void {
+    this.setSetting("newShowTriageFallbackBaselineAt", value);
   }
 
   getHistorySyncState(): HistorySyncState {

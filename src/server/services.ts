@@ -331,6 +331,136 @@ export class PacearrServices {
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
   }
 
+  async triageNewSonarrSeries(): Promise<void> {
+    const settings = this.db.getAppSettings();
+    if (!settings.newShowTriageEnabled) return;
+
+    const activationAt = settings.newShowTriageEnabledAt;
+    const enabledAtMs = activationAt ? Date.parse(activationAt) : Number.NaN;
+    if (!Number.isFinite(enabledAtMs)) {
+      // This can only happen if an administrator manually edited the stored setting.
+      // Skipping is safer than accidentally applying a baseline to an older library.
+      this.logger.warn("Skipped new-show triage because its activation time is missing or invalid");
+      return;
+    }
+
+    const series = await this.getSonarr().getSeries();
+    if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+      this.logger.info("Stopped new Sonarr show triage after its activation changed");
+      return;
+    }
+    const fallbackBaselineExists = Boolean(this.db.getNewShowTriageFallbackBaselineAt());
+    const candidates = series.filter((item) => {
+      const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
+      if (Number.isFinite(addedAtMs)) return addedAtMs >= enabledAtMs && !this.db.hasKnownNewShowTriage(item.id);
+      // An older/non-standard Sonarr response that omits `added` cannot establish
+      // whether an existing series predates the setting. Baseline that first response
+      // instead; only IDs absent from a later poll count as new.
+      return fallbackBaselineExists && !this.db.hasKnownNewShowTriage(item.id);
+    });
+
+    if (!fallbackBaselineExists && !settings.dryRun) {
+      for (const item of series) {
+        const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
+        if (!Number.isFinite(addedAtMs) || addedAtMs < enabledAtMs) {
+          this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "baseline" });
+        }
+      }
+      this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
+    }
+
+    const errors: string[] = [];
+    for (const item of candidates) {
+      const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
+      const decision = episodeCount > settings.newShowTriageEpisodeThreshold ? "enroll" : "search";
+      if (settings.dryRun) {
+        this.logger.info("Dry run: would triage new Sonarr series", {
+          seriesId: item.id,
+          title: item.title,
+          addedAt: item.added ?? null,
+          episodeCount,
+          threshold: settings.newShowTriageEpisodeThreshold,
+          decision,
+        });
+        continue;
+      }
+      if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+        this.logger.info("Stopped new Sonarr show triage after its activation changed");
+        break;
+      }
+
+      try {
+        if (decision === "enroll") {
+          const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
+          if (existingEnrollment) {
+            if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+              this.db.completeNewShowTriageEnrollment(item.id);
+            } else {
+              // A rolling row that Pacearr did not mark pending belongs to a manual
+              // enrollment. Do not apply the automatic pilot baseline to it.
+              this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
+              this.logger.info("Skipped automatic triage for an already manually enrolled Sonarr series", { seriesId: item.id, title: item.title });
+              continue;
+            }
+          } else {
+            // beginEnrollment creates the rolling-show row synchronously after its
+            // series read. Mark only that established row as automatic before the
+            // subsequent Sonarr mutations can partially fail.
+            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
+            try {
+              this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
+              this.db.completeNewShowTriageEnrollment(item.id);
+            } catch (error) {
+              // completeEnrollment releases in its finally block; this also releases
+              // if persisting the marker failed before it could take ownership.
+              this.releaseSeriesOperation(item.id, enrollment.operation);
+              throw error;
+            }
+          }
+        } else {
+          const searchStarted = await this.searchNewSonarrSeries(item.id);
+          if (!searchStarted) {
+            this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
+            this.logger.info("Skipped automatic search for an already enrolled Sonarr series", { seriesId: item.id, title: item.title });
+            continue;
+          }
+        }
+        this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
+        this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+        this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${item.title}: ${message}`);
+        this.logger.error("New Sonarr series triage failed", { seriesId: item.id, title: item.title, decision, error: message });
+      }
+    }
+    if (errors.length > 0) {
+      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors });
+      this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
+    }
+  }
+
+  private isCurrentNewShowTriageActivation(activationAt: string | null): boolean {
+    const settings = this.db.getAppSettings();
+    return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
+  }
+
+  private async searchNewSonarrSeries(seriesId: number): Promise<boolean> {
+    const operation = this.acquireSeriesOperation(seriesId);
+    if (operation === null) throw new Error("Another operation is already running for this show.");
+    try {
+      // The candidate list is a snapshot. A manual enrollment may have completed
+      // before this search obtained its series lock.
+      if (this.db.getRollingShowBySeriesId(seriesId)) return false;
+      await this.getSonarr().searchSeries(seriesId);
+      return true;
+    } finally {
+      this.releaseSeriesOperation(seriesId, operation);
+    }
+  }
+
   private buildCachedShowListItem(
     series: SonarrSeries,
     rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,
@@ -630,6 +760,20 @@ export class PacearrServices {
     return this.completeEnrollment(series, rolling, operation, options);
   }
 
+  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+    const operation = this.acquireSeriesOperation(seriesId);
+    if (operation === null) throw new Error("Another operation is already running for this show.");
+    try {
+      const series = await this.getSonarr().getSeriesById(seriesId);
+      return await this.completeEnrollment(series, rolling, operation, options);
+    } catch (error) {
+      // completeEnrollment releases in its finally block; this also releases if the
+      // preliminary series read failed before completeEnrollment could take ownership.
+      this.releaseSeriesOperation(seriesId, operation);
+      throw error;
+    }
+  }
+
   private reconcileStoredWatchEvents(series: SonarrSeries, rollingShowId: number): number {
     const matched = this.db.listUnmatchedWatchEvents().filter((event) => normalizeTitle(event.showTitle) === normalizeTitle(series.title));
     for (const event of matched) {
@@ -696,6 +840,7 @@ export class PacearrServices {
       if (artwork.length > 0) await this.plexArtwork.restoreAll(this.getPlex(), rollingShowId);
       const changed = await this.restoreSonarrMonitoring(show.sonarrSeriesId);
       this.db.deleteRollingShow(rollingShowId);
+      this.db.completeNewShowTriageEnrollment(show.sonarrSeriesId);
       this.plexArtwork.removeBackups(artwork);
       this.db.addHistory("info", "show.unenrolled", show.title, { rollingShowId });
       this.logger.info("Show unenrolled from Pacearr control", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, remonitored: changed, artworkRestored: artwork.length });

@@ -163,6 +163,10 @@ const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings:
     name: "Recommendation calculation",
     intervalDescription: (settings) => `Every ${settings.recommendationRefreshIntervalHours} hour${settings.recommendationRefreshIntervalHours !== 1 ? "s" : ""}`,
   },
+  "new-show-triage": {
+    name: "New Sonarr show triage",
+    intervalDescription: () => "Every 5 minutes when enabled",
+  },
 };
 
 export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
@@ -453,6 +457,23 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       patch.earlyPrefetchEpisodeCount = Math.max(1, Math.floor(Number.isFinite(count) ? count : DEFAULT_APP_SETTINGS.earlyPrefetchEpisodeCount));
     }
     const previousSettings = db.getAppSettings();
+    if (body.newShowTriageEnabled !== undefined) {
+      if (typeof body.newShowTriageEnabled !== "boolean") {
+        res.status(400).json({ error: "newShowTriageEnabled must be a boolean." });
+        return;
+      }
+      patch.newShowTriageEnabled = body.newShowTriageEnabled;
+      // The General settings form submits its current toggle value with every save.
+      // Move the boundary only on a real off → on transition, otherwise an unrelated
+      // settings change would make already-arrived series look new again.
+      patch.newShowTriageEnabledAt = body.newShowTriageEnabled
+        ? previousSettings.newShowTriageEnabled ? previousSettings.newShowTriageEnabledAt : new Date().toISOString()
+        : null;
+    }
+    if (body.newShowTriageEpisodeThreshold !== undefined) {
+      const threshold = Number(body.newShowTriageEpisodeThreshold);
+      patch.newShowTriageEpisodeThreshold = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : DEFAULT_APP_SETTINGS.newShowTriageEpisodeThreshold));
+    }
     const appSettings = db.updateAppSettings(patch);
     if (patch.trustProxy !== undefined) app.set("trust proxy", appSettings.trustProxy ? 1 : false);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
@@ -462,6 +483,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("sonarr-library-refresh", { intervalMs: appSettings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("recommendation-refresh", { intervalMs: appSettings.recommendationRefreshIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("new-show-triage", { enabled: appSettings.newShowTriageEnabled });
+    if (!previousSettings.newShowTriageEnabled && appSettings.newShowTriageEnabled) {
+      db.setNewShowTriageFallbackBaselineAt(null);
+      logger.info("New Sonarr show triage enabled; existing Sonarr series will be ignored", { enabledAt: appSettings.newShowTriageEnabledAt });
+      // Do not drop a new activation if the preceding activation is still
+      // unwinding. The queued run uses the new activation boundary.
+      scheduler?.runNowOrQueue("new-show-triage");
+    }
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
       scheduler?.runNow("rolling-reconcile");

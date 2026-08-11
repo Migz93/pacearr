@@ -2,7 +2,7 @@
 
 ## Jobs
 
-Pacearr has six scheduler-managed jobs.
+Pacearr has seven scheduler-managed jobs.
 
 | Job | Default schedule | Purpose |
 |---|---:|---|
@@ -12,6 +12,7 @@ Pacearr has six scheduler-managed jobs.
 | `rolling-reconcile` | every 6 hours, configurable | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
 | `sonarr-library-refresh` | every 6 hours, configurable | Fetch Sonarr's series list and refresh `sonarr_library_cache` |
 | `recommendation-refresh` | every 6 hours, configurable | Recalculate projected-savings recommendations from the cached Sonarr library |
+| `new-show-triage` | every 5 minutes when enabled | Search smaller new Sonarr series in full and enroll larger ones into the pilot baseline |
 
 Job state is stored in `job_run_state`.
 
@@ -64,6 +65,14 @@ so recently added Sonarr shows are not delayed until the next cache refresh.
 independent: history and recurring library refreshes do not trigger it. A
 manual library refresh (including a manual recommendation run on a cold cache)
 calculates recommendations after the library cache is ready.
+
+`new-show-triage` is disabled by default. Its Sonarr poll is deliberately
+separate from the six-hour library cache refresh, so it can act quickly on new
+arrivals. The setting's activation timestamp and Sonarr's `added` value ensure
+the existing library is ignored. On its first poll, Pacearr records every
+pre-activation series as a baseline, retaining `added` when Sonarr provides it.
+If a later response omits `added`, Pacearr uses that persisted baseline to
+detect only newly appearing IDs by list comparison.
 
 ## Watch Events
 
@@ -145,7 +154,7 @@ puts it in a filter. An unmapped action still appears under "All types".
 |---|---|
 | Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch` |
 | Cleanup | `cleanup.progressive`, `cleanup.prefetch`, `show.reset` |
-| Shows | `show.enrolled`, `show.unenrolled`, `recommendation.ignored` |
+| Shows | `show.enrolled`, `show.unenrolled`, `show.auto_triaged`, `show.auto_triage`, `recommendation.ignored` |
 | Sync | `history.import`, `history.full_reconcile`, `sessions.check`, `rolling.reconcile`, `watch_events.reconciled` (no longer written, kept mapped so existing rows stay visible) |
 
 A `dry_run.` prefix is not a separate action for filtering purposes: it shares
