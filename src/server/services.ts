@@ -408,9 +408,16 @@ export class PacearrServices {
             // series read. Mark only that established row as automatic before the
             // subsequent Sonarr mutations can partially fail.
             const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
-            this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-            await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
-            this.db.completeNewShowTriageEnrollment(item.id);
+            try {
+              this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
+              this.db.completeNewShowTriageEnrollment(item.id);
+            } catch (error) {
+              // completeEnrollment releases in its finally block; this also releases
+              // if persisting the marker failed before it could take ownership.
+              this.releaseSeriesOperation(item.id, enrollment.operation);
+              throw error;
+            }
           }
         } else {
           const searchStarted = await this.searchNewSonarrSeries(item.id);

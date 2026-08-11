@@ -288,6 +288,31 @@ test("a failed automatic enrollment cannot mark a later manual enrollment as pen
   }
 });
 
+test("a pending-marker database error releases the automatic enrollment lock", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installSonarrFetchStub({ requests, series: [series(16, "Marker error", 81, "2026-08-11T12:00:01.000Z")] });
+  const originalStart = db.startNewShowTriageEnrollment.bind(db);
+  const operations = services as unknown as {
+    acquireSeriesOperation(seriesId: number): number | null;
+    releaseSeriesOperation(seriesId: number, operation: number): void;
+  };
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    db.startNewShowTriageEnrollment = () => { throw new Error("temporary SQLite error"); };
+    await services.triageNewSonarrSeries();
+    db.startNewShowTriageEnrollment = originalStart;
+
+    const operation = operations.acquireSeriesOperation(16);
+    assert.notEqual(operation, null);
+    operations.releaseSeriesOperation(16, operation as number);
+  } finally {
+    db.startNewShowTriageEnrollment = originalStart;
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("new-show triage waits for another series operation before starting a full search", async () => {
   const { db, services, cleanup } = createHarness();
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
