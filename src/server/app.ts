@@ -181,6 +181,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     return db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh";
   }
 
+  function runRecommendationRefreshNow() {
+    return scheduler?.runNowOrQueue(recommendationRefreshTargetId()) ?? false;
+  }
+
   if (db.getAppSettings().trustProxy) app.set("trust proxy", 1);
 
   app.use(helmet({
@@ -522,7 +526,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // prerequisite job also triggers the calculation when it completes, so the UI never
     // reports a successful no-op on a cold cache.
     const targetId = jobId === "recommendation-refresh" ? recommendationRefreshTargetId() : jobId;
-    res.json({ triggered: scheduler?.runNow(targetId) ?? false, triggeredJobId: targetId });
+    // A manual library/recommendation action must not be lost to an in-flight scheduled
+    // library fetch, which deliberately does not trigger the independent recurring calc.
+    const triggered = targetId === "sonarr-library-refresh" || targetId === "recommendation-refresh"
+      ? scheduler?.runNowOrQueue(targetId) ?? false
+      : scheduler?.runNow(targetId) ?? false;
+    res.json({ triggered, triggeredJobId: targetId });
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {
@@ -648,8 +657,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json(services.listRecommendations(req.query.includeIgnored === "true", refreshing || !db.getRecommendationCache()));
   }));
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
-    const alreadyRunning = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow(recommendationRefreshTargetId()) ?? false });
+    res.json({ triggered: runRecommendationRefreshNow() });
   });
   app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -666,7 +674,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   }));
   app.delete("/api/rolling-shows/:id", requireAuth, asyncRoute(async (req, res) => {
     const result = await services.removeShow(Number(req.params.id));
-    if (result.ok) scheduler?.runNow(recommendationRefreshTargetId());
+    if (result.ok) runRecommendationRefreshNow();
     res.json(result);
   }));
 
