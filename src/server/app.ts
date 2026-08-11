@@ -177,6 +177,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     return scheduler?.listJobs().some((job) => ids.includes(job.id) && job.running) ?? false;
   }
 
+  function recommendationRefreshTargetId() {
+    return db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh";
+  }
+
   if (db.getAppSettings().trustProxy) app.set("trust proxy", 1);
 
   app.use(helmet({
@@ -517,9 +521,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // A manual recommendation calculation needs a library snapshot. Starting the
     // prerequisite job also triggers the calculation when it completes, so the UI never
     // reports a successful no-op on a cold cache.
-    const targetId = jobId === "recommendation-refresh" && !db.getSonarrLibraryCache()
-      ? "sonarr-library-refresh"
-      : jobId;
+    const targetId = jobId === "recommendation-refresh" ? recommendationRefreshTargetId() : jobId;
     res.json({ triggered: scheduler?.runNow(targetId) ?? false });
   });
 
@@ -640,12 +642,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   }));
   app.get("/api/recommendations", requireAuth, asyncRoute(async (req, res) => {
     const refreshing = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
-    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh");
+    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow(recommendationRefreshTargetId());
     res.json(services.listRecommendations(req.query.includeIgnored === "true", refreshing || !db.getRecommendationCache()));
   }));
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
     const alreadyRunning = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh") ?? false });
+    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow(recommendationRefreshTargetId()) ?? false });
   });
   app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -662,7 +664,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   }));
   app.delete("/api/rolling-shows/:id", requireAuth, asyncRoute(async (req, res) => {
     const result = await services.removeShow(Number(req.params.id));
-    if (result.ok) scheduler?.runNow("recommendation-refresh");
+    if (result.ok) scheduler?.runNow(recommendationRefreshTargetId());
     res.json(result);
   }));
 
