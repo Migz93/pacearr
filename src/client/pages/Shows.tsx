@@ -638,21 +638,20 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
   const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
   return (
       <div id={id} className="overflow-hidden border-t border-outline-variant/30">
-        <div className="grid grid-cols-[90px_minmax(180px,1fr)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
+        <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
           <span>Episode</span>
           <span>Title</span>
+          <span>Viewers</span>
           <span>State</span>
           <span>Air date</span>
         </div>
         {episodes.map((episode) => {
           const viewers = viewersByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`) ?? [];
           return (
-            <div className="grid grid-cols-[90px_minmax(180px,1fr)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
+            <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
               <strong>{episodeLabel(episode.seasonNumber, episode.episodeNumber)}</strong>
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
-                <AvatarStack viewers={viewers} size={22} />
-              </div>
+              <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
+              <div><RowLabel className="hidden max-[820px]:inline">Viewers</RowLabel><AvatarStack viewers={viewers} size={22} /></div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
