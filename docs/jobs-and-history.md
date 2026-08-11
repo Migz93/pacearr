@@ -69,9 +69,10 @@ calculates recommendations after the library cache is ready.
 `new-show-triage` is disabled by default. Its Sonarr poll is deliberately
 separate from the six-hour library cache refresh, so it can act quickly on new
 arrivals. The setting's activation timestamp and Sonarr's `added` value ensure
-the existing library is ignored. If a non-standard Sonarr response omits
-`added`, Pacearr first stores that response's series IDs as an ID-only baseline
-and detects later arrivals by list comparison.
+the existing library is ignored. On its first poll, Pacearr records every
+pre-activation series as a baseline, retaining `added` when Sonarr provides it.
+If a later response omits `added`, Pacearr uses that persisted baseline to
+detect only newly appearing IDs by list comparison.
 
 ## Watch Events
 
