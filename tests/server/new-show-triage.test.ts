@@ -38,7 +38,14 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
     if (byId) {
       const seriesId = Number(byId[1]);
       if (method === "PUT" && state.failingSeriesUpdateIds?.has(seriesId)) return new Response("temporary Sonarr error", { status: 503 });
-      return jsonResponse(state.series.find((item) => item.id === seriesId) ?? {});
+      const current = state.series.find((item) => item.id === seriesId);
+      if (method === "PUT" && current) {
+        const update = typeof init?.body === "string" ? JSON.parse(init.body) as Partial<SonarrSeries> : {};
+        const next = { ...current, ...update };
+        state.series = state.series.map((item) => item.id === seriesId ? next : item);
+        return jsonResponse(next);
+      }
+      return jsonResponse(current ?? {});
     }
     if (url.pathname === "/api/v3/episode") return jsonResponse([] satisfies SonarrEpisode[]);
     if (url.pathname === "/api/v3/command") {
@@ -85,7 +92,8 @@ test("new-show triage enrolls a series over the episode limit instead of running
   const { db, services, cleanup } = createHarness();
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
   const large = series(3, "New and large", 81, "2026-08-11T12:00:01.000Z");
-  const restoreFetch = installSonarrFetchStub({ requests, series: [large] });
+  const state = { requests, series: [large] };
+  const restoreFetch = installSonarrFetchStub(state);
   try {
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     await services.triageNewSonarrSeries();
@@ -93,6 +101,8 @@ test("new-show triage enrolls a series over the episode limit instead of running
     assert.ok(db.getRollingShowBySeriesId(3));
     assert.equal(requests.some((request) => request.pathname === "/api/v3/command" && request.body?.includes("SeriesSearch")), false);
     assert.equal(db.hasKnownNewShowTriage(3), true);
+    assert.equal(state.series[0]?.monitored, true);
+    assert.equal(state.series[0]?.monitorNewItems, "none");
   } finally {
     restoreFetch();
     cleanup();
@@ -206,6 +216,8 @@ test("retrying a partial large-show enrollment resumes without duplicating enrol
 
     assert.equal(db.hasKnownNewShowTriage(9), true);
     assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
+    assert.equal(state.series[0]?.monitored, true);
+    assert.equal(state.series[0]?.monitorNewItems, "none");
   } finally {
     restoreFetch();
     cleanup();

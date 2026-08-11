@@ -483,6 +483,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("sonarr-library-refresh", { intervalMs: appSettings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("recommendation-refresh", { intervalMs: appSettings.recommendationRefreshIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("new-show-triage", { enabled: appSettings.newShowTriageEnabled });
     if (!previousSettings.newShowTriageEnabled && appSettings.newShowTriageEnabled) {
       db.setNewShowTriageFallbackBaselineAt(null);
       logger.info("New Sonarr show triage enabled; existing Sonarr series will be ignored", { enabledAt: appSettings.newShowTriageEnabledAt });
