@@ -64,7 +64,7 @@ When changing the schema in the future:
 
 ### Show enrollment
 
-The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the `sonarr-library-refresh` job, which owns routine whole-library fetching and caching of missing posters. `recommendation-refresh` separately recalculates recommendations from that snapshot on its own configurable schedule, at initial setup, or on demand; it does not repeat the whole-library fetch. History and session processing use the same snapshot, falling back to a direct fetch only before the first cache exists.
+The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the `sonarr-library-refresh` job, which owns routine whole-library fetching and caching of missing posters. `recommendation-refresh` separately recalculates recommendations from that snapshot on its own configurable schedule, at initial setup, or on demand; it does not repeat the whole-library fetch. History processing uses the snapshot, falling back to a direct fetch only before the first cache exists. Session processing also makes one direct fetch when an active session is absent from the cached snapshot.
 
 Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run history import immediately.
 

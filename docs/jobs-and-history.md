@@ -56,8 +56,10 @@ Settings → Jobs is the only UI surface for running a job now or changing a
 schedule. Each interval is stored in application settings and editing it writes
 the setting and reschedules the job. The session interval is the polling
 fallback, not the primary playback trigger. `sonarr-library-refresh` is the
-dedicated cache-refresh job; history import and session processing reuse that
-snapshot, with a direct Sonarr fallback only before the first cache exists.
+dedicated cache-refresh job; history import reuses that snapshot, with a direct
+Sonarr fallback only before the first cache exists. Session processing also
+performs one direct fetch when an active session cannot be matched in the cache,
+so recently added Sonarr shows are not delayed until the next cache refresh.
 `recommendation-refresh` computes from the cache. Its recurring interval is
 independent: history and recurring library refreshes do not trigger it. A
 manual library refresh (including a manual recommendation run on a cold cache)

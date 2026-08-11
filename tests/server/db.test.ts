@@ -458,6 +458,25 @@ test("a recommendation cache row with corrupted JSON is treated as absent, not a
   }
 });
 
+test("a malformed Sonarr library cache is treated as absent", () => {
+  const { db, dir, cleanup } = createDb();
+  try {
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    raw.prepare("INSERT INTO sonarr_library_cache (id, series, generated_at) VALUES (1, ?, ?)")
+      .run("{not valid json", new Date().toISOString());
+    raw.close();
+    assert.equal(db.getSonarrLibraryCache(), null);
+
+    const raw2 = new Database(path.join(dir, "pacearr.db"));
+    raw2.prepare("UPDATE sonarr_library_cache SET series = ? WHERE id = 1")
+      .run(JSON.stringify([{ series: { id: 1 }, posterUrl: null }]));
+    raw2.close();
+    assert.equal(db.getSonarrLibraryCache(), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a recommendation cache with non-numeric season entries is treated as absent", () => {
   const { db, dir, cleanup } = createDb();
   try {
