@@ -6,7 +6,7 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
 import { isHistoryCategory } from "../shared/history.js";
-import { createSessionId, signedValue } from "./auth.js";
+import { createSessionId, isValidSignature, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
 import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
@@ -207,6 +207,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     legacyHeaders: false,
     skip: (req) => req.path.startsWith("/images/") || req.path.startsWith("/assets/") || req.path === "/favicon.ico",
   }));
+  app.use("/api/auth/plex", rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      logger.warn("Plex login rate limit exceeded");
+      res.status(429).json({ error: "Too many sign-in attempts. Please try again later." });
+    },
+  }));
   app.use(express.json({ limit: "2mb" }));
 
   app.use((req, _res, next) => {
@@ -217,7 +227,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       return;
     }
     const [sessionId, signature] = raw.split(".");
-    if (!sessionId || !signature || signedValue(sessionSecret, sessionId) !== signature) {
+    if (!sessionId || !signature || !isValidSignature(sessionSecret, sessionId, signature)) {
       req.sessionUser = null;
       next();
       return;
@@ -234,9 +244,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     next();
   }
 
-  function setSessionCookie(res: Response, sessionId: string) {
+  function setSessionCookie(req: Request, res: Response, sessionId: string) {
     const signed = `${sessionId}.${signedValue(sessionSecret, sessionId)}`;
-    res.setHeader("Set-Cookie", `${config.sessionCookieName}=${encodeURIComponent(signed)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}`);
+    res.setHeader("Set-Cookie", `${config.sessionCookieName}=${encodeURIComponent(signed)}; HttpOnly; Path=/; SameSite=Strict${req.secure ? "; Secure" : ""}; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}`);
   }
 
   app.get("/api/bootstrap/status", (req, res) => {
@@ -261,7 +271,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     db.savePlexOwner({ ...account, avatarUrl: cachedAvatarUrl });
     const sessionId = createSessionId();
     db.createSession(sessionId, account.plexId, new Date(Date.now() + config.sessionTtlMs).toISOString());
-    setSessionCookie(res, sessionId);
+    setSessionCookie(req, res, sessionId);
     logger.info("Plex owner signed in", { plexId: account.plexId, username: account.username });
     res.json({ ok: true, user: { plexId: account.plexId, username: account.username, displayName: account.displayName, email: account.email, avatarUrl: cachedAvatarUrl } });
   }));
@@ -270,7 +280,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const raw = parseCookies(req.headers.cookie).get(config.sessionCookieName);
     const sessionId = raw?.split(".")[0];
     if (sessionId) db.deleteSession(sessionId);
-    res.setHeader("Set-Cookie", `${config.sessionCookieName}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+    res.setHeader("Set-Cookie", `${config.sessionCookieName}=; HttpOnly; Path=/; SameSite=Lax${req.secure ? "; Secure" : ""}; Max-Age=0`);
     res.json({ ok: true });
     logger.info("User signed out", { plexId: req.sessionUser?.plexId ?? null });
   });

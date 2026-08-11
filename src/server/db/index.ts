@@ -26,7 +26,7 @@ import type {
 } from "../../shared/types.js";
 import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
-import { createSecret } from "../auth.js";
+import { createSecret, hashSessionId } from "../auth.js";
 import type { Logger } from "../logger.js";
 import { runMigrations } from "./migrations.js";
 
@@ -423,11 +423,11 @@ export class PacearrDatabase {
   }
 
   createSession(id: string, plexId: string, expiresAt: string): void {
-    this.db.prepare("INSERT INTO sessions (id, plex_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run(id, plexId, expiresAt, now());
+    this.db.prepare("INSERT INTO sessions (id, plex_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run(hashSessionId(id), plexId, expiresAt, now());
   }
 
   getSession(id: string): SessionUser | null {
-    const row = this.db.prepare("SELECT plex_id FROM sessions WHERE id = ? AND expires_at > ?").get(id, now()) as { plex_id: string } | undefined;
+    const row = this.db.prepare("SELECT plex_id FROM sessions WHERE id = ? AND expires_at > ?").get(hashSessionId(id), now()) as { plex_id: string } | undefined;
     if (!row) return null;
     const owner = this.getPlexOwner();
     if (!owner || owner.plexId !== row.plex_id) return null;
@@ -444,7 +444,7 @@ export class PacearrDatabase {
   }
 
   deleteSession(id: string): void {
-    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+    this.db.prepare("DELETE FROM sessions WHERE id = ?").run(hashSessionId(id));
   }
 
   getBootstrapStatus(hasActiveSession: boolean) {

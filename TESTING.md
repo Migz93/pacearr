@@ -151,6 +151,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
 
+### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
+
+| Test | What it checks |
+|---|---|
+| Session IDs are hashed before persistence and cannot be used as stored | A database read contains only the SHA-256 session-token hash, not a replayable bearer token |
+| Sonarr and Tautulli reject unsafe URLs and disable redirect following for credentialed requests | Non-HTTP(S) and embedded-credential URLs are refused, while API-key requests use `redirect: "error"` so they cannot follow a credential-leaking redirect |
+
 ---
 
 ### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior

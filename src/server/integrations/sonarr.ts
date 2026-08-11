@@ -1,5 +1,6 @@
 import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeries, SonarrSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 export class SonarrIntegration {
   constructor(private readonly settings: SonarrSettings, private readonly logger: Logger, private readonly dryRun = true) {}
@@ -11,8 +12,7 @@ export class SonarrIntegration {
   }
 
   private buildUrl(pathname: string) {
-    const base = this.settings.baseUrl.endsWith("/") ? this.settings.baseUrl : `${this.settings.baseUrl}/`;
-    return new URL(pathname.replace(/^\/+/, ""), base);
+    return buildIntegrationUrl(this.settings.baseUrl, pathname);
   }
 
   buildImageUrl(imagePath: string): string {
@@ -44,7 +44,7 @@ export class SonarrIntegration {
       return undefined as T;
     }
     const url = this.buildUrl(`api/v3/${pathname}`);
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       ...options,
       headers: {
         "X-Api-Key": this.settings.apiKey,

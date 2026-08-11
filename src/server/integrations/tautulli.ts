@@ -1,5 +1,6 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 export interface TautulliHistoryRecord {
   referenceId: string;
@@ -21,8 +22,7 @@ export class TautulliIntegration {
   constructor(private readonly settings: TautulliSettings, private readonly logger: Logger) {}
 
   private buildUrl(params: Record<string, string | number | undefined>) {
-    const base = this.settings.baseUrl.endsWith("/") ? this.settings.baseUrl : `${this.settings.baseUrl}/`;
-    const url = new URL("api/v2", base);
+    const url = buildIntegrationUrl(this.settings.baseUrl, "api/v2");
     url.searchParams.set("apikey", this.settings.apiKey);
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -31,7 +31,7 @@ export class TautulliIntegration {
   }
 
   private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-    const response = await fetch(this.buildUrl({ cmd, ...params }));
+    const response = await fetchIntegration(this.buildUrl({ cmd, ...params }));
     if (!response.ok) throw new Error(`Tautulli ${response.status} ${response.statusText}`);
     const body = await response.json() as { response?: { result?: string; message?: string; data?: T } };
     if (body.response?.result === "error") throw new Error(body.response.message || "Tautulli API error");

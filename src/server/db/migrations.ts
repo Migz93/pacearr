@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { Logger } from "../logger.js";
 
@@ -261,6 +262,16 @@ const migrations: Migration[] = [
         CREATE INDEX idx_watch_events_user_series_watched
         ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
       `);
+    },
+  },
+  {
+    // Session IDs are bearer credentials. Hashing existing rows during the migration
+    // preserves valid logins while ensuring a database read cannot be replayed as one.
+    version: 14,
+    up(db) {
+      const sessions = db.prepare("SELECT id FROM sessions").all() as Array<{ id: string }>;
+      const update = db.prepare("UPDATE sessions SET id = ? WHERE id = ?");
+      for (const { id } of sessions) update.run(crypto.createHash("sha256").update(id).digest("hex"), id);
     },
   },
 ];
