@@ -651,7 +651,10 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
             <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
               <strong>{episodeLabel(episode.seasonNumber, episode.episodeNumber)}</strong>
               <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
-              <div><RowLabel className="hidden max-[820px]:inline">Viewers</RowLabel><AvatarStack viewers={viewers} size={22} /></div>
+              <div className="flex items-center gap-1.5">
+                {viewers.length > 0 && <RowLabel className="hidden max-[820px]:inline">Viewers</RowLabel>}
+                <AvatarStack viewers={viewers} size={22} />
+              </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
