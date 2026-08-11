@@ -63,7 +63,7 @@ scheduler.registerRecurringJob({
     await services.refreshSonarrLibrary();
     // An administrator-triggered library refresh is also an explicit request for fresh
     // recommendations. Recurring runs stay independent so each configured interval wins.
-    if (!scheduled) scheduler.runNow("recommendation-refresh");
+    if (!scheduled) scheduler.runNowOrQueue("recommendation-refresh");
   }),
 });
 // Recommendation calculation only reads the library cache; sonarr-library-refresh owns

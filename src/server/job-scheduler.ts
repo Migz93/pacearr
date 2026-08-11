@@ -11,6 +11,7 @@ type ScheduledJob = {
   lastRunAt: string | null;
   lastRunStatus: "success" | "error" | null;
   activeRuns: number;
+  pendingManualRun: boolean;
   timeout: ReturnType<typeof setTimeout> | null;
   intervalMs: number;
   task: (context: JobRunContext) => Promise<void>;
@@ -46,6 +47,7 @@ export class JobScheduler {
       lastRunAt: persisted?.lastRunAt ?? null,
       lastRunStatus: persisted?.lastRunStatus ?? null,
       activeRuns: 0,
+      pendingManualRun: false,
       timeout: null,
       intervalMs: options.intervalMs,
       task: options.task,
@@ -73,6 +75,21 @@ export class JobScheduler {
     }
     this.logger?.info("Scheduled job triggered manually", { id });
     void this.execute(job, false);
+    return true;
+  }
+
+  /**
+   * Starts a manual run now, or retains exactly one manual follow-up when a run is
+   * already active. Dependencies use this when their result must be processed after a
+   * current calculation finishes, rather than silently dropping that newer result.
+   */
+  runNowOrQueue(id: string) {
+    const job = this.jobs.get(id);
+    if (!job) return false;
+    if (job.activeRuns === 0) return this.runNow(id);
+    if (job.pendingManualRun) return false;
+    job.pendingManualRun = true;
+    this.logger?.info("Queued manual job run after active run", { id, activeRuns: job.activeRuns });
     return true;
   }
 
@@ -142,6 +159,11 @@ export class JobScheduler {
       return false;
     } finally {
       job.activeRuns = Math.max(0, job.activeRuns - 1);
+      if (job.activeRuns === 0 && job.pendingManualRun) {
+        job.pendingManualRun = false;
+        this.logger?.info("Running queued manual job", { id: job.id });
+        void this.execute(job, false);
+      }
     }
   }
 }

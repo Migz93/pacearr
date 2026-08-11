@@ -110,6 +110,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An idle live SSE connection falls back to polling | A reverse proxy or Plex stream that stays open but stops producing heartbeats is reconnected rather than suppressing polling indefinitely |
 | A monitor that begins before Plex is configured reconnects later | The live monitor does not become permanently unavailable when configuration appears after startup |
 | A session-check trigger is coalesced while that job is running | Live notifications, schedules, and manual actions cannot cause overlapping session checks |
+| A dependent manual job queues one follow-up after an active run | A refreshed Sonarr library cannot leave recommendations stale when an older calculation is already in flight; repeated triggers still coalesce to one follow-up |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
@@ -118,7 +119,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | Oversized finite intervals are clamped | Values that are finite as minutes, hours, or days but invalid as milliseconds are bounded before persistence or scheduler conversion |
-| Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values and direct Jobs edits reject them |
+| Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values; direct Jobs edits reject invalid or non-aligned minute values rather than silently rounding them |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 

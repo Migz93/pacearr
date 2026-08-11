@@ -27,3 +27,7 @@ export function parseScheduleIntervalMinutes(value: unknown): number | null {
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.min(MAX_SCHEDULE_INTERVAL_MINUTES, Math.max(1, Math.floor(parsed)));
 }
+
+export function scheduleIntervalValueInUnit(intervalMinutes: number, unitMinutes: number): number | null {
+  return intervalMinutes % unitMinutes === 0 ? intervalMinutes / unitMinutes : null;
+}

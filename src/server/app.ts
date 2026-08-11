@@ -15,7 +15,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
-import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes } from "./schedule-interval.js";
+import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes, scheduleIntervalValueInUnit } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
 
@@ -531,13 +531,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       res.status(400).json({ error: "intervalMinutes is required." });
       return;
     }
-    const schedules: Record<string, { setting: keyof AppSettings; intervalMs: (value: number) => number }> = {
-      "session-check": { setting: "sessionPollIntervalMinutes", intervalMs: (value) => value * 60 * 1000 },
-      "history-import": { setting: "historyImportIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
-      "full-history-reconcile": { setting: "fullHistoryReconcileIntervalDays", intervalMs: (value) => value * 24 * 60 * 60 * 1000 },
-      "rolling-reconcile": { setting: "rollingReconcileIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
-      "sonarr-library-refresh": { setting: "sonarrLibraryRefreshIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
-      "recommendation-refresh": { setting: "recommendationRefreshIntervalHours", intervalMs: (value) => value * 60 * 60 * 1000 },
+    const schedules: Record<string, { setting: keyof AppSettings; unitMinutes: number; intervalMs: (value: number) => number }> = {
+      "session-check": { setting: "sessionPollIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
+      "history-import": { setting: "historyImportIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "full-history-reconcile": { setting: "fullHistoryReconcileIntervalDays", unitMinutes: 24 * 60, intervalMs: (value) => value * 24 * 60 * 60 * 1000 },
+      "rolling-reconcile": { setting: "rollingReconcileIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "sonarr-library-refresh": { setting: "sonarrLibraryRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "recommendation-refresh": { setting: "recommendationRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
     };
     const jobId = String(req.params.id);
     const schedule = schedules[jobId];
@@ -545,9 +545,11 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       res.status(400).json({ error: "This job schedule cannot be edited." });
       return;
     }
-    const configuredValue = schedule.setting === "sessionPollIntervalMinutes" ? intervalMinutes
-      : schedule.setting === "fullHistoryReconcileIntervalDays" ? Math.max(1, Math.floor(intervalMinutes / (24 * 60)))
-        : Math.max(1, Math.floor(intervalMinutes / 60));
+    const configuredValue = scheduleIntervalValueInUnit(intervalMinutes, schedule.unitMinutes);
+    if (configuredValue === null) {
+      res.status(400).json({ error: "intervalMinutes must align with this job's configured unit." });
+      return;
+    }
     db.updateAppSettings({ [schedule.setting]: configuredValue } as Partial<AppSettings>);
     scheduler?.updateJob(jobId, { intervalMs: schedule.intervalMs(configuredValue) });
     res.json({ updated: true });
