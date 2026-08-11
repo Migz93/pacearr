@@ -27,7 +27,7 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number> }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesUpdateIds?: Set<number> }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -35,7 +35,11 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
     state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.pathname === "/api/v3/series") return jsonResponse(state.series);
     const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
-    if (byId) return jsonResponse(state.series.find((item) => item.id === Number(byId[1])) ?? {});
+    if (byId) {
+      const seriesId = Number(byId[1]);
+      if (method === "PUT" && state.failingSeriesUpdateIds?.has(seriesId)) return new Response("temporary Sonarr error", { status: 503 });
+      return jsonResponse(state.series.find((item) => item.id === seriesId) ?? {});
+    }
     if (url.pathname === "/api/v3/episode") return jsonResponse([] satisfies SonarrEpisode[]);
     if (url.pathname === "/api/v3/command") {
       const command = typeof init?.body === "string" ? JSON.parse(init.body) as { seriesId?: number } : {};
@@ -155,6 +159,33 @@ test("a failed new-show triage does not block later arrivals", async () => {
     assert.equal(db.hasKnownNewShowTriage(8), true);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 2);
     assert.equal(db.listHistory().some((event) => event.action === "show.auto_triage" && event.level === "warn"), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("retrying a partial large-show enrollment resumes without duplicating enrollment history", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state = {
+    requests,
+    failingSeriesUpdateIds: new Set([9]),
+    series: [series(9, "Large show", 81, "2026-08-11T12:00:01.000Z")],
+  };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    assert.ok(db.getRollingShowBySeriesId(9));
+    assert.equal(db.hasKnownNewShowTriage(9), false);
+    assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
+
+    state.failingSeriesUpdateIds.clear();
+    await services.triageNewSonarrSeries();
+
+    assert.equal(db.hasKnownNewShowTriage(9), true);
+    assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
   } finally {
     restoreFetch();
     cleanup();

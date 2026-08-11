@@ -160,6 +160,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
 | A missing Sonarr `added` field uses a first-poll ID baseline | The fallback never acts on pre-existing series, but detects a newly appearing ID on a later poll |
 | A failing series does not block later arrivals | Per-series failures remain pending and visible in History while later new series continue through triage |
+| Retrying a partial large-show enrollment resumes it | A retry reuses the persisted rolling-show row without writing a second enrollment history entry |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
 

@@ -381,7 +381,12 @@ export class PacearrServices {
 
       try {
         if (decision === "enroll") {
-          await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+          const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
+          if (existingEnrollment) {
+            await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+          } else {
+            await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+          }
         } else {
           await this.getSonarr().searchSeries(item.id);
         }
@@ -697,6 +702,20 @@ export class PacearrServices {
   async enrollShow(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
     const { series, rolling, operation } = await this.beginEnrollment(seriesId, options);
     return this.completeEnrollment(series, rolling, operation, options);
+  }
+
+  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+    const operation = this.acquireSeriesOperation(seriesId);
+    if (operation === null) throw new Error("Another operation is already running for this show.");
+    try {
+      const series = await this.getSonarr().getSeriesById(seriesId);
+      return await this.completeEnrollment(series, rolling, operation, options);
+    } catch (error) {
+      // completeEnrollment releases in its finally block; this also releases if the
+      // preliminary series read failed before completeEnrollment could take ownership.
+      this.releaseSeriesOperation(seriesId, operation);
+      throw error;
+    }
   }
 
   private reconcileStoredWatchEvents(series: SonarrSeries, rollingShowId: number): number {
