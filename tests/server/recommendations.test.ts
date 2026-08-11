@@ -117,6 +117,23 @@ test("watch events for non-enrolled shows are matched against the full Sonarr li
   }
 });
 
+test("history import reuses the cached Sonarr library instead of fetching it again", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const theWire: SonarrSeries = { id: 701, title: "The Wire", year: 2002, seasons: [] };
+  db.saveSonarrLibraryCache([{ series: theWire, posterUrl: null }]);
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ requests });
+  try {
+    await services.importHistory();
+
+    assert.equal(requests.some((request) => request.pathname === "/api/v3/series"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("history import batches events outside the activity window while still applying rolling logic to recent ones", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
@@ -663,6 +680,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     episodesBySeries: { 500: episodesA, 600: episodesB, 650: episodesC },
     episodeFilesBySeries: { 500: episodeFilesA, 600: episodeFilesB },
   });
+  db.saveSonarrLibraryCache([showA, showB, showC, showD].map((series) => ({ series, posterUrl: null })));
 
   try {
     await services.refreshRecommendations();
@@ -696,6 +714,23 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
   }
 });
 
+test("recommendation refresh does not fetch Sonarr when the library cache is empty", async () => {
+  const warnings: string[] = [];
+  const logger = {
+    debug() {}, info() {}, error() {},
+    warn(message: string) { warnings.push(message); },
+  } as unknown as Logger;
+  const { db, services, cleanup } = createHarness(logger);
+  try {
+    await services.refreshRecommendations();
+
+    assert.equal(db.getRecommendationCache(), null);
+    assert.deepEqual(warnings, ["Skipped recommendation refresh; Sonarr library cache is empty"]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("recommendation refresh skips a Sonarr failure and logs it without losing other candidates", async () => {
   const warnings: Array<{ message: string; meta?: unknown }> = [];
   const logger = {
@@ -704,7 +739,7 @@ test("recommendation refresh skips a Sonarr failure and logs it without losing o
     warn(message: string, meta?: unknown) { warnings.push({ message, meta }); },
     error() {},
   } as unknown as Logger;
-  const { services, cleanup } = createHarness(logger);
+  const { db, services, cleanup } = createHarness(logger);
   const broken: SonarrSeries = {
     id: 1000,
     title: "Broken Episode File Reference",
@@ -728,6 +763,7 @@ test("recommendation refresh skips a Sonarr failure and logs it without losing o
     ] },
     episodeFileErrorsBySeries: { 1000: "EpisodeFile with ID 258557 does not exist" },
   });
+  db.saveSonarrLibraryCache([broken, healthy].map((series) => ({ series, posterUrl: null })));
 
   try {
     await services.refreshRecommendations();
@@ -765,6 +801,7 @@ test("recommendation refresh keeps the previous cache when every candidate fails
     ] },
     episodeFileErrorsBySeries: { 1100: "EpisodeFile with ID 999999 does not exist" },
   });
+  db.saveSonarrLibraryCache([{ series: show, posterUrl: null }]);
 
   try {
     db.saveRecommendationCache([{
@@ -796,7 +833,7 @@ test("recommendation refresh keeps the previous cache when every candidate fails
 });
 
 test("ignored recommendations are persistent, hidden by default, and can be restored", async () => {
-  const { services, cleanup } = createHarness();
+  const { db, services, cleanup } = createHarness();
   const show: SonarrSeries = {
     id: 900,
     title: "Never Watching",
@@ -812,6 +849,7 @@ test("ignored recommendations are persistent, hidden by default, and can be rest
     },
     episodeFilesBySeries: { 900: [{ id: 1, seriesId: 900, seasonNumber: 1, size: 400 }] },
   });
+  db.saveSonarrLibraryCache([{ series: show, posterUrl: null }]);
 
   try {
     await services.refreshRecommendations();

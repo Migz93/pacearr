@@ -72,6 +72,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events with a zero or negative retention value does not wipe every row | A retention value below 1 is floored, so the cutoff can't land on now-or-future and delete the entire audit log |
 | Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
+| The split library refresh job inherits old combined-job state | An upgrade carries `recommendation-refresh` run status into `sonarr-library-refresh`, avoiding a misleading “never run” status while the existing cache is warm |
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
@@ -80,6 +81,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `updateUser` with an empty patch preserves the current enabled state | Locks in the `patch.enabled ?? current.enabled` fallback this layer relies on, independent of whatever the route above it does with an absent field |
 | A recommendation cache missing any field, not just viewers/viewerCount, is treated as absent | The shape guard used to check only the two fields the last rename broke; a row missing a different field (or a malformed nested viewer) would have passed and then crashed the client downstream |
 | A recommendation cache row with corrupted JSON is treated as absent, not as zero candidates | `getRecommendationCache` used to parse through a helper whose fallback-on-error returned `[]`, which passes the shape check vacuously and reads as a genuine "0 candidates" cache instead of triggering the refresh callers expect from `null` |
+| A malformed Sonarr library cache is treated as absent | Invalid JSON or a partial cached series must trigger the normal Sonarr fallback instead of looking like a valid empty library |
 | A recommendation cache with non-numeric season entries is treated as absent | The shape guard checked `retainedSeasons`/`droppedSeasons` were arrays but never that their elements were numbers, unlike every other field in the same guard |
 | `findUserByTautulliName` prefers an exact username match and refuses to guess between ambiguous display names | `username` has no uniqueness constraint and `display_name` even less so — a single OR query with `.get()` would silently attribute one person's Tautulli history to a different Pacearr user on a tie |
 | `findUserByTautulliName` refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie | The username step trusted a bare `.get()` as if a match always meant one row; it did not, since username has no uniqueness constraint either and the lookup is case-insensitive. A third user with a matching display_name proves the null result is the designed refusal, not a coincidence — without it, the test couldn't tell "refused to guess" from "found nothing either way" |
@@ -108,6 +110,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An idle live SSE connection falls back to polling | A reverse proxy or Plex stream that stays open but stops producing heartbeats is reconnected rather than suppressing polling indefinitely |
 | A monitor that begins before Plex is configured reconnects later | The live monitor does not become permanently unavailable when configuration appears after startup |
 | A session-check trigger is coalesced while that job is running | Live notifications, schedules, and manual actions cannot cause overlapping session checks |
+| A dependent manual job queues one follow-up after an active run | A refreshed Sonarr library cannot leave recommendations stale when an older calculation is already in flight; repeated triggers still coalesce to one follow-up |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
@@ -115,8 +118,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Oversized finite intervals are clamped | Values that are finite as minutes or hours but invalid as milliseconds are bounded before persistence or scheduler conversion |
-| Invalid interval forms stay safe | App-settings fall back safely for non-finite values and direct Jobs edits reject them |
+| Oversized finite intervals are clamped | Values that are finite as minutes, hours, or days but invalid as milliseconds are bounded before persistence or scheduler conversion |
+| Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values; direct Jobs edits reject invalid or non-aligned minute values rather than silently rounding them |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
@@ -155,6 +158,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
+| Recommendation refresh is cache-only | The calculation job waits for a populated library cache rather than issuing another whole-library Sonarr request |
 | A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |

@@ -48,6 +48,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
+  fullHistoryReconcileIntervalDays: 30,
+  rollingReconcileIntervalHours: 6,
+  sonarrLibraryRefreshIntervalHours: 6,
+  recommendationRefreshIntervalHours: 6,
   progressiveCleanupEnabled: true,
   progressiveCleanupDelayDays: 7,
   cleanupDeletesFiles: true,
@@ -145,6 +149,14 @@ function isCurrentShapeRecommendation(candidate: unknown): candidate is ShowReco
     && typeof value?.ignored === "boolean";
 }
 
+function isCurrentShapeSonarrLibraryItem(item: unknown): item is SonarrLibraryCacheItem {
+  const value = item as Partial<SonarrLibraryCacheItem> | null;
+  return Boolean(value)
+    && typeof value?.series?.id === "number"
+    && typeof value.series.title === "string"
+    && (value.posterUrl === null || typeof value.posterUrl === "string");
+}
+
 function userFromRow(row: any): UserRecord {
   return {
     id: row.id,
@@ -201,7 +213,16 @@ export class PacearrDatabase {
   private seedDefaults() {
     this.getSessionSecret();
     if (!this.getSetting("app")) this.setSetting("app", DEFAULT_APP_SETTINGS);
-    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile"]) {
+    // The former combined recommendation-refresh job also refreshed the library. Carry
+    // its last known state forward so an upgrade does not briefly present the new library
+    // job as never having run when its cache is already populated.
+    this.db.prepare(`
+      INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)
+      SELECT 'sonarr-library-refresh', last_run_at, last_run_status, updated_at
+      FROM job_run_state
+      WHERE job_id = 'recommendation-refresh'
+    `).run();
+    for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile", "sonarr-library-refresh", "recommendation-refresh"]) {
       this.db.prepare(`
         INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)
         VALUES (?, NULL, NULL, ?)
@@ -306,7 +327,15 @@ export class PacearrDatabase {
   getSonarrLibraryCache(): { items: SonarrLibraryCacheItem[]; generatedAt: string } | null {
     const row = this.db.prepare("SELECT series, generated_at FROM sonarr_library_cache WHERE id = 1").get() as
       { series: string; generated_at: string } | undefined;
-    return row ? { items: parseJson<SonarrLibraryCacheItem[]>(row.series, []), generatedAt: row.generated_at } : null;
+    if (!row) return null;
+    let items: unknown;
+    try {
+      items = JSON.parse(row.series);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(items) || !items.every(isCurrentShapeSonarrLibraryItem)) return null;
+    return { items, generatedAt: row.generated_at };
   }
 
   saveSonarrLibraryCache(items: SonarrLibraryCacheItem[]): string {

@@ -36,9 +36,13 @@ const LEVEL_BADGE: Record<LogFilter, string> = {
   error: badgeClass("error"),
 };
 
-const JOB_PRESETS: Record<string, { unit: "minutes" | "hours"; values: number[] }> = {
+const JOB_PRESETS: Record<string, { unit: "minutes" | "hours" | "days"; values: number[] }> = {
   "session-check": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
   "history-import": { unit: "hours", values: [60, 120, 240, 360, 720, 1440] },
+  "full-history-reconcile": { unit: "days", values: [10080, 20160, 43200, 86400, 129600] },
+  "rolling-reconcile": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "sonarr-library-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "recommendation-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
 };
 
 export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) {
@@ -684,7 +688,8 @@ function JobsTab() {
   async function runJob(id: string) {
     setRunningId(id);
     try {
-      await apiPost(`/api/settings/jobs/${id}/run`);
+      const result = await apiPost<{ triggered: boolean; triggeredJobId: string }>(`/api/settings/jobs/${id}/run`);
+      setRunningId(result.triggeredJobId);
       await load(true);
     } finally {
       setRunningId(null);
@@ -696,7 +701,7 @@ function JobsTab() {
     if (!preset) return;
     const match = job.intervalDescription?.match(/Every (\d+)/i);
     const current = Number(match?.[1] ?? preset.values[0]);
-    setEditValue(String(preset.unit === "hours" ? current * 60 : current));
+    setEditValue(String(preset.unit === "hours" ? current * 60 : preset.unit === "days" ? current * 24 * 60 : current));
     setEditingJob(job);
   }
 
@@ -883,10 +888,14 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function formatPresetLabel(value: number, unit: "minutes" | "hours") {
+function formatPresetLabel(value: number, unit: "minutes" | "hours" | "days") {
   if (unit === "hours") {
     const hours = value / 60;
     return `Every ${hours} hour${hours !== 1 ? "s" : ""}`;
+  }
+  if (unit === "days") {
+    const days = value / (24 * 60);
+    return `Every ${days} day${days !== 1 ? "s" : ""}`;
   }
   if (value < 60) return `Every ${value} minute${value !== 1 ? "s" : ""}`;
   const hours = value / 60;

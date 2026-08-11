@@ -2,15 +2,16 @@
 
 ## Jobs
 
-Pacearr has five scheduler-managed jobs.
+Pacearr has six scheduler-managed jobs.
 
 | Job | Default schedule | Purpose |
 |---|---:|---|
 | `session-check` | every 15 minutes | Poll Plex live sessions only while the live SSE connection is unavailable; process active episode playback |
 | `history-import` | every 24 hours | Import Plex history and optional Tautulli history |
-| `full-history-reconcile` | every 30 days | Re-read all available Plex and Tautulli episode history to recover source gaps |
-| `rolling-reconcile` | every 6 hours | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
-| `recommendation-refresh` | every 6 hours | Refresh the cached Sonarr library and projected-savings recommendations |
+| `full-history-reconcile` | every 30 days, configurable | Re-read all available Plex and Tautulli episode history to recover source gaps |
+| `rolling-reconcile` | every 6 hours, configurable | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
+| `sonarr-library-refresh` | every 6 hours, configurable | Fetch Sonarr's series list and refresh `sonarr_library_cache` |
+| `recommendation-refresh` | every 6 hours, configurable | Recalculate projected-savings recommendations from the cached Sonarr library |
 
 Job state is stored in `job_run_state`.
 
@@ -21,6 +22,16 @@ The scheduler tracks:
 - last successful run time
 - last terminal status
 - whether a run is active
+
+## Scheduler Health
+
+Runs of the same job never overlap: manual, scheduled, and event-driven
+triggers coalesce while a run is active, and a skipped scheduled trigger still
+leaves the next timer armed. A failure is logged with structured detail,
+persists an `error` status in `job_run_state`, and appears as the job's last
+result in Settings → Jobs. Jobs retry at their configured interval; Pacearr
+does not add exponential backoff because each interval is administrator-owned
+and can already be lengthened from Settings when an integration is unavailable.
 
 Plex playback normally arrives through a persistent SSE connection. Settings →
 Jobs shows whether this live connection is active or Pacearr is using its polling
@@ -36,16 +47,23 @@ Endpoints, for any scheduler-registered job:
 | Endpoint | Action |
 |---|---|
 | `POST /api/settings/jobs/:id/run` | Run a job now |
-| `PATCH /api/settings/jobs/:id` | Change a job's interval (`session-check` and `history-import` only) |
+| `PATCH /api/settings/jobs/:id` | Change any job's interval |
 
 The parallel `/api/jobs/*` routes and the Dashboard quick actions they
 supported were removed.
 
 Settings → Jobs is the only UI surface for running a job now or changing a
-schedule. `session-check` and `history-import` intervals are stored in
-`sessionPollIntervalMinutes` and `historyImportIntervalHours`; editing them there
-writes those settings and reschedules the job. The session interval is the
-polling fallback, not the primary playback trigger.
+schedule. Each interval is stored in application settings and editing it writes
+the setting and reschedules the job. The session interval is the polling
+fallback, not the primary playback trigger. `sonarr-library-refresh` is the
+dedicated cache-refresh job; history import reuses that snapshot, with a direct
+Sonarr fallback only before the first cache exists. Session processing also
+performs one direct fetch when an active session cannot be matched in the cache,
+so recently added Sonarr shows are not delayed until the next cache refresh.
+`recommendation-refresh` computes from the cache. Its recurring interval is
+independent: history and recurring library refreshes do not trigger it. A
+manual library refresh (including a manual recommendation run on a cold cache)
+calculates recommendations after the library cache is ready.
 
 ## Watch Events
 

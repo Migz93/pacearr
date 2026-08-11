@@ -160,6 +160,31 @@ test("scheduler coalesces a trigger while the same job is running", async () => 
   scheduler.updateJob("session-check", { enabled: false });
 });
 
+test("scheduler queues one manual follow-up after an active run", async () => {
+  const scheduler = new JobScheduler();
+  const contexts: boolean[] = [];
+  let releaseFirstRun!: () => void;
+  const firstRun = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+  scheduler.registerRecurringJob({
+    id: "recommendation-refresh",
+    intervalMs: 60_000,
+    task: async ({ scheduled }) => {
+      contexts.push(scheduled);
+      if (contexts.length === 1) await firstRun;
+    },
+  });
+  const running = scheduler.runNowAndWait("recommendation-refresh");
+  await waitFor(() => contexts.length === 1);
+
+  assert.equal(scheduler.runNowOrQueue("recommendation-refresh"), true);
+  assert.equal(scheduler.runNowOrQueue("recommendation-refresh"), false, "only one follow-up is queued");
+  releaseFirstRun();
+  assert.equal(await running, true);
+  await waitFor(() => contexts.length === 2);
+  assert.deepEqual(contexts, [false, false]);
+  scheduler.updateJob("recommendation-refresh", { enabled: false });
+});
+
 test("scheduler identifies whether a job run is scheduled", async () => {
   const scheduler = new JobScheduler();
   let scheduled: boolean | null = null;
