@@ -34,9 +34,9 @@ test("session IDs are hashed before persistence and cannot be used as stored", (
 
 test("Sonarr and Tautulli reject unsafe URLs and disable redirect following for credentialed requests", async () => {
   const originalFetch = globalThis.fetch;
-  const requests: Array<{ url: string; redirect: RequestRedirect | undefined }> = [];
+  const requests: Array<{ url: string; redirect: RequestRedirect | undefined; signal: AbortSignal | null | undefined }> = [];
   globalThis.fetch = (async (input, init) => {
-    requests.push({ url: String(input), redirect: init?.redirect });
+    requests.push({ url: String(input), redirect: init?.redirect, signal: init?.signal });
     const url = new URL(String(input));
     if (url.pathname.includes("system/status")) return new Response(JSON.stringify({ version: "4" }), { status: 200 });
     return new Response(JSON.stringify({ response: { result: "success", data: { tautulli_version: "2" } } }), { status: 200 });
@@ -49,6 +49,7 @@ test("Sonarr and Tautulli reject unsafe URLs and disable redirect following for 
     await new SonarrIntegration({ baseUrl: "https://sonarr.example", apiKey: "secret" }, logger).testConnection();
     await new TautulliIntegration({ enabled: true, baseUrl: "https://tautulli.example", apiKey: "secret" }, logger).testConnection();
     assert.deepEqual(requests.map((request) => request.redirect), ["error", "error"]);
+    assert.ok(requests.every((request) => request.signal instanceof AbortSignal));
   } finally {
     globalThis.fetch = originalFetch;
   }

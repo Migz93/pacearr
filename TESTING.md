@@ -156,7 +156,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | Session IDs are hashed before persistence and cannot be used as stored | A database read contains only the SHA-256 session-token hash, not a replayable bearer token |
-| Sonarr and Tautulli reject unsafe URLs and disable redirect following for credentialed requests | Non-HTTP(S) and embedded-credential URLs are refused, while API-key requests use `redirect: "error"` so they cannot follow a credential-leaking redirect |
+| Sonarr and Tautulli reject unsafe URLs and bound credentialed requests | Non-HTTP(S) and embedded-credential URLs are refused; API-key requests use `redirect: "error"` and an abort signal so they cannot follow a credential-leaking redirect or hang indefinitely |
 
 ---
 

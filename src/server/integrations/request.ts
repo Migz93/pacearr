@@ -21,5 +21,10 @@ export function buildIntegrationUrl(baseUrl: string, pathname: string): URL {
  * integration from forwarding that credential to a different origin.
  */
 export function fetchIntegration(url: URL, options: RequestInit = {}): Promise<Response> {
-  return fetch(url, { ...options, redirect: "error" });
+  const timeout = AbortSignal.timeout(15_000);
+  return fetch(url, {
+    ...options,
+    signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+    redirect: "error",
+  });
 }

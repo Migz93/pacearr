@@ -454,6 +454,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     const previousSettings = db.getAppSettings();
     const appSettings = db.updateAppSettings(patch);
+    if (patch.trustProxy !== undefined) app.set("trust proxy", appSettings.trustProxy ? 1 : false);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
     scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
