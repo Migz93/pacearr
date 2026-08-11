@@ -153,7 +153,7 @@ puts it in a filter. An unmapped action still appears under "All types".
 |---|---|
 | Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch` |
 | Cleanup | `cleanup.progressive`, `cleanup.prefetch`, `show.reset` |
-| Shows | `show.enrolled`, `show.unenrolled`, `show.auto_triaged`, `recommendation.ignored` |
+| Shows | `show.enrolled`, `show.unenrolled`, `show.auto_triaged`, `show.auto_triage`, `recommendation.ignored` |
 | Sync | `history.import`, `history.full_reconcile`, `sessions.check`, `rolling.reconcile`, `watch_events.reconciled` (no longer written, kept mapped so existing rows stay visible) |
 
 A `dry_run.` prefix is not a separate action for filtering purposes: it shares

@@ -363,6 +363,7 @@ export class PacearrServices {
       this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
     }
 
+    const errors: string[] = [];
     for (const item of candidates) {
       const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
       const decision = episodeCount > settings.newShowTriageEpisodeThreshold ? "enroll" : "search";
@@ -378,14 +379,24 @@ export class PacearrServices {
         continue;
       }
 
-      if (decision === "enroll") {
-        await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
-      } else {
-        await this.getSonarr().searchSeries(item.id);
+      try {
+        if (decision === "enroll") {
+          await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+        } else {
+          await this.getSonarr().searchSeries(item.id);
+        }
+        this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
+        this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+        this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${item.title}: ${message}`);
+        this.logger.error("New Sonarr series triage failed", { seriesId: item.id, title: item.title, decision, error: message });
       }
-      this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
-      this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
-      this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+    }
+    if (errors.length > 0) {
+      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors });
+      this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
     }
   }
 

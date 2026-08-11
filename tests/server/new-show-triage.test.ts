@@ -27,7 +27,7 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }> }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number> }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -37,7 +37,11 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
     const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
     if (byId) return jsonResponse(state.series.find((item) => item.id === Number(byId[1])) ?? {});
     if (url.pathname === "/api/v3/episode") return jsonResponse([] satisfies SonarrEpisode[]);
-    if (url.pathname === "/api/v3/command") return jsonResponse({});
+    if (url.pathname === "/api/v3/command") {
+      const command = typeof init?.body === "string" ? JSON.parse(init.body) as { seriesId?: number } : {};
+      if (command.seriesId && state.failingSearchSeriesIds?.has(command.seriesId)) return new Response("temporary Sonarr error", { status: 503 });
+      return jsonResponse({});
+    }
     throw new Error(`Unhandled fetch in test: ${url.toString()}`);
   }) as typeof fetch;
   return () => { globalThis.fetch = originalFetch; };
@@ -129,6 +133,28 @@ test("new-show triage uses a first-poll ID baseline when Sonarr omits added", as
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
     assert.equal(db.hasKnownNewShowTriage(6), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a failed new-show triage does not block later arrivals", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const restoreFetch = installSonarrFetchStub({
+    requests,
+    failingSearchSeriesIds: new Set([7]),
+    series: [series(7, "Temporarily failing", 1, "2026-08-11T12:00:01.000Z"), series(8, "Still triaged", 1, "2026-08-11T12:00:02.000Z")],
+  });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.equal(db.hasKnownNewShowTriage(7), false);
+    assert.equal(db.hasKnownNewShowTriage(8), true);
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 2);
+    assert.equal(db.listHistory().some((event) => event.action === "show.auto_triage" && event.level === "warn"), true);
   } finally {
     restoreFetch();
     cleanup();
