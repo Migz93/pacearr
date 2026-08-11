@@ -331,6 +331,64 @@ export class PacearrServices {
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
   }
 
+  async triageNewSonarrSeries(): Promise<void> {
+    const settings = this.db.getAppSettings();
+    if (!settings.newShowTriageEnabled) return;
+
+    const enabledAtMs = settings.newShowTriageEnabledAt ? Date.parse(settings.newShowTriageEnabledAt) : Number.NaN;
+    if (!Number.isFinite(enabledAtMs)) {
+      // This can only happen if an administrator manually edited the stored setting.
+      // Skipping is safer than accidentally applying a baseline to an older library.
+      this.logger.warn("Skipped new-show triage because its activation time is missing or invalid");
+      return;
+    }
+
+    const series = await this.getSonarr().getSeries();
+    const fallbackBaselineExists = Boolean(this.db.getNewShowTriageFallbackBaselineAt());
+    const candidates = series.filter((item) => {
+      const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
+      if (Number.isFinite(addedAtMs)) return addedAtMs >= enabledAtMs && !this.db.hasKnownNewShowTriage(item.id);
+      // An older/non-standard Sonarr response that omits `added` cannot establish
+      // whether an existing series predates the setting. Baseline that first response
+      // instead; only IDs absent from a later poll count as new.
+      return fallbackBaselineExists && !this.db.hasKnownNewShowTriage(item.id);
+    });
+
+    if (!fallbackBaselineExists) {
+      for (const item of series) {
+        if (!item.added || !Number.isFinite(Date.parse(item.added))) {
+          this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: null, decision: "baseline" });
+        }
+      }
+      this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
+    }
+
+    for (const item of candidates) {
+      const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
+      const decision = episodeCount > settings.newShowTriageEpisodeThreshold ? "enroll" : "search";
+      if (settings.dryRun) {
+        this.logger.info("Dry run: would triage new Sonarr series", {
+          seriesId: item.id,
+          title: item.title,
+          addedAt: item.added ?? null,
+          episodeCount,
+          threshold: settings.newShowTriageEpisodeThreshold,
+          decision,
+        });
+        continue;
+      }
+
+      if (decision === "enroll") {
+        await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+      } else {
+        await this.getSonarr().searchSeries(item.id);
+      }
+      this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
+      this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+      this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+    }
+  }
+
   private buildCachedShowListItem(
     series: SonarrSeries,
     rolling: ReturnType<PacearrDatabase["getRollingShowBySeriesId"]>,

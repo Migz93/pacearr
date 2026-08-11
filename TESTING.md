@@ -151,6 +151,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
 
+### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
+
+| Test | What it checks |
+|---|---|
+| Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
+| A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
+| Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
+| A missing Sonarr `added` field uses a first-poll ID baseline | The fallback never acts on pre-existing series, but detects a newly appearing ID on a later poll |
+
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
 
 | Test | What it checks |

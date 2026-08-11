@@ -274,6 +274,22 @@ const migrations: Migration[] = [
       for (const { id } of sessions) update.run(crypto.createHash("sha256").update(id).digest("hex"), id);
     },
   },
+  {
+    // Keep completed automatic decisions separate from the replaceable Sonarr library
+    // cache, so a restart never repeats a search or baseline for the same arrival.
+    version: 15,
+    up(db) {
+      db.exec(`
+        CREATE TABLE new_show_triage (
+          sonarr_series_id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          added_at TEXT,
+          decision TEXT NOT NULL CHECK(decision IN ('baseline', 'enroll', 'search')),
+          completed_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

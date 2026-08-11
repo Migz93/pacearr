@@ -106,6 +106,7 @@ The Sonarr settings are:
 | Update episode monitoring | `PUT /api/v3/episode/monitor` |
 | Search pilots | `POST /api/v3/command` with `EpisodeSearch` |
 | Search full season | `POST /api/v3/command` with `SeasonSearch` |
+| Search full series | `POST /api/v3/command` with `SeriesSearch` |
 | Delete episode file | `DELETE /api/v3/episodefile/{id}` |
 
 ### Show Review Data
@@ -113,6 +114,15 @@ The Sonarr settings are:
 The Shows UI reads Sonarr series, season, episode, and poster metadata through the backend. Posters are downloaded by the server and served from the local image cache under `/images`, so browsers do not need direct Sonarr access. Pacearr prefers Sonarr's poster `remoteUrl` because local `/MediaCover` URLs can return the Sonarr web app HTML on deployments that protect media routes behind UI auth; the local URL remains a fallback when no remote URL is available.
 
 The show detail view combines Sonarr's current library state with Pacearr's normalised `watch_events` table. This lets reviewers see which seasons and episodes have imported viewer activity before deciding whether a show is a good fit for rolling episode enrollment.
+
+### Automatic new-show triage
+
+When enabled, Pacearr polls Sonarr every five minutes. It ignores series that
+were already present when the setting was enabled, then searches smaller new
+series in full and enrolls series over the configured total-episode limit onto
+the pilot baseline. Completed decisions are persisted so a restart does not
+repeat them. To minimise downloads that Pacearr subsequently purges, disable
+**Search on Add** in any source that adds series to Sonarr.
 
 ### Non-Goals
 

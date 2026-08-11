@@ -106,9 +106,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   );
 }
 
-type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount"> & {
+type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount" | "newShowTriageEpisodeThreshold"> & {
   earlyPrefetchTriggerEpisodesRemaining: string;
   earlyPrefetchEpisodeCount: string;
+  newShowTriageEpisodeThreshold: string;
 };
 
 function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
@@ -116,6 +117,7 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
     ...app,
     earlyPrefetchTriggerEpisodesRemaining: String(app.earlyPrefetchTriggerEpisodesRemaining),
     earlyPrefetchEpisodeCount: String(app.earlyPrefetchEpisodeCount),
+    newShowTriageEpisodeThreshold: String(app.newShowTriageEpisodeThreshold),
   };
 }
 
@@ -134,8 +136,9 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
     try {
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
-      if (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1) {
-        setError("Early prefetch values must be positive whole numbers.");
+      const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
+      if (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1 || !Number.isInteger(triageThreshold) || triageThreshold < 1) {
+        setError("Early prefetch and new-show triage values must be positive whole numbers.");
         return;
       }
       // The server clamps every one of these to a safe value regardless (see
@@ -173,6 +176,8 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
         earlyPrefetchTriggerEpisodesRemaining: trigger,
         earlyPrefetchEpisodeCount: count,
+        newShowTriageEnabled: form.newShowTriageEnabled,
+        newShowTriageEpisodeThreshold: triageThreshold,
       });
       setSuccess(true);
       await onSave();
@@ -240,6 +245,23 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
               onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
             />
           </>
+        )}
+        <ToggleField
+          label="Auto-triage new Sonarr shows"
+          hint="Automatically pace shows with more than the episode limit. Recommended: disable Search on Add in sources that add to Sonarr, so files are not downloaded only to be purged."
+          checked={form.newShowTriageEnabled}
+          onChange={(value) => setForm({ ...form, newShowTriageEnabled: value })}
+        />
+        {form.newShowTriageEnabled && (
+          <NumberField
+            id="new-show-triage-episode-threshold"
+            label="Episode limit"
+            hint="Shows with more episodes than this are enrolled into Pacearr; smaller shows are searched in full."
+            unit="episodes"
+            min={1}
+            value={form.newShowTriageEpisodeThreshold}
+            onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
+          />
         )}
       </SectionCard>
 

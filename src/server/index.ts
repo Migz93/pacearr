@@ -73,6 +73,11 @@ scheduler.registerRecurringJob({
   intervalMs: settings.recommendationRefreshIntervalHours * 60 * 60 * 1000,
   task: requiresSetup(() => services.refreshRecommendations()),
 });
+scheduler.registerRecurringJob({
+  id: "new-show-triage",
+  intervalMs: 5 * 60 * 1000,
+  task: requiresSetup(() => services.triageNewSonarrSeries()),
+});
 if (isReady() && (!db.getSonarrLibraryCache() || !db.getRecommendationCache())) {
   logger.info("Sonarr library or recommendation cache is empty; scheduling initial refresh");
   scheduler.runNow(db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh");

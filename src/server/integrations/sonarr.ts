@@ -141,6 +141,14 @@ export class SonarrIntegration {
     });
   }
 
+  async searchSeries(seriesId: number) {
+    if (this.skipMutation("search-series", { seriesId })) return;
+    await this.request("command", {
+      method: "POST",
+      body: JSON.stringify({ name: "SeriesSearch", seriesId }),
+    });
+  }
+
   async deleteEpisodeFiles(episodeFileIds: number[]) {
     if (this.skipMutation("delete-episode-files", { episodeFileIds })) return;
     for (const id of episodeFileIds) {

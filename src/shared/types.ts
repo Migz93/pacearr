@@ -96,6 +96,10 @@ export interface AppSettings {
   earlyPrefetchEnabled: boolean;
   earlyPrefetchTriggerEpisodesRemaining: number;
   earlyPrefetchEpisodeCount: number;
+  newShowTriageEnabled: boolean;
+  newShowTriageEpisodeThreshold: number;
+  /** Internal activation boundary; series already in Sonarr before this instant are ignored. */
+  newShowTriageEnabledAt: string | null;
 }
 
 export interface PlexArtworkRecord {
@@ -178,6 +182,7 @@ export interface SonarrSeries {
   imdbId?: string | null;
   year?: number;
   status?: string;
+  added?: string;
   monitored?: boolean;
   monitorNewItems?: "all" | "none";
   images?: Array<{
