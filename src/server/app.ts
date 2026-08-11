@@ -357,7 +357,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.saveSonarrSettings(settings);
     logger.info("Sonarr settings saved", { baseUrl: settings.baseUrl });
-    scheduler?.runNow("sonarr-library-refresh");
+    // An active refresh may still be using the old connection; retain one follow-up so
+    // the saved credentials always produce a current library snapshot.
+    scheduler?.runNowOrQueue("sonarr-library-refresh");
     res.json({ ok: true, sonarr: db.getSonarrSettingsView() });
   }));
 
