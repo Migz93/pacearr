@@ -335,7 +335,8 @@ export class PacearrServices {
     const settings = this.db.getAppSettings();
     if (!settings.newShowTriageEnabled) return;
 
-    const enabledAtMs = settings.newShowTriageEnabledAt ? Date.parse(settings.newShowTriageEnabledAt) : Number.NaN;
+    const activationAt = settings.newShowTriageEnabledAt;
+    const enabledAtMs = activationAt ? Date.parse(activationAt) : Number.NaN;
     if (!Number.isFinite(enabledAtMs)) {
       // This can only happen if an administrator manually edited the stored setting.
       // Skipping is safer than accidentally applying a baseline to an older library.
@@ -344,6 +345,10 @@ export class PacearrServices {
     }
 
     const series = await this.getSonarr().getSeries();
+    if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+      this.logger.info("Stopped new Sonarr show triage after its activation changed");
+      return;
+    }
     const fallbackBaselineExists = Boolean(this.db.getNewShowTriageFallbackBaselineAt());
     const candidates = series.filter((item) => {
       const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
@@ -354,7 +359,7 @@ export class PacearrServices {
       return fallbackBaselineExists && !this.db.hasKnownNewShowTriage(item.id);
     });
 
-    if (!fallbackBaselineExists) {
+    if (!fallbackBaselineExists && !settings.dryRun) {
       for (const item of series) {
         const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
         if (!Number.isFinite(addedAtMs) || addedAtMs < enabledAtMs) {
@@ -378,6 +383,10 @@ export class PacearrServices {
           decision,
         });
         continue;
+      }
+      if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+        this.logger.info("Stopped new Sonarr show triage after its activation changed");
+        break;
       }
 
       try {
@@ -404,6 +413,11 @@ export class PacearrServices {
       this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors });
       this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
     }
+  }
+
+  private isCurrentNewShowTriageActivation(activationAt: string | null): boolean {
+    const settings = this.db.getAppSettings();
+    return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
   }
 
   private buildCachedShowListItem(

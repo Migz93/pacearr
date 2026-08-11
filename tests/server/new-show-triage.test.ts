@@ -27,13 +27,16 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesUpdateIds?: Set<number> }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
     state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url.pathname === "/api/v3/series") return jsonResponse(state.series);
+    if (url.pathname === "/api/v3/series") {
+      state.onSeriesFetch?.();
+      return jsonResponse(state.series);
+    }
     const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
     if (byId) {
       const seriesId = Number(byId[1]);
@@ -125,6 +128,52 @@ test("dry-run triage remains pending for live mode and a completed decision is n
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
     assert.equal(db.hasKnownNewShowTriage(4), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("dry-run does not persist a fallback baseline that could suppress a later live arrival", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state = { requests, series: [series(11, "New without added", 1)] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", true);
+    await services.triageNewSonarrSeries();
+    assert.equal(db.hasKnownNewShowTriage(11), false);
+    assert.equal(db.getNewShowTriageFallbackBaselineAt(), null);
+
+    state.series = [series(11, "New without added", 1, "2026-08-11T12:00:01.000Z")];
+    db.updateAppSettings({ dryRun: false });
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
+    assert.equal(db.hasKnownNewShowTriage(11), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("an activation that changes during a Sonarr poll does not triage using the old boundary", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const initialActivation = "2026-08-11T12:00:00.000Z";
+  const state = {
+    requests,
+    series: [series(12, "Stale activation", 1, "2026-08-11T12:00:01.000Z")],
+    onSeriesFetch: () => db.updateAppSettings({ newShowTriageEnabledAt: "2026-08-11T12:05:00.000Z" }),
+  };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, initialActivation);
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
+    assert.equal(db.hasKnownNewShowTriage(12), false);
+    assert.equal(db.getNewShowTriageFallbackBaselineAt(), null);
   } finally {
     restoreFetch();
     cleanup();

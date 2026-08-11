@@ -120,8 +120,9 @@ The show detail view combines Sonarr's current library state with Pacearr's norm
 When enabled, Pacearr polls Sonarr every five minutes. It ignores series that
 were already present when the setting was enabled, then searches smaller new
 series in full and enrolls series over the configured total-episode limit onto
-the pilot baseline. Completed decisions are persisted so a restart does not
-repeat them. To minimise downloads that Pacearr subsequently purges, disable
+the pilot baseline. Successful live decisions are persisted so a restart does
+not repeat them; dry-run and failed arrivals remain pending for a later poll.
+To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
 
 ### Non-Goals

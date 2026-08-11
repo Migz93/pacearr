@@ -158,6 +158,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
 | A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
 | Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
+| Dry-run does not persist a fallback baseline | An undated dry-run response cannot suppress that series if Sonarr later supplies a post-activation `added` time in live mode |
+| A changed activation stops an in-flight poll | A poll that started before triage was re-enabled cannot apply its old activation boundary |
 | A missing Sonarr `added` field uses a first-poll ID baseline | The fallback never acts on pre-existing series, but detects a newly appearing ID on a later poll |
 | A pre-existing series remains ignored if its `added` field disappears | An ID recorded from the initial timestamped response cannot become a fallback candidate later |
 | A failing series does not block later arrivals | Per-series failures remain pending and visible in History while later new series continue through triage |

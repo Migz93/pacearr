@@ -487,7 +487,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (!previousSettings.newShowTriageEnabled && appSettings.newShowTriageEnabled) {
       db.setNewShowTriageFallbackBaselineAt(null);
       logger.info("New Sonarr show triage enabled; existing Sonarr series will be ignored", { enabledAt: appSettings.newShowTriageEnabledAt });
-      scheduler?.runNow("new-show-triage");
+      // Do not drop a new activation if the preceding activation is still
+      // unwinding. The queued run uses the new activation boundary.
+      scheduler?.runNowOrQueue("new-show-triage");
     }
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
