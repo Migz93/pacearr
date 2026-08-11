@@ -32,6 +32,14 @@ test("currentLogFilePath points at the machine-readable transport's fixed symlin
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
   const logger = new Logger(dataDir);
   try {
+    // DailyRotateFile opens both output streams asynchronously. Make each one perform
+    // its first write before teardown, otherwise a fresh logger with no writes can leave
+    // an open attempt queued after rmSync removes this test's temporary directory.
+    logger.info("Logger path initialization");
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
     assert.equal(logger.currentLogFilePath, path.join(dataDir, "logs", ".machinelogs.json"));
   } finally {
     await logger.close();
@@ -106,10 +114,7 @@ test("readRecentLogEntries combines today's log file with the in-memory ring", a
     const messages = readRecentLogEntries(logger).map((item) => item.message);
     assert.deepEqual(messages.sort(), ["File-only entry", "Ring-only entry"]);
   } finally {
-    // Confirmed in CI (not reproducible on a fast local disk): winston's file transports
-    // hadn't finished their first async write yet when rmSync tore down dataDir, and the
-    // delayed write's ENOENT surfaced as an uncaught exception after the test had already
-    // ended. Can't wait on logger.currentLogFilePath itself here - this test already wrote
+    // Can't wait on logger.currentLogFilePath itself here - this test already wrote
     // a plain file at that path above, and file-stream-rotator only (re)creates the
     // symlink when lstat on that path throws ENOENT or finds an existing symlink, so it
     // silently leaves our pre-existing plain file alone forever. The human-readable

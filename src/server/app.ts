@@ -548,7 +548,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const configuredValue = schedule.setting === "sessionPollIntervalMinutes" ? intervalMinutes
       : schedule.setting === "fullHistoryReconcileIntervalDays" ? Math.max(1, Math.floor(intervalMinutes / (24 * 60)))
         : Math.max(1, Math.floor(intervalMinutes / 60));
-    const appSettings = db.updateAppSettings({ [schedule.setting]: configuredValue } as Partial<AppSettings>);
+    db.updateAppSettings({ [schedule.setting]: configuredValue } as Partial<AppSettings>);
     scheduler?.updateJob(jobId, { intervalMs: schedule.intervalMs(configuredValue) });
     res.json({ updated: true });
   });
