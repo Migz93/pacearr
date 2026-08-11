@@ -73,7 +73,7 @@ test("new-show triage ignores existing series and searches a new series at the 8
 
     const commands = requests.filter((request) => request.pathname === "/api/v3/command");
     assert.deepEqual(commands.map((request) => JSON.parse(request.body ?? "{}")), [{ name: "SeriesSearch", seriesId: 2 }]);
-    assert.equal(db.hasKnownNewShowTriage(1), false);
+    assert.equal(db.hasKnownNewShowTriage(1), true);
     assert.equal(db.hasKnownNewShowTriage(2), true);
   } finally {
     restoreFetch();
@@ -137,6 +137,26 @@ test("new-show triage uses a first-poll ID baseline when Sonarr omits added", as
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
     assert.equal(db.hasKnownNewShowTriage(6), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a pre-existing series remains ignored when its added field disappears", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state = { requests, series: [series(10, "Existing", 1, "2026-08-11T11:59:59.000Z")] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    assert.equal(db.hasKnownNewShowTriage(10), true);
+
+    state.series = [series(10, "Existing", 1)];
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
   } finally {
     restoreFetch();
     cleanup();

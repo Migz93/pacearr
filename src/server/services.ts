@@ -356,8 +356,9 @@ export class PacearrServices {
 
     if (!fallbackBaselineExists) {
       for (const item of series) {
-        if (!item.added || !Number.isFinite(Date.parse(item.added))) {
-          this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: null, decision: "baseline" });
+        const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
+        if (!Number.isFinite(addedAtMs) || addedAtMs < enabledAtMs) {
+          this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "baseline" });
         }
       }
       this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
