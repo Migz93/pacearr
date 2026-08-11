@@ -404,8 +404,12 @@ export class PacearrServices {
               continue;
             }
           } else {
+            // beginEnrollment creates the rolling-show row synchronously after its
+            // series read. Mark only that established row as automatic before the
+            // subsequent Sonarr mutations can partially fail.
+            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
             this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-            await this.enrollShow(item.id, { applyBaseline: true, importHistory: false });
+            await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
             this.db.completeNewShowTriageEnrollment(item.id);
           }
         } else {

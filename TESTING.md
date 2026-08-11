@@ -164,6 +164,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A pre-existing series remains ignored if its `added` field disappears | An ID recorded from the initial timestamped response cannot become a fallback candidate later |
 | A failing series does not block later arrivals | Per-series failures remain pending and visible in History while later new series continue through triage |
 | A manual enrollment is not resumed by automatic triage | Only an explicitly pending automatic enrollment can receive the pilot baseline on a retry |
+| A failed automatic enrollment cannot mark a later manual enrollment pending | A failure before Pacearr creates its rolling-show row leaves no marker for a later manual enrollment to inherit |
 | A full-series search waits for another series operation | Triage retries instead of overlapping a concurrent enrollment or rolling mutation |
 | Retrying a partial large-show enrollment resumes it | A retry reuses the persisted rolling-show row without writing a second enrollment history entry |
 

@@ -292,8 +292,9 @@ const migrations: Migration[] = [
   },
   {
     // An automatic enrollment can fail after creating its rolling-show row. Persist
-    // that it was Pacearr-initiated so retries never mistake a manual enrollment for
-    // incomplete automatic work and apply the pilot baseline to it.
+    // that its subsequent mutation phase was Pacearr-initiated so retries never
+    // mistake a manual enrollment for incomplete automatic work and apply the pilot
+    // baseline to it.
     version: 16,
     up(db) {
       db.exec(`

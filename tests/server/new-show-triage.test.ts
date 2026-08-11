@@ -27,7 +27,7 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -40,6 +40,7 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
     const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
     if (byId) {
       const seriesId = Number(byId[1]);
+      if (method === "GET" && state.failingSeriesReadIds?.has(seriesId)) return new Response("temporary Sonarr error", { status: 503 });
       if (method === "PUT" && state.failingSeriesUpdateIds?.has(seriesId)) return new Response("temporary Sonarr error", { status: 503 });
       const current = state.series.find((item) => item.id === seriesId);
       if (method === "PUT" && current) {
@@ -257,6 +258,30 @@ test("new-show triage leaves a manual enrollment alone", async () => {
     assert.equal(requests.some((request) => request.method === "PUT" || request.pathname === "/api/v3/command"), false);
     assert.equal(db.hasKnownNewShowTriage(13), true);
     assert.equal(db.hasPendingNewShowTriageEnrollment(13), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a failed automatic enrollment cannot mark a later manual enrollment as pending", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const automaticAttempt = series(15, "Failed then manual", 81, "2026-08-11T12:00:01.000Z");
+  const state = { requests, series: [automaticAttempt], failingSeriesReadIds: new Set([15]) };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    assert.equal(db.getRollingShowBySeriesId(15), null);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(15), false);
+
+    state.failingSeriesReadIds.clear();
+    db.upsertRollingShow(automaticAttempt);
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.some((request) => request.method === "PUT"), false);
+    assert.equal(db.hasKnownNewShowTriage(15), true);
   } finally {
     restoreFetch();
     cleanup();
