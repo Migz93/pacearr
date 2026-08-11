@@ -513,7 +513,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   });
 
   app.post("/api/settings/jobs/:id/run", requireAuth, (req, res) => {
-    res.json({ triggered: scheduler?.runNow(String(req.params.id)) ?? false });
+    const jobId = String(req.params.id);
+    // A manual recommendation calculation needs a library snapshot. Starting the
+    // prerequisite job also triggers the calculation when it completes, so the UI never
+    // reports a successful no-op on a cold cache.
+    const targetId = jobId === "recommendation-refresh" && !db.getSonarrLibraryCache()
+      ? "sonarr-library-refresh"
+      : jobId;
+    res.json({ triggered: scheduler?.runNow(targetId) ?? false });
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {

@@ -205,6 +205,15 @@ export class PacearrDatabase {
   private seedDefaults() {
     this.getSessionSecret();
     if (!this.getSetting("app")) this.setSetting("app", DEFAULT_APP_SETTINGS);
+    // The former combined recommendation-refresh job also refreshed the library. Carry
+    // its last known state forward so an upgrade does not briefly present the new library
+    // job as never having run when its cache is already populated.
+    this.db.prepare(`
+      INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)
+      SELECT 'sonarr-library-refresh', last_run_at, last_run_status, updated_at
+      FROM job_run_state
+      WHERE job_id = 'recommendation-refresh'
+    `).run();
     for (const id of ["session-check", "history-import", "full-history-reconcile", "rolling-reconcile", "sonarr-library-refresh", "recommendation-refresh"]) {
       this.db.prepare(`
         INSERT OR IGNORE INTO job_run_state (job_id, last_run_at, last_run_status, updated_at)

@@ -58,8 +58,10 @@ the setting and reschedules the job. The session interval is the polling
 fallback, not the primary playback trigger. `sonarr-library-refresh` is the
 dedicated cache-refresh job; history import and session processing reuse that
 snapshot, with a direct Sonarr fallback only before the first cache exists.
-`recommendation-refresh` computes from the cache, so history imports can
-refresh recommendation results without repeating the library fetch.
+`recommendation-refresh` computes from the cache. Its recurring interval is
+independent: history and recurring library refreshes do not trigger it. A
+manual library refresh (including a manual recommendation run on a cold cache)
+calculates recommendations after the library cache is ready.
 
 ## Watch Events
 

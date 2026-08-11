@@ -484,24 +484,17 @@ export class PacearrServices {
     };
   }
 
-  async refreshRecommendations(options: { cacheOnly?: boolean } = {}): Promise<void> {
+  async refreshRecommendations(): Promise<void> {
     this.logger.info("Recommendation refresh started");
-    const sonarr = this.getSonarr();
     const appSettings = this.db.getAppSettings();
     const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
 
     const libraryCache = this.db.getSonarrLibraryCache();
     if (!libraryCache) {
-      if (options.cacheOnly) {
-        // The scheduled calculation never owns a whole-library fetch: that is the
-        // library job's responsibility, avoiding duplicate Sonarr requests.
-        this.logger.warn("Skipped recommendation refresh; Sonarr library cache is empty");
-        return;
-      }
-      const allSeries = await sonarr.getSeries();
-      return this.refreshRecommendationsFromSeries(allSeries, sonarr, appSettings, cutoff);
+      this.logger.warn("Skipped recommendation refresh; Sonarr library cache is empty");
+      return;
     }
-    return this.refreshRecommendationsFromSeries(libraryCache.items.map((item) => item.series), sonarr, appSettings, cutoff);
+    return this.refreshRecommendationsFromSeries(libraryCache.items.map((item) => item.series), this.getSonarr(), appSettings, cutoff);
   }
 
   private async refreshRecommendationsFromSeries(
@@ -1338,10 +1331,10 @@ export class PacearrServices {
 
   async checkSessions(): Promise<RunResult> {
     this.logger.info("Plex session check started");
-    // Session checks run every few minutes; matching only needs a library snapshot that's
-    // roughly current, not one fetched fresh from Sonarr on every run. Reuse the cache the
-    // recommendation-refresh job already keeps warm (same fallback refreshRecommendations
-    // uses), and only hit Sonarr directly if that cache hasn't been populated yet.
+    // Session checks run every few minutes; matching only needs the library snapshot kept
+    // warm by sonarr-library-refresh, not a fresh Sonarr fetch on every run. A fresh
+    // install has no snapshot yet, so it falls back to one direct request until the
+    // dedicated refresh job has populated the cache.
     let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
     const plex = this.getPlex();
     const events = await plex.getActiveSessions();

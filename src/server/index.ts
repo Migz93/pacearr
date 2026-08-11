@@ -43,19 +43,13 @@ services.startPlexSessionMonitor(() => { scheduler.runNow("session-check"); });
 scheduler.registerRecurringJob({
   id: "history-import",
   intervalMs: settings.historyImportIntervalHours * 60 * 60 * 1000,
-  task: requiresSetup(async () => {
-    await services.importHistory();
-    scheduler.runNow("recommendation-refresh");
-  }),
+  task: requiresSetup(() => services.importHistory().then(() => undefined)),
 });
 scheduler.registerRecurringJob({
   id: "full-history-reconcile",
   // A full source read is intentionally infrequent; normal imports remain incremental.
   intervalMs: settings.fullHistoryReconcileIntervalDays * 24 * 60 * 60 * 1000,
-  task: requiresSetup(async () => {
-    await services.reconcileFullHistory();
-    scheduler.runNow("recommendation-refresh");
-  }),
+  task: requiresSetup(() => services.reconcileFullHistory().then(() => undefined)),
 });
 scheduler.registerRecurringJob({
   id: "rolling-reconcile",
@@ -65,17 +59,19 @@ scheduler.registerRecurringJob({
 scheduler.registerRecurringJob({
   id: "sonarr-library-refresh",
   intervalMs: settings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000,
-  task: requiresSetup(async () => {
+  task: requiresSetup(async ({ scheduled }) => {
     await services.refreshSonarrLibrary();
-    scheduler.runNow("recommendation-refresh");
+    // An administrator-triggered library refresh is also an explicit request for fresh
+    // recommendations. Recurring runs stay independent so each configured interval wins.
+    if (!scheduled) scheduler.runNow("recommendation-refresh");
   }),
 });
-// Recommendation calculation only reads the library cache. It can run after history
-// changes without fetching every Sonarr series again, while the library job owns that IO.
+// Recommendation calculation only reads the library cache; sonarr-library-refresh owns
+// the whole-library Sonarr request, and each recurring cadence remains independent.
 scheduler.registerRecurringJob({
   id: "recommendation-refresh",
   intervalMs: settings.recommendationRefreshIntervalHours * 60 * 60 * 1000,
-  task: requiresSetup(() => services.refreshRecommendations({ cacheOnly: true })),
+  task: requiresSetup(() => services.refreshRecommendations()),
 });
 if (isReady() && (!db.getSonarrLibraryCache() || !db.getRecommendationCache())) {
   logger.info("Sonarr library or recommendation cache is empty; scheduling initial refresh");
