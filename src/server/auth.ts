@@ -9,11 +9,12 @@ export function signedValue(secret: string, value: string) {
 }
 
 export function isValidSignature(secret: string, value: string, signature: string) {
-  const expected = signedValue(secret, value);
+  const expected = Buffer.from(signedValue(secret, value));
+  const provided = Buffer.from(signature);
   // timingSafeEqual requires equal-length inputs. HMAC-SHA256 hex output has a fixed
   // length, so rejecting anything else before the comparison is both safe and avoids
   // turning malformed cookie input into an exception.
-  return signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  return provided.length === expected.length && crypto.timingSafeEqual(expected, provided);
 }
 
 export function hashSessionId(sessionId: string) {

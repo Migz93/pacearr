@@ -156,7 +156,10 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | Session IDs are hashed before persistence and cannot be used as stored | A database read contains only the SHA-256 session-token hash, not a replayable bearer token |
+| Existing plaintext session IDs are migrated without invalidating their cookie tokens | A version-13 database upgrades its session row to a hash while the original cookie token still resolves its owner |
+| Session signature validation rejects malformed non-ASCII input safely | A visually 64-character but UTF-8-long signature returns false instead of reaching `timingSafeEqual` with mismatched byte lengths |
 | Sonarr and Tautulli reject unsafe URLs and bound credentialed requests | Non-HTTP(S) and embedded-credential URLs are refused; API-key requests use `redirect: "error"` and an abort signal so they cannot follow a credential-leaking redirect or hang indefinitely |
+| Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
 
 ---
 

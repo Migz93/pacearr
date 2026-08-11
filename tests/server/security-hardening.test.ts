@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import test from "node:test";
-import { hashSessionId } from "../../src/server/auth.js";
+import { hashSessionId, isValidSignature } from "../../src/server/auth.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 import { PacearrDatabase } from "../../src/server/db/index.js";
+import { buildIntegrationUrl } from "../../src/server/integrations/request.js";
 import { SonarrIntegration } from "../../src/server/integrations/sonarr.js";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
@@ -27,6 +28,35 @@ test("session IDs are hashed before persistence and cannot be used as stored", (
     raw.close();
     assert.equal(stored.id, hashSessionId(sessionId));
     assert.notEqual(stored.id, sessionId);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("session signature validation rejects a same-character-length non-ASCII value without throwing", () => {
+  assert.doesNotThrow(() => isValidSignature("secret", "session-id", "é".repeat(64)));
+  assert.equal(isValidSignature("secret", "session-id", "é".repeat(64)), false);
+});
+
+test("migration 14 hashes an existing session while preserving its usable cookie token", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-security-migration-test-"));
+  const config: RuntimeConfig = { port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1_000, logLevel: "error" };
+  const sessionId = "existing-plaintext-session";
+  try {
+    new PacearrDatabase(config);
+    const raw = new Database(path.join(dir, "pacearr.db"));
+    const stamp = new Date().toISOString();
+    raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run("plexOwner", JSON.stringify({ plexId: "plex-owner", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "token" }), stamp);
+    raw.prepare("INSERT INTO sessions (id, plex_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run(sessionId, "plex-owner", new Date(Date.now() + 60_000).toISOString(), stamp);
+    raw.pragma("user_version = 13");
+    raw.close();
+
+    const upgraded = new PacearrDatabase(config);
+    const migrated = new Database(path.join(dir, "pacearr.db"));
+    const stored = migrated.prepare("SELECT id FROM sessions").get() as { id: string };
+    migrated.close();
+    assert.equal(stored.id, hashSessionId(sessionId));
+    assert.equal(upgraded.getSession(sessionId)?.plexId, "plex-owner");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -53,4 +83,10 @@ test("Sonarr and Tautulli reject unsafe URLs and disable redirect following for 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("integration request paths cannot replace the configured origin", () => {
+  assert.throws(() => buildIntegrationUrl("https://sonarr.example/base", "https://attacker.example/api"), /must be relative/);
+  assert.throws(() => buildIntegrationUrl("https://sonarr.example/base", "file:///etc/passwd"), /must be relative/);
+  assert.throws(() => buildIntegrationUrl("https://sonarr.example/base", "//attacker.example/api"), /must be relative/);
 });

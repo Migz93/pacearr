@@ -13,7 +13,13 @@ export function buildIntegrationUrl(baseUrl: string, pathname: string): URL {
   if ((base.protocol !== "http:" && base.protocol !== "https:") || base.username || base.password || base.search || base.hash) {
     throw new Error("Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments.");
   }
-  return new URL(pathname.replace(/^\/+/, ""), base.href.endsWith("/") ? base : `${base}/`);
+  const trimmedPath = pathname.trim();
+  if (trimmedPath.startsWith("//")) throw new Error("Integration request path must be relative.");
+  const relativePath = trimmedPath.replace(/^\/+/, "");
+  if (/^[a-z][a-z\d+.-]*:/i.test(relativePath)) throw new Error("Integration request path must be relative.");
+  const url = new URL(relativePath, base.href.endsWith("/") ? base : `${base}/`);
+  if (url.origin !== base.origin) throw new Error("Integration request path must remain on the configured origin.");
+  return url;
 }
 
 /**
