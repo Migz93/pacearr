@@ -840,6 +840,7 @@ export class PacearrServices {
       if (artwork.length > 0) await this.plexArtwork.restoreAll(this.getPlex(), rollingShowId);
       const changed = await this.restoreSonarrMonitoring(show.sonarrSeriesId);
       this.db.deleteRollingShow(rollingShowId);
+      this.db.completeNewShowTriageEnrollment(show.sonarrSeriesId);
       this.plexArtwork.removeBackups(artwork);
       this.db.addHistory("info", "show.unenrolled", show.title, { rollingShowId });
       this.logger.info("Show unenrolled from Pacearr control", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, remonitored: changed, artworkRestored: artwork.length });

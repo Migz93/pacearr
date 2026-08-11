@@ -313,6 +313,35 @@ test("a pending-marker database error releases the automatic enrollment lock", a
   }
 });
 
+test("unenrolling a partial automatic enrollment clears its pending marker", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const automaticAttempt = series(17, "Partial then manual", 81, "2026-08-11T12:00:01.000Z");
+  const state = { requests, series: [automaticAttempt], failingSeriesUpdateIds: new Set([17]) };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    const partial = db.getRollingShowBySeriesId(17);
+    assert.ok(partial);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(17), true);
+
+    state.failingSeriesUpdateIds.clear();
+    await services.removeShow(partial.id);
+    assert.equal(db.hasPendingNewShowTriageEnrollment(17), false);
+
+    db.upsertRollingShow(automaticAttempt);
+    const mutationsBeforeTriage = requests.filter((request) => request.method === "PUT").length;
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.method === "PUT").length, mutationsBeforeTriage);
+    assert.equal(db.hasKnownNewShowTriage(17), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("new-show triage waits for another series operation before starting a full search", async () => {
   const { db, services, cleanup } = createHarness();
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
