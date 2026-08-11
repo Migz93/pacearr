@@ -98,9 +98,19 @@ Pacearr uses Sonarr v3 API endpoints to:
 - set episode monitored flags
 - trigger `EpisodeSearch`
 - trigger `SeasonSearch`
+- trigger `SeriesSearch` for eligible new arrivals
 - delete episode files during cleanup/reset when enabled
 
 Sonarr and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their API-key requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
+
+### Automatic new-show triage
+
+When enabled, the `new-show-triage` job polls Sonarr every five minutes and
+acts only on series added after its activation boundary. It searches smaller
+arrivals in full and enrolls larger arrivals onto the pilot baseline. Completed
+decisions and partial automatic enrollments are persisted independently of the
+replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
+never alter a manual enrollment.
 
 ### Frontend
 
@@ -119,6 +129,7 @@ It is designed as an operational admin surface rather than a public landing page
 - Dry-run mode defaults to enabled and blocks every Sonarr PUT, POST, and DELETE operation at the integration boundary.
 - Pacearr never adds a series to Sonarr.
 - Pacearr only manages shows explicitly enrolled in `rolling_shows`.
+- New-show triage is disabled by default and never changes series that predate its activation boundary.
 - Specials, season `0`, are ignored by rolling baseline and expansion logic.
 - All-season-pilot baseline keeps E01 of every real season monitored and searches those pilot episodes.
 - Expanded seasons are stored as a sorted unique season-number array.
