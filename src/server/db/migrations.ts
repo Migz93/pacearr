@@ -276,13 +276,14 @@ const migrations: Migration[] = [
   },
 ];
 
-export function runMigrations(db: Database.Database, logger?: Logger): void {
+export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
   let currentVersion = db.pragma("user_version", { simple: true }) as number;
   const latestVersion = migrations[migrations.length - 1]?.version ?? 0;
-  if (currentVersion >= latestVersion) return;
+  const finalVersion = Math.min(targetVersion ?? latestVersion, latestVersion);
+  if (currentVersion >= finalVersion) return;
 
   for (const migration of migrations) {
-    if (migration.version <= currentVersion) continue;
+    if (migration.version <= currentVersion || migration.version > finalVersion) continue;
     logger?.info("Applying database migration", { from: currentVersion, to: migration.version });
     db.transaction(() => {
       migration.up(db);

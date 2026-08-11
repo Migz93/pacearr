@@ -7,6 +7,7 @@ import test from "node:test";
 import { hashSessionId, isValidSignature } from "../../src/server/auth.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 import { PacearrDatabase } from "../../src/server/db/index.js";
+import { runMigrations } from "../../src/server/db/migrations.js";
 import { buildIntegrationUrl } from "../../src/server/integrations/request.js";
 import { SonarrIntegration } from "../../src/server/integrations/sonarr.js";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
@@ -43,12 +44,11 @@ test("migration 14 hashes an existing session while preserving its usable cookie
   const config: RuntimeConfig = { port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1_000, logLevel: "error" };
   const sessionId = "existing-plaintext-session";
   try {
-    new PacearrDatabase(config);
     const raw = new Database(path.join(dir, "pacearr.db"));
+    runMigrations(raw, undefined, 13);
     const stamp = new Date().toISOString();
     raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)").run("plexOwner", JSON.stringify({ plexId: "plex-owner", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "token" }), stamp);
     raw.prepare("INSERT INTO sessions (id, plex_id, expires_at, created_at) VALUES (?, ?, ?, ?)").run(sessionId, "plex-owner", new Date(Date.now() + 60_000).toISOString(), stamp);
-    raw.pragma("user_version = 13");
     raw.close();
 
     const upgraded = new PacearrDatabase(config);
