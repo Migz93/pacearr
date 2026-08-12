@@ -163,7 +163,7 @@ function HistoryRow({ event }: { event: HistoryEvent }) {
         <span className="grid min-w-0 gap-1">
           <span className="flex min-w-0 items-baseline gap-2.5">
             <strong className="overflow-hidden text-ellipsis whitespace-nowrap">{event.title}</strong>
-            <span className="shrink-0 text-[11px] font-extrabold uppercase text-primary">{historyActionLabel(event.action)}</span>
+            <span className="shrink-0 text-[11px] font-extrabold uppercase text-on-surface-variant">{historyActionLabel(event.action)}</span>
             {isDryRunAction(event.action) && <span className={`${badgeClass("warning")} shrink-0 self-center`}>Dry run</span>}
           </span>
           <span className="text-xs text-on-surface-variant">{compactDetails(details)}</span>

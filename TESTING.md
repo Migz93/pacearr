@@ -93,6 +93,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A previously orphaned Tautulli watch event can be repaired once its user resolves | Regression for #75 — `INSERT OR IGNORE` means a duplicate event is silently skipped forever unless something explicitly repairs its `user_id`; also locks in that repairing an already-assigned event is a no-op, not a re-attribution |
 | Mapping a Tautulli identity persists it and links that identity's orphaned history | The Users-page mapping stores Tautulli's stable user ID, makes it the preferred future match despite a renamed username, and assigns previously unmatched events so their progress is available again |
 | Mapping cannot replace a user's existing Tautulli identity | A second different stable ID is rejected without overwriting the existing user mapping |
+| Unmapped Tautulli users display the names from their newest event | The mapping UI does not pair the latest activity timestamp with lexicographically selected stale names after a Tautulli rename |
+| The cached Tautulli resolver preserves stable-ID and ambiguity safeguards | Full-history reconciliation uses its in-memory resolver without changing the stable-ID priority or the refusal to guess on ambiguous names |
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 
@@ -181,7 +183,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Session IDs are hashed before persistence and cannot be used as stored | A database read contains only the SHA-256 session-token hash, not a replayable bearer token |
 | Existing plaintext session IDs are migrated without invalidating their cookie tokens | A version-13 database upgrades its session row to a hash while the original cookie token still resolves its owner |
 | Session signature validation rejects malformed non-ASCII input safely | A visually 64-character but UTF-8-long signature returns false instead of reaching `timingSafeEqual` with mismatched byte lengths |
-| Sonarr and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; the test records that API-key requests pass `redirect: "error"` and an abort signal to `fetch` |
+| Plex, Sonarr, and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; the test records that credentialed integration requests pass `redirect: "error"` and an abort signal to `fetch` |
 | Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
 
 ---

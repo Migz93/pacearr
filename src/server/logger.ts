@@ -77,7 +77,10 @@ export class Logger {
         new winston.transports.Console({
           format: winston.format.combine(
             winston.format.colorize(),
-            winston.format.timestamp({ format: "HH:mm:ss" }),
+            winston.format((info) => {
+              info.timestamp = typeof info.timestamp === "string" ? info.timestamp.slice(11, 19) : info.timestamp;
+              return info;
+            })(),
             winston.format.errors({ stack: true }),
             humanFormat
           ),

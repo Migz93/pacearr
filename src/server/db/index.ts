@@ -63,6 +63,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   earlyPrefetchTriggerEpisodesRemaining: 3,
   earlyPrefetchEpisodeCount: 2,
   newShowTriageEnabled: false,
+  newShowTriageIntervalMinutes: 5,
   newShowTriageEpisodeThreshold: 80,
   newShowTriageEnabledAt: null,
 };
@@ -176,6 +177,22 @@ function userFromRow(row: any): UserRecord {
   };
 }
 
+function normaliseName(name?: string | null): string {
+  // SQLite's built-in lower() only folds ASCII unless an ICU extension is loaded. Keep
+  // the in-memory resolver byte-for-byte aligned with the SQL matching it replaces.
+  return name?.replace(/[A-Z]/g, (character) => character.toLowerCase()) ?? "";
+}
+
+function usersByNormalisedName(users: UserRecord[], getName: (user: UserRecord) => string | null | undefined): Map<string, UserRecord[]> {
+  const grouped = new Map<string, UserRecord[]>();
+  for (const user of users) {
+    const name = normaliseName(getName(user));
+    if (!name) continue;
+    grouped.set(name, [...(grouped.get(name) ?? []), user]);
+  }
+  return grouped;
+}
+
 function rollingShowFromRow(row: any): RollingShowRecord {
   return {
     id: row.id,
@@ -213,6 +230,10 @@ export class PacearrDatabase {
     this.logger = logger;
     runMigrations(this.db, logger);
     this.seedDefaults();
+  }
+
+  transaction<T>(work: () => T): T {
+    return this.db.transaction(work)();
   }
 
   private seedDefaults() {
@@ -355,6 +376,11 @@ export class PacearrDatabase {
 
   hasKnownNewShowTriage(seriesId: number): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage WHERE sonarr_series_id = ?").get(seriesId));
+  }
+
+  listKnownNewShowTriageIds(): Set<number> {
+    return new Set((this.db.prepare("SELECT sonarr_series_id FROM new_show_triage").all() as Array<{ sonarr_series_id: number }>)
+      .map((row) => row.sonarr_series_id));
   }
 
   recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search" }): void {
@@ -637,15 +663,49 @@ export class PacearrDatabase {
     return this.findUserByTautulliName(username, friendlyName);
   }
 
+  createTautulliUserResolver(): (tautulliUserId: string | null, username?: string | null, friendlyName?: string | null) => UserRecord | null {
+    const users = this.listUsers();
+    const byTautulliId = new Map(users.filter((user) => user.tautulliUserId).map((user) => [user.tautulliUserId!, user]));
+    const bySavedName = usersByNormalisedName(users, (user) => user.tautulliUsername);
+    const byUsername = usersByNormalisedName(users, (user) => user.username);
+    const byDisplayName = usersByNormalisedName(users, (user) => user.displayName);
+    const matchByName = (name?: string | null) => {
+      const usernameMatches = byUsername.get(normaliseName(name)) ?? [];
+      if (usernameMatches.length === 1) return { user: usernameMatches[0]!, usernameAmbiguous: false };
+      if (usernameMatches.length > 1) return { user: null, usernameAmbiguous: true };
+      const displayNameMatches = byDisplayName.get(normaliseName(name)) ?? [];
+      return { user: displayNameMatches.length === 1 ? displayNameMatches[0]! : null, usernameAmbiguous: false };
+    };
+    return (tautulliUserId, username, friendlyName) => {
+      if (tautulliUserId && byTautulliId.has(tautulliUserId)) return byTautulliId.get(tautulliUserId)!;
+      for (const name of [username, friendlyName]) {
+        if (!name) continue;
+        const savedNameMatches = bySavedName.get(normaliseName(name)) ?? [];
+        if (savedNameMatches.length === 1) return savedNameMatches[0]!;
+        if (savedNameMatches.length > 1) return null;
+      }
+      const byUsernameMatch = matchByName(username);
+      if (byUsernameMatch.user || byUsernameMatch.usernameAmbiguous) return byUsernameMatch.user;
+      return matchByName(friendlyName).user;
+    };
+  }
+
   listUnmappedTautulliUsers(): UnmappedTautulliUser[] {
     return this.db.prepare(`
-      SELECT CAST(json_extract(raw_payload, '$.user_id') AS TEXT) AS tautulliUserId,
-        max(username) AS username, max(json_extract(raw_payload, '$.user')) AS friendlyName,
-        count(*) AS eventCount, max(watched_at) AS lastWatchedAt
-      FROM watch_events
-      WHERE source = 'tautulli' AND user_id IS NULL
-        AND json_extract(raw_payload, '$.user_id') IS NOT NULL
-      GROUP BY CAST(json_extract(raw_payload, '$.user_id') AS TEXT)
+      WITH unmapped AS (
+        SELECT id, CAST(json_extract(raw_payload, '$.user_id') AS TEXT) AS tautulliUserId,
+          username, json_extract(raw_payload, '$.user') AS friendlyName, watched_at
+        FROM watch_events
+        WHERE source = 'tautulli' AND user_id IS NULL
+          AND json_extract(raw_payload, '$.user_id') IS NOT NULL
+      ), ranked AS (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY tautulliUserId ORDER BY watched_at DESC, id DESC) AS row_number,
+          count(*) OVER (PARTITION BY tautulliUserId) AS eventCount
+        FROM unmapped
+      )
+      SELECT tautulliUserId, username, friendlyName, eventCount, watched_at AS lastWatchedAt
+      FROM ranked
+      WHERE row_number = 1
       ORDER BY lastWatchedAt DESC
     `).all() as UnmappedTautulliUser[];
   }

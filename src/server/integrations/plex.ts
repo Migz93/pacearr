@@ -3,6 +3,7 @@ import { parseStringPromise } from "xml2js";
 import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
 import { PLEX_USER_AGENT } from "../version.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
 const PLEX_TV_RESOURCES_URL = "https://plex.tv/api/v2/resources";
@@ -70,8 +71,7 @@ function unixToIso(value: unknown) {
 }
 
 export function buildPlexServerUrl(serverUrl: string, pathname: string): URL {
-  const base = serverUrl.endsWith("/") ? serverUrl : `${serverUrl}/`;
-  return new URL(pathname.replace(/^\/+/, ""), base);
+  return buildIntegrationUrl(serverUrl, pathname);
 }
 
 function normalizeHistoryVideo(video: any): PlexEpisodeActivity | null {
@@ -126,7 +126,7 @@ export class PlexIntegration {
   private async requestServerXml(pathname: string) {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
-    const response = await fetch(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } });
+    const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } });
     if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
     return parseStringPromise(await response.text(), { explicitArray: false, mergeAttrs: false });
   }
@@ -134,7 +134,7 @@ export class PlexIntegration {
   private async requestServer(pathname: string, options: RequestInit = {}): Promise<Response> {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       ...options,
       headers: { "User-Agent": PLEX_USER_AGENT, ...(options.headers ?? {}) },
     });

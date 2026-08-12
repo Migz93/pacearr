@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
-import { Field, NumberField, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, Field, NumberField, primaryButtonClass, SaveBar, secondaryButtonClass, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -43,6 +43,7 @@ const JOB_PRESETS: Record<string, { unit: "minutes" | "hours" | "days"; values: 
   "rolling-reconcile": { unit: "hours", values: [60, 180, 360, 720, 1440] },
   "sonarr-library-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
   "recommendation-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "new-show-triage": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
 };
 
 export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) {
@@ -137,7 +138,8 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
-      if (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1 || !Number.isInteger(triageThreshold) || triageThreshold < 1) {
+      if ((form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1))
+        || (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1))) {
         setError("Early prefetch and new-show triage values must be positive whole numbers.");
         return;
       }
@@ -174,10 +176,9 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         recommendationMinimumSavingsGb: form.recommendationMinimumSavingsGb,
         trustProxy: form.trustProxy,
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
-        earlyPrefetchTriggerEpisodesRemaining: trigger,
-        earlyPrefetchEpisodeCount: count,
+        ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
         newShowTriageEnabled: form.newShowTriageEnabled,
-        newShowTriageEpisodeThreshold: triageThreshold,
+        ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold } : {}),
       });
       setSuccess(true);
       await onSave();
@@ -756,8 +757,8 @@ function JobsTab() {
               </SelectInput>
             </Field>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
+              <button type="button" className={secondaryButtonClass} disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
+              <button type="button" className={primaryButtonClass} disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>
         </div>
@@ -774,8 +775,8 @@ function JobsTab() {
                   <span>{job.nextRunAt ? formatFutureTime(job.nextRunAt) : job.nextRunLabel ?? "-"}</span>
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    {JOB_PRESETS[job.id] && <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
+                    {JOB_PRESETS[job.id] && <button type="button" className={compactSecondaryButtonClass} onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
+                    <button type="button" className={compactPrimaryButtonClass} disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
                   </div>
                 </div>
               );
@@ -843,14 +844,13 @@ function AboutTab() {
   }, []);
 
   const codeClass = "rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface";
-  const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
   const changelogDialogRef = useDialogA11y<HTMLDivElement>(changelogRelease !== null, () => setChangelogRelease(null));
 
   return (
     <div className="grid gap-4">
       <SectionCard title="About Pacearr">
         <div className="grid gap-2.5">
-          <InfoRow label="Version"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
+          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-primary hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
           <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
           {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
@@ -861,7 +861,7 @@ function AboutTab() {
       </SectionCard>
       <SectionCard title="Getting support">
         <div className="grid gap-2.5">
-          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
+          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-primary hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
           <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
@@ -875,12 +875,12 @@ function AboutTab() {
               <div className="grid min-w-0 gap-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-sm">{releaseTitle(release)}</strong>
-                  {index === 0 && <span className="shrink-0 rounded-full bg-success/18 px-1.75 py-0.5 text-[10px] font-bold uppercase text-success">Latest</span>}
-                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className="shrink-0 rounded-full bg-success/28 px-1.75 py-0.5 text-[10px] font-bold uppercase text-on-surface">Current</span>}
+                  {index === 0 && <span className={badgeClass("success")}>Latest</span>}
+                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className={badgeClass()}>Current</span>}
                 </div>
                 {release.published_at && <small className="text-xs text-on-surface-variant">{new Date(release.published_at).toLocaleDateString()}</small>}
               </div>
-              <button type="button" className={compactSecondaryButton} onClick={() => setChangelogRelease(release)}>View changelog</button>
+              <button type="button" className={compactSecondaryButtonClass} onClick={() => setChangelogRelease(release)}>View changelog</button>
             </div>
           ))}
         </div>}
@@ -893,7 +893,7 @@ function AboutTab() {
           </div>
           {changelogRelease.body ? <pre className="m-0 max-h-[52vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-outline-variant/30 bg-background p-3 font-mono text-[13px] leading-relaxed text-on-surface">{changelogRelease.body}</pre> : <p className="text-on-surface-variant">No changelog is available for this release.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <a className={compactSecondaryButton} href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
+            <a className={compactSecondaryButtonClass} href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
           </div>
         </div>
       </div>}

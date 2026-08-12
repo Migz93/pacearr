@@ -7,7 +7,7 @@ import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { ToggleField } from "../components/FormControls";
+import { compactSecondaryButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -66,10 +66,7 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
 
 const PAGE_SIZE = 24;
 
-const primaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface";
-const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
 const dangerButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-error";
-const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
 
 function isShowsTab(value: string | null): value is ShowsTab {
   return TABS.some((tab) => tab.id === value);
@@ -255,8 +252,8 @@ function ShowsBrowser() {
   return (
     <Page>
       <PageHeader title="Shows">
-        <button type="button" className={primaryButton} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
-        <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
+        <button type="button" className={primaryButtonClass} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void refresh()} disabled={loading || refreshing}>
           <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </PageHeader>
@@ -336,9 +333,9 @@ function ShowsBrowser() {
             Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className={compactSecondaryButton} disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
             <span className="text-xs">Page {safePage} of {pageCount}</span>
-            <button type="button" className={compactSecondaryButton} disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
           </div>
         </div>
       )}
@@ -362,16 +359,18 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
   const [loading, setLoading] = useState(false);
   const [addingId, setAddingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
     const term = query.trim();
-    if (term.length < 2) { setShows([]); return; }
+    if (term.length < 2) { setShows([]); setLoading(false); return; }
     const timer = setTimeout(() => {
       setLoading(true);
       apiGet<{ shows: ShowListItem[] }>(`/api/shows?query=${encodeURIComponent(term)}`)
-        .then((data) => setShows(data.shows.filter((show) => !show.enrolled)))
-        .catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)))
-        .finally(() => setLoading(false));
+        .then((data) => { if (requestId === requestIdRef.current) setShows(data.shows.filter((show) => !show.enrolled)); })
+        .catch((caught) => { if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught)); })
+        .finally(() => { if (requestId === requestIdRef.current) setLoading(false); });
     }, 250);
     return () => clearTimeout(timer);
   }, [query]);
@@ -407,7 +406,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   const location = useLocation();
   const returnPath = (location.state as { from?: string } | null)?.from ?? "/shows";
   const returnTabParam = (returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null) ?? "enrolled";
-  const returnLabel = TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
+  const returnLabel = returnPath === "/dashboard" ? "Dashboard" : TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
   const [detail, setDetail] = useState<ShowDetailResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -459,7 +458,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   if (!detail) {
     return (
       <Page>
-        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
         {error ? <ErrorBanner message={error} className="mb-0 mt-4" /> : <PageLoading label="Loading show..." />}
       </Page>
     );
@@ -470,8 +469,8 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   return (
     <Page>
       <div className="mb-[18px] flex justify-between gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
-        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        <button type="button" className={secondaryButton} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
       {error && <ErrorBanner message={error} />}
       <section className="mb-[22px] grid grid-cols-[220px_minmax(0,1fr)] items-end gap-6 max-[820px]:grid-cols-1">
@@ -519,13 +518,13 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             ) : (
               <>
-                <button type="button" className={primaryButton} disabled={busy} onClick={() => void enroll()}>
+                <button type="button" className={primaryButtonClass} disabled={busy} onClick={() => void enroll()}>
                   Enroll show
                 </button>
                 {detail.recommendation && (detail.recommendation.eligible || detail.recommendation.ignored) && (
                   <button
                     type="button"
-                    className={secondaryButton}
+                    className={secondaryButtonClass}
                     disabled={busy}
                     onClick={() => runAction(() => detail.recommendation!.ignored
                       ? apiDelete(`/api/recommendations/${seriesId}/ignore`)

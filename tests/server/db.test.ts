@@ -747,6 +747,41 @@ test("mapping cannot replace a user's existing Tautulli identity", () => {
   }
 });
 
+test("unmapped Tautulli users display the names from their newest event", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const older = "2026-04-01T10:00:00.000Z";
+    const newer = "2026-04-02T10:00:00.000Z";
+    db.insertWatchEvent({ source: "tautulli", sourceEventId: "older", userId: null, plexAccountId: null, username: "Zoe", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 1, watchedAt: older, rawPayload: { user_id: "47", user: "Old friendly name" } });
+    db.insertWatchEvent({ source: "tautulli", sourceEventId: "newer", userId: null, plexAccountId: null, username: "Adam", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 2, watchedAt: newer, rawPayload: { user_id: "47", user: "New friendly name" } });
+
+    assert.deepEqual(db.listUnmappedTautulliUsers(), [{
+      tautulliUserId: "47", username: "Adam", friendlyName: "New friendly name", eventCount: 2, lastWatchedAt: newer,
+    }]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("the cached Tautulli resolver preserves stable-ID and ambiguity safeguards", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "kid", displayName: "Bob", avatarUrl: null },
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "KID", displayName: "Carol", avatarUrl: null },
+    ]);
+    db.mapTautulliUser(alice.id, "47", "Alice on Tautulli");
+    const resolve = db.createTautulliUserResolver();
+
+    assert.equal(resolve("47", "renamed", "renamed")?.id, alice.id);
+    assert.equal(resolve(null, "KID", "Carol"), null);
+    assert.equal(resolve(null, "nobody", "Alice")?.id, alice.id);
+  } finally {
+    cleanup();
+  }
+});
+
 test("an ambiguous saved Tautulli username is never resolved through a weaker fallback", () => {
   const { db, cleanup } = createDb();
   try {

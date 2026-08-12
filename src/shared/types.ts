@@ -97,6 +97,7 @@ export interface AppSettings {
   earlyPrefetchTriggerEpisodesRemaining: number;
   earlyPrefetchEpisodeCount: number;
   newShowTriageEnabled: boolean;
+  newShowTriageIntervalMinutes: number;
   newShowTriageEpisodeThreshold: number;
   /** Internal activation boundary; series already in Sonarr before this instant are ignored. */
   newShowTriageEnabledAt: string | null;

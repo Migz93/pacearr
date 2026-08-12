@@ -75,7 +75,7 @@ scheduler.registerRecurringJob({
 });
 scheduler.registerRecurringJob({
   id: "new-show-triage",
-  intervalMs: 5 * 60 * 1000,
+  intervalMs: settings.newShowTriageIntervalMinutes * 60 * 1000,
   enabled: settings.newShowTriageEnabled,
   task: requiresSetup(() => services.triageNewSonarrSeries()),
 });

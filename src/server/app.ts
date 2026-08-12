@@ -165,7 +165,7 @@ const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings:
   },
   "new-show-triage": {
     name: "New Sonarr show triage",
-    intervalDescription: () => "Every 5 minutes when enabled",
+    intervalDescription: (settings) => `Every ${settings.newShowTriageIntervalMinutes} minute${settings.newShowTriageIntervalMinutes !== 1 ? "s" : ""} when enabled`,
   },
 };
 
@@ -474,6 +474,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const threshold = Number(body.newShowTriageEpisodeThreshold);
       patch.newShowTriageEpisodeThreshold = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : DEFAULT_APP_SETTINGS.newShowTriageEpisodeThreshold));
     }
+    if (body.newShowTriageIntervalMinutes !== undefined) {
+      patch.newShowTriageIntervalMinutes = normaliseScheduleIntervalMinutes(body.newShowTriageIntervalMinutes, DEFAULT_APP_SETTINGS.newShowTriageIntervalMinutes);
+    }
     const appSettings = db.updateAppSettings(patch);
     if (patch.trustProxy !== undefined) app.set("trust proxy", appSettings.trustProxy ? 1 : false);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
@@ -483,7 +486,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("sonarr-library-refresh", { intervalMs: appSettings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("recommendation-refresh", { intervalMs: appSettings.recommendationRefreshIntervalHours * 60 * 60 * 1000 });
-    scheduler?.updateJob("new-show-triage", { enabled: appSettings.newShowTriageEnabled });
+    scheduler?.updateJob("new-show-triage", { intervalMs: appSettings.newShowTriageIntervalMinutes * 60 * 1000, enabled: appSettings.newShowTriageEnabled });
     if (!previousSettings.newShowTriageEnabled && appSettings.newShowTriageEnabled) {
       db.setNewShowTriageFallbackBaselineAt(null);
       logger.info("New Sonarr show triage enabled; existing Sonarr series will be ignored", { enabledAt: appSettings.newShowTriageEnabledAt });
@@ -589,6 +592,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       "rolling-reconcile": { setting: "rollingReconcileIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
       "sonarr-library-refresh": { setting: "sonarrLibraryRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
       "recommendation-refresh": { setting: "recommendationRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "new-show-triage": { setting: "newShowTriageIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
     };
     const jobId = String(req.params.id);
     const schedule = schedules[jobId];
