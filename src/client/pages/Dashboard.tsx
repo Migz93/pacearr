@@ -112,7 +112,7 @@ function RecentActivity({ events }: { events: HistoryEvent[] }) {
     >
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">Recent activity</span>
-        <span className="text-xs text-on-surface-variant opacity-0 transition-opacity group-hover:text-primary group-hover:opacity-100">View all →</span>
+        <span className="text-xs text-on-surface-variant opacity-0 transition-opacity group-hover:text-on-surface group-hover:opacity-100">View all →</span>
       </div>
       {events.length > 0 ? (
         <div className="grid gap-1.5">
