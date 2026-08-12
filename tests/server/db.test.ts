@@ -768,6 +768,11 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("tautulli", "managed-history", 1, "The Expanse", 1, 1, stamp, JSON.stringify({ user: "Managed Kid" }), stamp);
 
+    // This is the exact old migration-19 state: managed-user history has no usable
+    // event username, so version 19 leaves the editor field empty.
+    runMigrations(raw, undefined, 19);
+    assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, null);
+
     runMigrations(raw);
     assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, "Managed Kid");
   } finally {

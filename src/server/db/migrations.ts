@@ -331,10 +331,8 @@ const migrations: Migration[] = [
       db.exec(`
         UPDATE users
         SET tautulli_username = (
-          SELECT COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), ''))
-          FROM watch_events
-          WHERE source = 'tautulli' AND user_id = users.id
-            AND COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), '')) IS NOT NULL
+          SELECT username FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id AND username IS NOT NULL AND trim(username) <> ''
           ORDER BY watched_at DESC, id DESC LIMIT 1
         )
         WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
