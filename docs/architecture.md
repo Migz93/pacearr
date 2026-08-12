@@ -101,7 +101,7 @@ Pacearr uses Sonarr v3 API endpoints to:
 - trigger `SeriesSearch` for eligible new arrivals
 - delete episode files during cleanup/reset when enabled
 
-Sonarr and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their API-key requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
+Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their credentialed requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
 
 ### Automatic new-show triage
 
