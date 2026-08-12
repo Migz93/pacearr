@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { PacearrDatabase } from "../../src/server/db/index.js";
+import { runMigrations } from "../../src/server/db/migrations.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 
 function createDb() {
@@ -749,6 +750,29 @@ test("an ambiguous saved Tautulli username is never resolved through a weaker fa
     assert.equal(db.findUserByTautulliIdentity(null, "KID", "Carol's Tautulli"), null);
   } finally {
     cleanup();
+  }
+});
+
+test("Tautulli username backfill uses a managed user's friendly name when their username is blank", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 18);
+    const stamp = "2026-08-12T09:00:00.000Z";
+    raw.prepare(`
+      INSERT INTO users (plex_user_id, plex_account_id, username, display_name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("plex-managed", "1", "managed", "Managed", 1, stamp, stamp);
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, user_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli", "managed-history", 1, "The Expanse", 1, 1, stamp, JSON.stringify({ user: "Managed Kid" }), stamp);
+
+    runMigrations(raw);
+    assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, "Managed Kid");
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

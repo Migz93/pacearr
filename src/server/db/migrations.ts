@@ -331,8 +331,28 @@ const migrations: Migration[] = [
       db.exec(`
         UPDATE users
         SET tautulli_username = (
-          SELECT username FROM watch_events
-          WHERE source = 'tautulli' AND user_id = users.id AND username IS NOT NULL AND trim(username) <> ''
+          SELECT COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), ''))
+          FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id
+            AND COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), '')) IS NOT NULL
+          ORDER BY watched_at DESC, id DESC LIMIT 1
+        )
+        WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
+      `);
+    },
+  },
+  {
+    // Migration 19 shipped before managed-user history used Tautulli's friendly
+    // name as a fallback. Re-run the corrected blank-only backfill for upgrades.
+    version: 20,
+    up(db) {
+      db.exec(`
+        UPDATE users
+        SET tautulli_username = (
+          SELECT COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), ''))
+          FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id
+            AND COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), '')) IS NOT NULL
           ORDER BY watched_at DESC, id DESC LIMIT 1
         )
         WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';

@@ -1414,7 +1414,8 @@ export class PacearrServices {
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         for (const event of tautulliEvents) {
           const user = this.db.findUserByTautulliIdentity(event.userId, event.username, event.friendlyName);
-          if (user) tautulliUsernames.push({ userId: user.id, username: event.username ?? event.friendlyName });
+          const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
+          if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
           const series = await this.matchSeries(event, seriesIndex);
           prepared.push({
             input: {
@@ -1422,7 +1423,7 @@ export class PacearrServices {
               sourceEventId: event.referenceId,
               userId: user?.id ?? null,
               plexAccountId: null,
-              username: event.username ?? event.friendlyName,
+              username: tautulliUsername,
               sonarrSeriesId: series?.id ?? null,
               showTitle: event.showTitle,
               seasonNumber: event.seasonNumber,

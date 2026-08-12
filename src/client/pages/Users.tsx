@@ -13,6 +13,10 @@ const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 
 const compactPrimaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface";
 const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
 
+function tautulliDisplayName(user: UnmappedTautulliUser): string {
+  return user.username?.trim() || user.friendlyName?.trim() || "Unknown Tautulli user";
+}
+
 export default function Users() {
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +60,7 @@ export default function Users() {
       setMappingId(tautulliUser.tautulliUserId);
       await apiPost(`/api/users/${userId}/tautulli`, {
         tautulliUserId: tautulliUser.tautulliUserId,
-        tautulliUsername: tautulliUser.username ?? tautulliUser.friendlyName,
+        tautulliUsername: tautulliDisplayName(tautulliUser),
       });
       await load();
     } catch (caught) {
@@ -173,14 +177,14 @@ export default function Users() {
               {unmappedTautulliUsers.map((tautulliUser) => (
                 <article key={tautulliUser.tautulliUserId} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container p-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-on-surface">{tautulliUser.username ?? tautulliUser.friendlyName ?? "Unknown Tautulli user"}</p>
-                    <p className="text-xs text-on-surface-variant">{tautulliUser.friendlyName && tautulliUser.friendlyName !== tautulliUser.username ? `${tautulliUser.friendlyName} · ` : ""}{tautulliUser.eventCount} unmatched watch event{tautulliUser.eventCount === 1 ? "" : "s"} · last watched {formatRelativeTime(tautulliUser.lastWatchedAt)}</p>
+                    <p className="truncate text-sm font-bold text-on-surface">{tautulliDisplayName(tautulliUser)}</p>
+                    <p className="text-xs text-on-surface-variant">{tautulliUser.friendlyName?.trim() && tautulliUser.friendlyName.trim() !== tautulliDisplayName(tautulliUser) ? `${tautulliUser.friendlyName.trim()} · ` : ""}{tautulliUser.eventCount} unmatched watch event{tautulliUser.eventCount === 1 ? "" : "s"} · last watched {formatRelativeTime(tautulliUser.lastWatchedAt)}</p>
                   </div>
                   <select
                     className="min-h-10 rounded-lg border border-outline-variant/30 bg-background-container-high px-3 text-sm text-on-surface"
                     defaultValue=""
                     disabled={mappingId === tautulliUser.tautulliUserId}
-                    aria-label={`Map ${tautulliUser.username ?? tautulliUser.friendlyName ?? "Tautulli user"} to a Pacearr user`}
+                    aria-label={`Map ${tautulliDisplayName(tautulliUser)} to a Pacearr user`}
                     onChange={(event) => { const userId = Number(event.target.value); if (userId) void mapTautulliUser(tautulliUser, userId); }}
                   >
                     <option value="">{mappingId === tautulliUser.tautulliUserId ? "Mapping..." : "Map to Pacearr user..."}</option>
