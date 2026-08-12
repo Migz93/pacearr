@@ -17,6 +17,10 @@ function tautulliDisplayName(user: UnmappedTautulliUser): string {
   return user.username?.trim() || user.friendlyName?.trim() || "Unknown Tautulli user";
 }
 
+function tautulliUsername(user: UnmappedTautulliUser): string | null {
+  return user.username?.trim() || user.friendlyName?.trim() || null;
+}
+
 export default function Users() {
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +64,7 @@ export default function Users() {
       setMappingId(tautulliUser.tautulliUserId);
       await apiPost(`/api/users/${userId}/tautulli`, {
         tautulliUserId: tautulliUser.tautulliUserId,
-        tautulliUsername: tautulliDisplayName(tautulliUser),
+        tautulliUsername: tautulliUsername(tautulliUser),
       });
       await load();
     } catch (caught) {

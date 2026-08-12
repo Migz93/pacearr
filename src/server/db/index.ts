@@ -651,6 +651,11 @@ export class PacearrDatabase {
   }
 
   mapTautulliUser(userId: number, tautulliUserId: string, tautulliUsername: string | null): UserRecord {
+    const current = this.getUser(userId);
+    if (!current) throw new Error("User not found");
+    if (current.tautulliUserId && current.tautulliUserId !== tautulliUserId) {
+      throw new Error("Tautulli user mapping conflict");
+    }
     this.db.prepare("UPDATE users SET tautulli_user_id = ?, tautulli_username = ?, updated_at = ? WHERE id = ?").run(tautulliUserId, tautulliUsername, now(), userId);
     return this.getUser(userId)!;
   }

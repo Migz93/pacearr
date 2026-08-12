@@ -733,6 +733,20 @@ test("mapping a Tautulli identity persists it and links that identity's orphaned
   }
 });
 
+test("mapping cannot replace a user's existing Tautulli identity", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.mapTautulliUser(dave.id, "47", "Dave on Tautulli");
+    assert.throws(() => db.mapTautulliUser(dave.id, "48", "Different Dave"), /Tautulli user mapping conflict/);
+    assert.equal(db.getUser(dave.id)?.tautulliUserId, "47");
+  } finally {
+    cleanup();
+  }
+});
+
 test("an ambiguous saved Tautulli username is never resolved through a weaker fallback", () => {
   const { db, cleanup } = createDb();
   try {

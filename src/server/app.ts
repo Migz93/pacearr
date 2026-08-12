@@ -631,8 +631,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     try {
       res.json(services.mapTautulliUser(id, tautulliUserId, tautulliUsername));
     } catch (error) {
-      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
-        res.status(409).json({ error: "That Tautulli user is already mapped to another Pacearr user." });
+      if (error instanceof Error && (error.message === "Tautulli user mapping conflict" || error.message.includes("UNIQUE constraint failed"))) {
+        res.status(409).json({ error: "That Pacearr user already has a different Tautulli user mapped." });
         return;
       }
       throw error;
