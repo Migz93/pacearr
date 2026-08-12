@@ -164,7 +164,7 @@ export class PlexIntegration {
       avatarUrl: owner.avatarUrl,
     }];
     try {
-      const response = await fetch(PLEX_TV_USERS_URL, {
+      const response = await fetchIntegration(new URL(PLEX_TV_USERS_URL), {
         headers: {
           "X-Plex-Token": this.settings.token,
           "User-Agent": PLEX_USER_AGENT,
@@ -336,7 +336,7 @@ export class PlexIntegration {
   }
 
   static async fetchAccountByToken(token: string) {
-    const response = await fetch(PLEX_TV_ACCOUNT_URL, {
+    const response = await fetchIntegration(new URL(PLEX_TV_ACCOUNT_URL), {
       headers: { "User-Agent": PLEX_USER_AGENT, "X-Plex-Token": token, Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`Plex account fetch failed: ${response.status} ${response.statusText}`);
@@ -354,7 +354,7 @@ export class PlexIntegration {
   }
 
   static async pingToken(token: string): Promise<void> {
-    const response = await fetch(PLEX_TV_PING_URL, {
+    const response = await fetchIntegration(new URL(PLEX_TV_PING_URL), {
       headers: {
         "User-Agent": PLEX_USER_AGENT,
         "X-Plex-Token": token,
@@ -370,7 +370,7 @@ export class PlexIntegration {
     const url = new URL(PLEX_TV_RESOURCES_URL);
     url.searchParams.set("includeHttps", "1");
     url.searchParams.set("includeRelay", "1");
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       headers: {
         "User-Agent": PLEX_USER_AGENT,
         "X-Plex-Token": token,

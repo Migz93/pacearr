@@ -79,9 +79,12 @@ test("Plex, Sonarr, and Tautulli reject unsafe URLs and disable redirect followi
     assert.deepEqual(await new TautulliIntegration({ enabled: true, baseUrl: "https://user:pass@tautulli.example", apiKey: "secret" }, logger).testConnection(), { ok: false, message: "Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments." });
     assert.deepEqual(await new PlexIntegration({ serverUrl: "file:///etc", machineIdentifier: "", token: "secret" }, logger).testConnection(), { ok: false, message: "Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments." });
 
-    await new PlexIntegration({ serverUrl: "https://plex.example", machineIdentifier: "", token: "secret" }, logger).testConnection();
-    await new SonarrIntegration({ baseUrl: "https://sonarr.example", apiKey: "secret" }, logger).testConnection();
-    await new TautulliIntegration({ enabled: true, baseUrl: "https://tautulli.example", apiKey: "secret" }, logger).testConnection();
+    const plexResult = await new PlexIntegration({ serverUrl: "https://plex.example", machineIdentifier: "", token: "secret" }, logger).testConnection();
+    const sonarrResult = await new SonarrIntegration({ baseUrl: "https://sonarr.example", apiKey: "secret" }, logger).testConnection();
+    const tautulliResult = await new TautulliIntegration({ enabled: true, baseUrl: "https://tautulli.example", apiKey: "secret" }, logger).testConnection();
+    assert.equal(plexResult.ok, true);
+    assert.equal(sonarrResult.ok, true);
+    assert.equal(tautulliResult.ok, true);
     assert.deepEqual(requests.map((request) => request.redirect), ["error", "error", "error"]);
     assert.ok(requests.every((request) => request.signal instanceof AbortSignal));
   } finally {
