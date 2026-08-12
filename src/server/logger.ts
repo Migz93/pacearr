@@ -77,6 +77,8 @@ export class Logger {
         new winston.transports.Console({
           format: winston.format.combine(
             winston.format.colorize(),
+            // Logger.write() supplies the ISO timestamp shared with the ring and files;
+            // keep the console display compact without generating a second timestamp.
             winston.format((info) => {
               info.timestamp = typeof info.timestamp === "string" ? info.timestamp.slice(11, 19) : info.timestamp;
               return info;

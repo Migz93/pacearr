@@ -7,7 +7,7 @@ import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -66,7 +66,6 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
 
 const PAGE_SIZE = 24;
 
-const dangerButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-error";
 
 function isShowsTab(value: string | null): value is ShowsTab {
   return TABS.some((tab) => tab.id === value);
@@ -501,7 +500,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               <>
                 <button
                   type="button"
-                  className={dangerButton}
+                  className={dangerButtonClass}
                   disabled={busy}
                   onClick={() => runAction(() => apiPost(`/api/rolling-shows/${show.rollingShowId}/reset`))}
                 >
@@ -509,7 +508,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 </button>
                 <button
                   type="button"
-                  className={dangerButton}
+                  className={dangerButtonClass}
                   disabled={busy}
                   onClick={() => runAction(() => apiDelete(`/api/rolling-shows/${show.rollingShowId}`))}
                 >

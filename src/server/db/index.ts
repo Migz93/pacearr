@@ -188,7 +188,9 @@ function usersByNormalisedName(users: UserRecord[], getName: (user: UserRecord) 
   for (const user of users) {
     const name = normaliseName(getName(user));
     if (!name) continue;
-    grouped.set(name, [...(grouped.get(name) ?? []), user]);
+    const matches = grouped.get(name);
+    if (matches) matches.push(user);
+    else grouped.set(name, [user]);
   }
   return grouped;
 }
@@ -375,7 +377,7 @@ export class PacearrDatabase {
   }
 
   hasKnownNewShowTriage(seriesId: number): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage WHERE sonarr_series_id = ?").get(seriesId));
+    return this.listKnownNewShowTriageIds().has(seriesId);
   }
 
   listKnownNewShowTriageIds(): Set<number> {
@@ -640,27 +642,11 @@ export class PacearrDatabase {
    * branch could never match. The column is left in place rather than migrated away.
    */
   findUserByTautulliName(username?: string | null, friendlyName?: string | null): UserRecord | null {
-    const byUsername = this.matchUserByName(username);
-    if (byUsername.user) return byUsername.user;
-    if (byUsername.usernameAmbiguous) return null;
-    return this.matchUserByName(friendlyName).user;
+    return this.createTautulliUserResolver()(null, username, friendlyName);
   }
 
   findUserByTautulliIdentity(tautulliUserId: string | null, username?: string | null, friendlyName?: string | null): UserRecord | null {
-    if (tautulliUserId) {
-      const row = this.db.prepare("SELECT * FROM users WHERE tautulli_user_id = ?").get(tautulliUserId);
-      if (row) return userFromRow(row);
-    }
-    for (const name of [username, friendlyName]) {
-      if (!name) continue;
-      const rows = this.db.prepare("SELECT * FROM users WHERE lower(tautulli_username) = lower(?)").all(name);
-      if (rows.length === 1) return userFromRow(rows[0]);
-      // A manually entered name is an explicit link. On a collision, refusing to
-      // fall through mirrors the Plex-name matcher below and avoids assigning the
-      // event to a different user through a weaker signal.
-      if (rows.length > 1) return null;
-    }
-    return this.findUserByTautulliName(username, friendlyName);
+    return this.createTautulliUserResolver()(tautulliUserId, username, friendlyName);
   }
 
   createTautulliUserResolver(): (tautulliUserId: string | null, username?: string | null, friendlyName?: string | null) => UserRecord | null {
@@ -669,24 +655,26 @@ export class PacearrDatabase {
     const bySavedName = usersByNormalisedName(users, (user) => user.tautulliUsername);
     const byUsername = usersByNormalisedName(users, (user) => user.username);
     const byDisplayName = usersByNormalisedName(users, (user) => user.displayName);
-    const matchByName = (name?: string | null) => {
-      const usernameMatches = byUsername.get(normaliseName(name)) ?? [];
+    const matchByName = (normalisedName: string) => {
+      const usernameMatches = byUsername.get(normalisedName) ?? [];
       if (usernameMatches.length === 1) return { user: usernameMatches[0]!, usernameAmbiguous: false };
       if (usernameMatches.length > 1) return { user: null, usernameAmbiguous: true };
-      const displayNameMatches = byDisplayName.get(normaliseName(name)) ?? [];
+      const displayNameMatches = byDisplayName.get(normalisedName) ?? [];
       return { user: displayNameMatches.length === 1 ? displayNameMatches[0]! : null, usernameAmbiguous: false };
     };
     return (tautulliUserId, username, friendlyName) => {
       if (tautulliUserId && byTautulliId.has(tautulliUserId)) return byTautulliId.get(tautulliUserId)!;
-      for (const name of [username, friendlyName]) {
-        if (!name) continue;
-        const savedNameMatches = bySavedName.get(normaliseName(name)) ?? [];
+      const normalisedUsername = normaliseName(username);
+      const normalisedFriendlyName = normaliseName(friendlyName);
+      for (const normalisedName of [normalisedUsername, normalisedFriendlyName]) {
+        if (!normalisedName) continue;
+        const savedNameMatches = bySavedName.get(normalisedName) ?? [];
         if (savedNameMatches.length === 1) return savedNameMatches[0]!;
         if (savedNameMatches.length > 1) return null;
       }
-      const byUsernameMatch = matchByName(username);
+      const byUsernameMatch = matchByName(normalisedUsername);
       if (byUsernameMatch.user || byUsernameMatch.usernameAmbiguous) return byUsernameMatch.user;
-      return matchByName(friendlyName).user;
+      return matchByName(normalisedFriendlyName).user;
     };
   }
 
@@ -737,25 +725,6 @@ export class PacearrDatabase {
       WHERE source = 'tautulli' AND user_id IS NULL
         AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) = ?
     `).run(userId, tautulliUserId).changes;
-  }
-
-  private matchUserByName(name?: string | null): { user: UserRecord | null; usernameAmbiguous: boolean } {
-    if (!name) return { user: null, usernameAmbiguous: false };
-    // Neither username nor display_name has a uniqueness constraint in the schema (only
-    // plex_user_id does) — Plex Home profiles commonly share generic names like "Kid",
-    // and nothing stops two distinct usernames from colliding case-insensitively either
-    // ("Kid" / "kid"). A bare .get() on either lookup would pick whichever matching row
-    // SQLite returns first, silently misattributing one person's watch history to a
-    // different account. No match on username falls through to try display_name; an
-    // ambiguous username is reported back to the caller instead of trying display_name
-    // itself, since a display_name match on the same string can't disambiguate an
-    // already-ambiguous username. An ambiguous display_name result is not distinguished
-    // from "no match" the same way — both simply return no user.
-    const usernameMatches = this.db.prepare("SELECT * FROM users WHERE lower(username) = lower(?)").all(name);
-    if (usernameMatches.length === 1) return { user: userFromRow(usernameMatches[0]), usernameAmbiguous: false };
-    if (usernameMatches.length > 1) return { user: null, usernameAmbiguous: true };
-    const displayNameMatches = this.db.prepare("SELECT * FROM users WHERE lower(display_name) = lower(?)").all(name);
-    return { user: displayNameMatches.length === 1 ? userFromRow(displayNameMatches[0]) : null, usernameAmbiguous: false };
   }
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {

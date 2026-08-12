@@ -138,9 +138,12 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
-      if ((form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1))
-        || (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1))) {
-        setError("Early prefetch and new-show triage values must be positive whole numbers.");
+      if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
+        setError("Early prefetch values must be positive whole numbers.");
+        return;
+      }
+      if (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1)) {
+        setError("New-show triage episode limit must be a positive whole number.");
         return;
       }
       // The server clamps every one of these to a safe value regardless (see
