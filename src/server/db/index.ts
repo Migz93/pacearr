@@ -16,6 +16,7 @@ import type {
   TautulliSettings,
   TautulliSettingsView,
   UserRecord,
+  UnmappedTautulliUser,
   WatchEvent,
   ShowRecommendation,
   ShowUserProgress,
@@ -166,6 +167,7 @@ function userFromRow(row: any): UserRecord {
     plexUserId: row.plex_user_id,
     plexAccountId: row.plex_account_id,
     tautulliUserId: row.tautulli_user_id,
+    tautulliUsername: row.tautulli_username,
     username: row.username,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
@@ -535,11 +537,11 @@ export class PacearrDatabase {
     return (this.db.prepare("SELECT * FROM users WHERE enabled = 1 ORDER BY display_name").all() as any[]).map(userFromRow);
   }
 
-  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled">>): UserRecord {
+  updateUser(id: number, patch: Partial<Pick<UserRecord, "enabled" | "tautulliUsername">>): UserRecord {
     const current = this.getUser(id);
     if (!current) throw new Error("User not found");
-    this.db.prepare("UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?")
-      .run((patch.enabled ?? current.enabled) ? 1 : 0, now(), id);
+    this.db.prepare("UPDATE users SET enabled = ?, tautulli_username = ?, updated_at = ? WHERE id = ?")
+      .run((patch.enabled ?? current.enabled) ? 1 : 0, patch.tautulliUsername === undefined ? current.tautulliUsername ?? null : patch.tautulliUsername, now(), id);
     return this.getUser(id)!;
   }
 
@@ -616,6 +618,65 @@ export class PacearrDatabase {
     if (byUsername.user) return byUsername.user;
     if (byUsername.usernameAmbiguous) return null;
     return this.matchUserByName(friendlyName).user;
+  }
+
+  findUserByTautulliIdentity(tautulliUserId: string | null, username?: string | null, friendlyName?: string | null): UserRecord | null {
+    if (tautulliUserId) {
+      const row = this.db.prepare("SELECT * FROM users WHERE tautulli_user_id = ?").get(tautulliUserId);
+      if (row) return userFromRow(row);
+    }
+    for (const name of [username, friendlyName]) {
+      if (!name) continue;
+      const rows = this.db.prepare("SELECT * FROM users WHERE lower(tautulli_username) = lower(?)").all(name);
+      if (rows.length === 1) return userFromRow(rows[0]);
+      // A manually entered name is an explicit link. On a collision, refusing to
+      // fall through mirrors the Plex-name matcher below and avoids assigning the
+      // event to a different user through a weaker signal.
+      if (rows.length > 1) return null;
+    }
+    return this.findUserByTautulliName(username, friendlyName);
+  }
+
+  listUnmappedTautulliUsers(): UnmappedTautulliUser[] {
+    return this.db.prepare(`
+      SELECT CAST(json_extract(raw_payload, '$.user_id') AS TEXT) AS tautulliUserId,
+        max(username) AS username, max(json_extract(raw_payload, '$.user')) AS friendlyName,
+        count(*) AS eventCount, max(watched_at) AS lastWatchedAt
+      FROM watch_events
+      WHERE source = 'tautulli' AND user_id IS NULL
+        AND json_extract(raw_payload, '$.user_id') IS NOT NULL
+      GROUP BY CAST(json_extract(raw_payload, '$.user_id') AS TEXT)
+      ORDER BY lastWatchedAt DESC
+    `).all() as UnmappedTautulliUser[];
+  }
+
+  mapTautulliUser(userId: number, tautulliUserId: string, tautulliUsername: string | null): UserRecord {
+    const current = this.getUser(userId);
+    if (!current) throw new Error("User not found");
+    if (current.tautulliUserId && current.tautulliUserId !== tautulliUserId) {
+      throw new Error("Tautulli user mapping conflict");
+    }
+    this.db.prepare("UPDATE users SET tautulli_user_id = ?, tautulli_username = ?, updated_at = ? WHERE id = ?").run(tautulliUserId, tautulliUsername, now(), userId);
+    return this.getUser(userId)!;
+  }
+
+  fillMissingTautulliUsernames(matches: Array<{ userId: number; username: string | null }>): void {
+    const update = this.db.prepare(`
+      UPDATE users SET tautulli_username = ?, updated_at = ?
+      WHERE id = ? AND (tautulli_username IS NULL OR trim(tautulli_username) = '')
+    `);
+    const stamp = now();
+    this.db.transaction((items: Array<{ userId: number; username: string | null }>) => {
+      for (const item of items) if (item.username?.trim()) update.run(item.username.trim(), stamp, item.userId);
+    })(matches);
+  }
+
+  linkUnassignedTautulliWatchEvents(userId: number, tautulliUserId: string): number {
+    return this.db.prepare(`
+      UPDATE watch_events SET user_id = ?
+      WHERE source = 'tautulli' AND user_id IS NULL
+        AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) = ?
+    `).run(userId, tautulliUserId).changes;
   }
 
   private matchUserByName(name?: string | null): { user: UserRecord | null; usernameAmbiguous: boolean } {

@@ -7,11 +7,19 @@ import { Avatar } from "../components/Avatar";
 import { ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
-import type { UserListItem, UserShowActivity } from "../../shared/types";
+import type { UnmappedTautulliUser, UserListItem, UserShowActivity } from "../../shared/types";
 
 const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
 const compactPrimaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface";
 const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
+
+function tautulliDisplayName(user: UnmappedTautulliUser): string {
+  return user.username?.trim() || user.friendlyName?.trim() || "Unknown Tautulli user";
+}
+
+function tautulliUsername(user: UnmappedTautulliUser): string | null {
+  return user.username?.trim() || user.friendlyName?.trim() || null;
+}
 
 export default function Users() {
   const [users, setUsers] = useState<UserListItem[]>([]);
@@ -20,6 +28,10 @@ export default function Users() {
   const [discovering, setDiscovering] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [disabledOpen, setDisabledOpen] = useState(false);
+  const [unmappedOpen, setUnmappedOpen] = useState(false);
+  const [unmappedTautulliUsers, setUnmappedTautulliUsers] = useState<UnmappedTautulliUser[]>([]);
+  const [mappingId, setMappingId] = useState<string | null>(null);
+  const [mappingSelections, setMappingSelections] = useState<Record<string, string>>({});
   const [showsUserId, setShowsUserId] = useState<number | null>(null);
   const [editUserId, setEditUserId] = useState<number | null>(null);
 
@@ -34,12 +46,33 @@ export default function Users() {
 
   async function load() {
     try {
-      setUsers((await apiGet<{ users: UserListItem[] }>("/api/users")).users);
+      const [userResponse, unmappedResponse] = await Promise.all([
+        apiGet<{ users: UserListItem[] }>("/api/users"),
+        apiGet<{ users: UnmappedTautulliUser[] }>("/api/users/unmapped-tautulli"),
+      ]);
+      setUsers(userResponse.users);
+      setUnmappedTautulliUsers(unmappedResponse.users);
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function mapTautulliUser(tautulliUser: UnmappedTautulliUser, userId: number) {
+    try {
+      setMappingId(tautulliUser.tautulliUserId);
+      await apiPost(`/api/users/${userId}/tautulli`, {
+        tautulliUserId: tautulliUser.tautulliUserId,
+        tautulliUsername: tautulliUsername(tautulliUser),
+      });
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setMappingSelections((current) => ({ ...current, [tautulliUser.tautulliUserId]: "" }));
+    } finally {
+      setMappingId(null);
     }
   }
   useEffect(() => { void load(); }, []);
@@ -136,6 +169,42 @@ export default function Users() {
           ) : (
             <p className="mt-3 text-xs text-on-surface-variant">No disabled users</p>
           )
+        )}
+      </div>
+
+      <div className="mb-6">
+        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={unmappedOpen} onClick={() => setUnmappedOpen((open) => !open)}>
+          {unmappedOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          Unmapped Tautulli users ({unmappedTautulliUsers.length})
+        </button>
+        {unmappedOpen && (
+          unmappedTautulliUsers.length > 0 ? (
+            <div className="mt-3 grid gap-2.5">
+              {unmappedTautulliUsers.map((tautulliUser) => (
+                <article key={tautulliUser.tautulliUserId} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-on-surface">{tautulliDisplayName(tautulliUser)}</p>
+                    <p className="text-xs text-on-surface-variant">{tautulliUser.friendlyName?.trim() && tautulliUser.friendlyName.trim() !== tautulliDisplayName(tautulliUser) ? `${tautulliUser.friendlyName.trim()} · ` : ""}{tautulliUser.eventCount} unmatched watch event{tautulliUser.eventCount === 1 ? "" : "s"} · last watched {formatRelativeTime(tautulliUser.lastWatchedAt)}</p>
+                  </div>
+                  <select
+                    className="min-h-10 rounded-lg border border-outline-variant/30 bg-background-container-high px-3 text-sm text-on-surface"
+                    value={mappingSelections[tautulliUser.tautulliUserId] ?? ""}
+                    disabled={mappingId === tautulliUser.tautulliUserId}
+                    aria-label={`Map ${tautulliDisplayName(tautulliUser)} to a Pacearr user`}
+                    onChange={(event) => {
+                      const selectedUserId = event.target.value;
+                      setMappingSelections((current) => ({ ...current, [tautulliUser.tautulliUserId]: selectedUserId }));
+                      const userId = Number(selectedUserId);
+                      if (userId) void mapTautulliUser(tautulliUser, userId);
+                    }}
+                  >
+                    <option value="">{mappingId === tautulliUser.tautulliUserId ? "Mapping..." : "Map to Pacearr user..."}</option>
+                    {users.map((user) => <option key={user.id} value={user.id}>{user.displayName} ({user.username})</option>)}
+                  </select>
+                </article>
+              ))}
+            </div>
+          ) : <p className="mt-3 text-xs text-on-surface-variant">All imported Tautulli users are mapped.</p>
         )}
       </div>
 
@@ -237,6 +306,7 @@ function UserEditDialog({ user, onClose, onSaved }: {
   onSaved: () => Promise<void>;
 }) {
   const [enabled, setEnabled] = useState(user.enabled);
+  const [tautulliUsername, setTautulliUsername] = useState(user.tautulliUsername ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A save in flight must not be dismissable — Cancel/backdrop/X/Escape all route
@@ -248,7 +318,7 @@ function UserEditDialog({ user, onClose, onSaved }: {
     setSaving(true);
     setError(null);
     try {
-      await apiPatch(`/api/users/${user.id}`, { enabled });
+      await apiPatch(`/api/users/${user.id}`, { enabled, tautulliUsername });
       await onSaved();
       onClose();
     } catch (caught) {
@@ -268,6 +338,16 @@ function UserEditDialog({ user, onClose, onSaved }: {
           checked={enabled}
           onChange={setEnabled}
         />
+        <label className="grid gap-1.5">
+          <span className="text-sm font-bold text-on-surface">Tautulli user</span>
+          <span className="text-xs text-on-surface-variant">The Tautulli username linked to this Pacearr user.</span>
+          <input
+            className="min-h-10 rounded-lg border border-outline-variant/30 bg-background-container-high px-3 text-sm text-on-surface"
+            value={tautulliUsername}
+            onChange={(event) => setTautulliUsername(event.target.value)}
+            placeholder="Tautulli username"
+          />
+        </label>
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <button type="button" className={compactSecondaryButton} disabled={saving} onClick={requestClose}>Cancel</button>

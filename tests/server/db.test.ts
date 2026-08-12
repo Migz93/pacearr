@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { PacearrDatabase } from "../../src/server/db/index.js";
+import { runMigrations } from "../../src/server/db/migrations.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 
 function createDb() {
@@ -701,6 +702,96 @@ test("a previously orphaned Tautulli watch event can be repaired once its user r
     assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), false);
   } finally {
     cleanup();
+  }
+});
+
+test("mapping a Tautulli identity persists it and links that identity's orphaned history", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.insertWatchEvent({
+      source: "tautulli", sourceEventId: "tautulli-orphan-mapping", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 5,
+      watchedAt: "2026-04-13T10:00:00.000Z", rawPayload: { user_id: 47, user: "Different Tautulli Name" },
+    });
+
+    assert.deepEqual(db.listUnmappedTautulliUsers(), [{
+      tautulliUserId: "47", username: "Different Tautulli Name", friendlyName: "Different Tautulli Name", eventCount: 1,
+      lastWatchedAt: "2026-04-13T10:00:00.000Z",
+    }]);
+    db.mapTautulliUser(dave.id, "47", "Different Tautulli Name");
+    assert.equal(db.linkUnassignedTautulliWatchEvents(dave.id, "47"), 1);
+    assert.equal(db.findUserByTautulliIdentity("47", "renamed-again")?.id, dave.id);
+    assert.equal(db.findUserByTautulliIdentity(null, "Different Tautulli Name")?.id, dave.id);
+    assert.equal(db.getUser(dave.id)?.tautulliUsername, "Different Tautulli Name");
+    assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 5, watchedAt: "2026-04-13T10:00:00.000Z" }]);
+    assert.deepEqual(db.listUnmappedTautulliUsers(), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test("mapping cannot replace a user's existing Tautulli identity", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.mapTautulliUser(dave.id, "47", "Dave on Tautulli");
+    assert.throws(() => db.mapTautulliUser(dave.id, "48", "Different Dave"), /Tautulli user mapping conflict/);
+    assert.equal(db.getUser(dave.id)?.tautulliUserId, "47");
+  } finally {
+    cleanup();
+  }
+});
+
+test("an ambiguous saved Tautulli username is never resolved through a weaker fallback", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice, bob, carol] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol", displayName: "Carol", avatarUrl: null },
+    ]);
+    db.updateUser(alice.id, { tautulliUsername: "Kid" });
+    db.updateUser(bob.id, { tautulliUsername: "kid" });
+    db.updateUser(carol.id, { tautulliUsername: "Carol's Tautulli" });
+
+    // A friendly-name hit for Carol must not override the ambiguous stronger
+    // saved-name signal for Kid — that could assign history to the wrong viewer.
+    assert.equal(db.findUserByTautulliIdentity(null, "KID", "Carol's Tautulli"), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Tautulli username backfill uses a managed user's friendly name when their username is blank", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 18);
+    const stamp = "2026-08-12T09:00:00.000Z";
+    raw.prepare(`
+      INSERT INTO users (plex_user_id, plex_account_id, username, display_name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("plex-managed", "1", "managed", "Managed", 1, stamp, stamp);
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, user_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli", "managed-history", 1, "The Expanse", 1, 1, stamp, JSON.stringify({ user: "Managed Kid" }), stamp);
+
+    // This is the exact old migration-19 state: managed-user history has no usable
+    // event username, so version 19 leaves the editor field empty.
+    runMigrations(raw, undefined, 19);
+    assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, null);
+
+    runMigrations(raw);
+    assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, "Managed Kid");
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

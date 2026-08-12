@@ -241,6 +241,26 @@ test("a full history reconciliation repairs a previously orphaned Tautulli event
   }
 });
 
+test("manual Tautulli mapping refreshes rolling progress from relinked history", () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const [dave] = db.upsertUsers([{ plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave", displayName: "Dave", avatarUrl: null }]);
+    const rolling = db.upsertRollingShow({ id: 961, title: "Manual Mapping Test" });
+    db.insertWatchEvent({
+      source: "tautulli", sourceEventId: "manual-map-orphan", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      sonarrSeriesId: 961, showTitle: "Manual Mapping Test", seasonNumber: 2, episodeNumber: 4,
+      watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: { user_id: 47 },
+    });
+
+    assert.deepEqual(services.mapTautulliUser(dave.id, "47", "Different Tautulli Name"), { linkedEvents: 1 });
+    assert.deepEqual(db.listProgressForShow(rolling.id).map((item) => ({ userId: item.userId, season: item.lastWatchedSeason, episode: item.lastWatchedEpisode })), [
+      { userId: dave.id, season: 2, episode: 4 },
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
 function rollingSeries(id: number): SonarrSeries {
   return {
     id,

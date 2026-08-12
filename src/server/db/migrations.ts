@@ -307,6 +307,56 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // A Tautulli identity may belong to only one Plex user. NULL remains valid for
+    // every user until an administrator explicitly maps the identity.
+    version: 17,
+    up(db) {
+      db.exec("CREATE UNIQUE INDEX idx_users_tautulli_user_id ON users(tautulli_user_id) WHERE tautulli_user_id IS NOT NULL;");
+    },
+  },
+  {
+    // Preserve the Tautulli username separately from its stable ID so it can be
+    // shown and manually corrected in the Pacearr user editor.
+    version: 18,
+    up(db) {
+      db.exec("ALTER TABLE users ADD COLUMN tautulli_username TEXT;");
+    },
+  },
+  {
+    // Existing matched Tautulli history already contains the username Pacearr used,
+    // so expose it in the user editor without requiring another import first.
+    version: 19,
+    up(db) {
+      db.exec(`
+        UPDATE users
+        SET tautulli_username = (
+          SELECT username FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id AND username IS NOT NULL AND trim(username) <> ''
+          ORDER BY watched_at DESC, id DESC LIMIT 1
+        )
+        WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
+      `);
+    },
+  },
+  {
+    // Migration 19 shipped before managed-user history used Tautulli's friendly
+    // name as a fallback. Re-run the corrected blank-only backfill for upgrades.
+    version: 20,
+    up(db) {
+      db.exec(`
+        UPDATE users
+        SET tautulli_username = (
+          SELECT COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), ''))
+          FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id
+            AND COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), '')) IS NOT NULL
+          ORDER BY watched_at DESC, id DESC LIMIT 1
+        )
+        WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
