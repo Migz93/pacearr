@@ -363,6 +363,7 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
   useEffect(() => {
     const requestId = ++requestIdRef.current;
     const term = query.trim();
+    setError(null);
     if (term.length < 2) { setShows([]); setLoading(false); return; }
     const timer = setTimeout(() => {
       setLoading(true);

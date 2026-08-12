@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
-import { badgeClass, formatRelativeTime } from "../lib/utils";
+import { badgeClass, cn, formatRelativeTime } from "../lib/utils";
 import { compactPrimaryButtonClass, compactSecondaryButtonClass, Field, NumberField, primaryButtonClass, SaveBar, secondaryButtonClass, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
@@ -655,7 +655,7 @@ function LogsTab() {
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
           </SelectInput>
-          <button type="button" className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 px-3.5 text-on-surface ${autoRefresh ? "bg-primary-dim" : "bg-background-container-high"}`} onClick={() => setAutoRefresh((value) => !value)}>
+          <button type="button" className={cn(secondaryButtonClass, autoRefresh && "bg-primary-dim")} onClick={() => setAutoRefresh((value) => !value)}>
             {autoRefresh ? <Pause size={14} /> : <Play size={14} />} {autoRefresh ? "Pause" : "Resume"}
           </button>
           <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>

@@ -5,6 +5,7 @@ import { apiGet, apiPost } from "./lib/api";
 import Layout from "./components/Layout";
 import { PlexOAuth } from "./lib/plexOAuth";
 import { clientLogger } from "./lib/logger";
+import { primaryButtonClass } from "./components/FormControls";
 import Dashboard from "./pages/Dashboard";
 import Shows from "./pages/Shows";
 import Users from "./pages/Users";
@@ -61,7 +62,7 @@ export default function App() {
       <div className="grid min-h-screen place-items-center p-6">
         <div className="grid justify-items-center gap-4 text-center">
           <p>Unable to load Pacearr. Please try again.</p>
-          <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
+          <button type="button" className={primaryButtonClass} onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
         </div>
       </div>
     );

@@ -32,7 +32,7 @@ function backdateHistoryEvent(dir: string, title: string, createdAt: string) {
   raw.close();
 }
 
-test("findUserByTautulliName prefers an exact username match and refuses to guess between ambiguous display names", () => {
+test("Tautulli resolver prefers an exact username match and refuses to guess between ambiguous display names", () => {
   const { db, cleanup } = createDb();
   try {
     // username has no uniqueness constraint in the schema, and display_name even less
@@ -45,19 +45,20 @@ test("findUserByTautulliName prefers an exact username match and refuses to gues
     ]);
 
     // Exact username match wins even when it would also match another user's display name.
-    assert.equal(db.findUserByTautulliName("alice_h")?.id, alice.id);
-    assert.equal(db.findUserByTautulliName("bob_h")?.id, bob.id);
+    const resolve = db.createTautulliUserResolver();
+    assert.equal(resolve(null, "alice_h")?.id, alice.id);
+    assert.equal(resolve(null, "bob_h")?.id, bob.id);
 
     // Two users share this display name and neither has it as a username — ambiguous,
     // so the lookup must refuse to guess rather than returning whichever row SQLite
     // happens to return first.
-    assert.equal(db.findUserByTautulliName("Kid"), null);
+    assert.equal(resolve(null, "Kid"), null);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie", () => {
+test("Tautulli resolver refuses to guess between two users whose usernames collide case-insensitively, and does not fall through to display_name on that tie", () => {
   const { db, cleanup } = createDb();
   try {
     // The username step used to trust a bare .get() as if a match there always meant
@@ -76,13 +77,13 @@ test("findUserByTautulliName refuses to guess between two users whose usernames 
       // "refused to guess" from "found nothing either way."
       { plexUserId: "plex-kid-3", plexAccountId: "3", tautulliUserId: null, username: "someone-else", displayName: "KID", avatarUrl: null },
     ]);
-    assert.equal(db.findUserByTautulliName("KID"), null);
+    assert.equal(db.createTautulliUserResolver()(null, "KID"), null);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName falls back to an unambiguous display name match", () => {
+test("Tautulli resolver falls back to an unambiguous display name match", () => {
   const { db, cleanup } = createDb();
   try {
     const [carol] = db.upsertUsers([
@@ -90,13 +91,13 @@ test("findUserByTautulliName falls back to an unambiguous display name match", (
     ]);
     // Tautulli reported "Carol" (a custom friendly name), which matches nobody's username
     // but exactly one display_name — the case this method exists for.
-    assert.equal(db.findUserByTautulliName("carol")?.id, carol.id);
+    assert.equal(db.createTautulliUserResolver()(null, "carol")?.id, carol.id);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName matches on the Plex username even when the Tautulli friendly name matches nobody", () => {
+test("Tautulli resolver matches on the Plex username even when the Tautulli friendly name matches nobody", () => {
   const { db, cleanup } = createDb();
   try {
     // Regression for #75: a Tautulli admin can rename the friendly name ("user") freely
@@ -105,13 +106,13 @@ test("findUserByTautulliName matches on the Plex username even when the Tautulli
     const [dave] = db.upsertUsers([
       { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
     ]);
-    assert.equal(db.findUserByTautulliName("dave_plex", "Big Chief Dave")?.id, dave.id);
+    assert.equal(db.createTautulliUserResolver()(null, "dave_plex", "Big Chief Dave")?.id, dave.id);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName falls back to the friendly name when the Plex username matches nobody", () => {
+test("Tautulli resolver falls back to the friendly name when the Plex username matches nobody", () => {
   const { db, cleanup } = createDb();
   try {
     // Managed/Home Plex users have no real Plex.tv username, so Tautulli's `username`
@@ -119,14 +120,15 @@ test("findUserByTautulliName falls back to the friendly name when the Plex usern
     const [erin] = db.upsertUsers([
       { plexUserId: "plex-erin", plexAccountId: "5", tautulliUserId: null, username: "erin_plex", displayName: "Erin", avatarUrl: null },
     ]);
-    assert.equal(db.findUserByTautulliName(null, "Erin")?.id, erin.id);
-    assert.equal(db.findUserByTautulliName("nonexistent_username", "Erin")?.id, erin.id);
+    const resolve = db.createTautulliUserResolver();
+    assert.equal(resolve(null, null, "Erin")?.id, erin.id);
+    assert.equal(resolve(null, "nonexistent_username", "Erin")?.id, erin.id);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user", () => {
+test("Tautulli resolver refuses to guess when the Plex username is ambiguous, even if the friendly name uniquely matches a different user", () => {
   const { db, cleanup } = createDb();
   try {
     db.upsertUsers([
@@ -139,13 +141,13 @@ test("findUserByTautulliName refuses to guess when the Plex username is ambiguou
     // lookup must not fall through to that weaker signal once the stronger one is already
     // ambiguous, or it silently misattributes the event to whoever the friendly name
     // happens to match.
-    assert.equal(db.findUserByTautulliName("Kid", "dave_plex"), null);
+    assert.equal(db.createTautulliUserResolver()(null, "Kid", "dave_plex"), null);
   } finally {
     cleanup();
   }
 });
 
-test("findUserByTautulliName tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself", () => {
+test("Tautulli resolver tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself", () => {
   const { db, cleanup } = createDb();
   try {
     db.upsertUsers([
@@ -159,7 +161,7 @@ test("findUserByTautulliName tries the friendly name when the Plex username only
     // display_name as a fallback — a failed primary lookup, not the kind of conflict on
     // the strong signal that should block trying the independent friendly name, which
     // uniquely identifies Carol here.
-    assert.equal(db.findUserByTautulliName("Kid", "carol87")?.id, carol.id);
+    assert.equal(db.createTautulliUserResolver()(null, "Kid", "carol87")?.id, carol.id);
   } finally {
     cleanup();
   }
@@ -723,8 +725,9 @@ test("mapping a Tautulli identity persists it and links that identity's orphaned
     }]);
     db.mapTautulliUser(dave.id, "47", "Different Tautulli Name");
     assert.equal(db.linkUnassignedTautulliWatchEvents(dave.id, "47"), 1);
-    assert.equal(db.findUserByTautulliIdentity("47", "renamed-again")?.id, dave.id);
-    assert.equal(db.findUserByTautulliIdentity(null, "Different Tautulli Name")?.id, dave.id);
+    const resolve = db.createTautulliUserResolver();
+    assert.equal(resolve("47", "renamed-again")?.id, dave.id);
+    assert.equal(resolve(null, "Different Tautulli Name")?.id, dave.id);
     assert.equal(db.getUser(dave.id)?.tautulliUsername, "Different Tautulli Name");
     assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 5, watchedAt: "2026-04-13T10:00:00.000Z" }]);
     assert.deepEqual(db.listUnmappedTautulliUsers(), []);
@@ -796,7 +799,7 @@ test("an ambiguous saved Tautulli username is never resolved through a weaker fa
 
     // A friendly-name hit for Carol must not override the ambiguous stronger
     // saved-name signal for Kid — that could assign history to the wrong viewer.
-    assert.equal(db.findUserByTautulliIdentity(null, "KID", "Carol's Tautulli"), null);
+    assert.equal(db.createTautulliUserResolver()(null, "KID", "Carol's Tautulli"), null);
   } finally {
     cleanup();
   }

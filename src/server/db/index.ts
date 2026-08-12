@@ -637,18 +637,11 @@ export class PacearrDatabase {
    * display_name during the username candidate's own fallback step doesn't get the same
    * treatment — that's a failed primary lookup, not a genuine conflict on the strong
    * signal, so the friendly name (an independent identifier that may resolve cleanly) is
-   * still worth trying. This used to check a `tautulli_user_id` column first, but nothing
-   * ever populated it: discovery inserts NULL and there was no UI to set one, so that
-   * branch could never match. The column is left in place rather than migrated away.
+   * still worth trying. Discovery inserts no Tautulli identity; administrators add stable
+   * mappings explicitly. A stable mapped ID and a manually saved Tautulli username take
+   * priority when present; ambiguous saved or Plex usernames still stop matching rather
+   * than falling through to a weaker name.
    */
-  findUserByTautulliName(username?: string | null, friendlyName?: string | null): UserRecord | null {
-    return this.createTautulliUserResolver()(null, username, friendlyName);
-  }
-
-  findUserByTautulliIdentity(tautulliUserId: string | null, username?: string | null, friendlyName?: string | null): UserRecord | null {
-    return this.createTautulliUserResolver()(tautulliUserId, username, friendlyName);
-  }
-
   createTautulliUserResolver(): (tautulliUserId: string | null, username?: string | null, friendlyName?: string | null) => UserRecord | null {
     const users = this.listUsers();
     const byTautulliId = new Map(users.filter((user) => user.tautulliUserId).map((user) => [user.tautulliUserId!, user]));
