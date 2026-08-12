@@ -732,6 +732,26 @@ test("mapping a Tautulli identity persists it and links that identity's orphaned
   }
 });
 
+test("an ambiguous saved Tautulli username is never resolved through a weaker fallback", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice, bob, carol] = db.upsertUsers([
+      { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
+      { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol", displayName: "Carol", avatarUrl: null },
+    ]);
+    db.updateUser(alice.id, { tautulliUsername: "Kid" });
+    db.updateUser(bob.id, { tautulliUsername: "kid" });
+    db.updateUser(carol.id, { tautulliUsername: "Carol's Tautulli" });
+
+    // A friendly-name hit for Carol must not override the ambiguous stronger
+    // saved-name signal for Kid — that could assign history to the wrong viewer.
+    assert.equal(db.findUserByTautulliIdentity(null, "KID", "Carol's Tautulli"), null);
+  } finally {
+    cleanup();
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {

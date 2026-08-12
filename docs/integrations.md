@@ -158,12 +158,13 @@ Tautulli is useful when it has longer or more reliable local watch history than 
 | `username` | The real Plex username. Empty for Plex Home/managed users. | Tried first |
 | `user` | The friendly name, editable per user in Tautulli's admin UI at any time. | Fallback only |
 
-Matching order, against Pacearr's `users.username` then `users.display_name` (both sourced from Plex, case-insensitively):
+Matching is case-insensitive and follows this order:
 
 1. A manually saved Tautulli `user_id` mapping wins outright. The Users page lists unmatched Tautulli identities in a collapsed section; mapping one saves its stable ID and displayed username against the Pacearr user, then re-links its stored unmatched history. The editable Tautulli user field is a fallback if the stable ID is unavailable.
-2. Try `username`. An unambiguous match wins outright.
-3. A `username` match that is ambiguous (colliding case-insensitively across multiple Pacearr users) stops the lookup — the friendly name is not tried, since a coincidental match there could attribute the event to an unrelated third user.
-4. If `username` produced no match at all (not ambiguous, just nothing), try the friendly name the same way.
+2. Try the saved editable Tautulli username against the event `username`, then `user`. An ambiguous saved-name match stops the lookup rather than guessing.
+3. Try `username` against Pacearr's Plex-sourced `users.username` then `users.display_name`. An unambiguous match wins outright.
+4. A `username` match that is ambiguous (colliding case-insensitively across multiple Pacearr users) stops the lookup — the friendly name is not tried, since a coincidental match there could attribute the event to an unrelated third user.
+5. If `username` produced no match at all (not ambiguous, just nothing), try the friendly name the same way.
 
 A duplicate event (same `source_event_id`) that was previously imported with `user_id = NULL` is repaired in place once a later import resolves a match, and that user's rolling progress is refreshed — otherwise `INSERT OR IGNORE` would leave it orphaned forever.
 

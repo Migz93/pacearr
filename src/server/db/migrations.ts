@@ -316,6 +316,8 @@ const migrations: Migration[] = [
     },
   },
   {
+    // Preserve the Tautulli username separately from its stable ID so it can be
+    // shown and manually corrected in the Pacearr user editor.
     version: 18,
     up(db) {
       db.exec("ALTER TABLE users ADD COLUMN tautulli_username TEXT;");

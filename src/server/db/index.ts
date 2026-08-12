@@ -629,6 +629,10 @@ export class PacearrDatabase {
       if (!name) continue;
       const rows = this.db.prepare("SELECT * FROM users WHERE lower(tautulli_username) = lower(?)").all(name);
       if (rows.length === 1) return userFromRow(rows[0]);
+      // A manually entered name is an explicit link. On a collision, refusing to
+      // fall through mirrors the Plex-name matcher below and avoids assigning the
+      // event to a different user through a weaker signal.
+      if (rows.length > 1) return null;
     }
     return this.findUserByTautulliName(username, friendlyName);
   }

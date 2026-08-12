@@ -92,6 +92,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `findUserByTautulliName` tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself | Blocking the friendly-name fallback was only meant for a genuine conflict on the strong signal (the real username field) — an ambiguous display_name match during that same lookup's own fallback step is just a failed primary lookup, and the independent friendly name can still resolve it |
 | A previously orphaned Tautulli watch event can be repaired once its user resolves | Regression for #75 — `INSERT OR IGNORE` means a duplicate event is silently skipped forever unless something explicitly repairs its `user_id`; also locks in that repairing an already-assigned event is a no-op, not a re-attribution |
 | Mapping a Tautulli identity persists it and links that identity's orphaned history | The Users-page mapping stores Tautulli's stable user ID, makes it the preferred future match despite a renamed username, and assigns previously unmatched events so their progress is available again |
+| An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
