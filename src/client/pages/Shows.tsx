@@ -364,8 +364,9 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
     const term = query.trim();
     setError(null);
     if (term.length < 2) { setShows([]); setLoading(false); return; }
+    setShows([]);
+    setLoading(true);
     const timer = setTimeout(() => {
-      setLoading(true);
       apiGet<{ shows: ShowListItem[] }>(`/api/shows?query=${encodeURIComponent(term)}`)
         .then((data) => { if (requestId === requestIdRef.current) setShows(data.shows.filter((show) => !show.enrolled)); })
         .catch((caught) => { if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught)); })

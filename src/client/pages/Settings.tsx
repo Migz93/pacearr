@@ -853,7 +853,7 @@ function AboutTab() {
     <div className="grid gap-4">
       <SectionCard title="About Pacearr">
         <div className="grid gap-2.5">
-          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-primary hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
+          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
           <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
           {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
@@ -864,7 +864,7 @@ function AboutTab() {
       </SectionCard>
       <SectionCard title="Getting support">
         <div className="grid gap-2.5">
-          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-primary hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
+          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
           <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
