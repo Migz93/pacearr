@@ -31,6 +31,7 @@ export default function Users() {
   const [unmappedOpen, setUnmappedOpen] = useState(false);
   const [unmappedTautulliUsers, setUnmappedTautulliUsers] = useState<UnmappedTautulliUser[]>([]);
   const [mappingId, setMappingId] = useState<string | null>(null);
+  const [mappingSelections, setMappingSelections] = useState<Record<string, string>>({});
   const [showsUserId, setShowsUserId] = useState<number | null>(null);
   const [editUserId, setEditUserId] = useState<number | null>(null);
 
@@ -69,6 +70,7 @@ export default function Users() {
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setMappingSelections((current) => ({ ...current, [tautulliUser.tautulliUserId]: "" }));
     } finally {
       setMappingId(null);
     }
@@ -186,10 +188,15 @@ export default function Users() {
                   </div>
                   <select
                     className="min-h-10 rounded-lg border border-outline-variant/30 bg-background-container-high px-3 text-sm text-on-surface"
-                    defaultValue=""
+                    value={mappingSelections[tautulliUser.tautulliUserId] ?? ""}
                     disabled={mappingId === tautulliUser.tautulliUserId}
                     aria-label={`Map ${tautulliDisplayName(tautulliUser)} to a Pacearr user`}
-                    onChange={(event) => { const userId = Number(event.target.value); if (userId) void mapTautulliUser(tautulliUser, userId); }}
+                    onChange={(event) => {
+                      const selectedUserId = event.target.value;
+                      setMappingSelections((current) => ({ ...current, [tautulliUser.tautulliUserId]: selectedUserId }));
+                      const userId = Number(selectedUserId);
+                      if (userId) void mapTautulliUser(tautulliUser, userId);
+                    }}
                   >
                     <option value="">{mappingId === tautulliUser.tautulliUserId ? "Mapping..." : "Map to Pacearr user..."}</option>
                     {users.map((user) => <option key={user.id} value={user.id}>{user.displayName} ({user.username})</option>)}
