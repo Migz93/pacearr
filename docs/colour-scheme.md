@@ -81,6 +81,7 @@ All text/background pairings in active use pass WCAG AA (4.5:1 for normal text).
 | `on-surface` on `primary-dim` | Buttons, badges | 7.0:1 (AAA) |
 | `on-surface` on `primary` | Hover state | 4.6:1 (AA) |
 | `success` on tinted `success/18` badge fill | Status badges, worst case `background-container-high` | 5.2:1 (AA) |
+| `on-surface` on tinted `success/28` badge fill | Current-release badge | 10.4:1 (AAA) |
 | `warning` on tinted `warning/16` badge fill | Status badges, worst case `background-container-high` | 5.7:1 (AA) |
 | `error` on tinted `error/15` badge fill | Status badges, worst case `background-container-high` | 4.6:1 (AA) |
 

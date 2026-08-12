@@ -634,7 +634,7 @@ function LogsTab() {
               <InfoRow label="Message"><span>{activeLog.message}</span></InfoRow>
               {activeLog.meta !== undefined && <InfoRow label="Meta"><pre className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{JSON.stringify(activeLog.meta, null, 2)}</pre></InfoRow>}
             </div>
-            <div className="mt-4 flex justify-end"><button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
+            <div className="mt-4 flex justify-end"><button type="button" className={secondaryButtonClass} onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
           </div>
         </div>
       )}
@@ -876,7 +876,7 @@ function AboutTab() {
                 <div className="flex min-w-0 items-center gap-2">
                   <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-sm">{releaseTitle(release)}</strong>
                   {index === 0 && <span className={badgeClass("success")}>Latest</span>}
-                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className={badgeClass()}>Current</span>}
+                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className={badgeClass("successStrong")}>Current</span>}
                 </div>
                 {release.published_at && <small className="text-xs text-on-surface-variant">{new Date(release.published_at).toLocaleDateString()}</small>}
               </div>
