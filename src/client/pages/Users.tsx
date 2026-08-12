@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { formatRelativeTime } from "../lib/utils";
 import { Avatar } from "../components/Avatar";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, iconButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type { UnmappedTautulliUser, UserListItem, UserShowActivity } from "../../shared/types";
@@ -376,7 +376,7 @@ function DialogShell({ titleId, title, subtitle, user, maxWidth, dialogRef, onCl
               {subtitle && <p className="text-xs text-on-surface-variant">{subtitle}</p>}
             </div>
           </div>
-          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <button type="button" className={iconButtonClass} onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
         {children}
       </div>

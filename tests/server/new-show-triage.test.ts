@@ -84,8 +84,8 @@ test("new-show triage ignores existing series and searches a new series at the 8
 
     const commands = requests.filter((request) => request.pathname === "/api/v3/command");
     assert.deepEqual(commands.map((request) => JSON.parse(request.body ?? "{}")), [{ name: "SeriesSearch", seriesId: 2 }]);
-    assert.equal(db.hasKnownNewShowTriage(1), true);
-    assert.equal(db.hasKnownNewShowTriage(2), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(1), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(2), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -104,7 +104,7 @@ test("new-show triage enrolls a series over the episode limit instead of running
 
     assert.ok(db.getRollingShowBySeriesId(3));
     assert.equal(requests.some((request) => request.pathname === "/api/v3/command" && request.body?.includes("SeriesSearch")), false);
-    assert.equal(db.hasKnownNewShowTriage(3), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(3), true);
     assert.equal(state.series[0]?.monitored, true);
     assert.equal(state.series[0]?.monitorNewItems, "none");
   } finally {
@@ -120,7 +120,7 @@ test("dry-run triage remains pending for live mode and a completed decision is n
   try {
     enableTriage(db, "2026-08-11T12:00:00.000Z", true);
     await services.triageNewSonarrSeries();
-    assert.equal(db.hasKnownNewShowTriage(4), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(4), false);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
 
     db.updateAppSettings({ dryRun: false });
@@ -128,7 +128,7 @@ test("dry-run triage remains pending for live mode and a completed decision is n
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
-    assert.equal(db.hasKnownNewShowTriage(4), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(4), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -143,7 +143,7 @@ test("dry-run does not persist a fallback baseline that could suppress a later l
   try {
     enableTriage(db, "2026-08-11T12:00:00.000Z", true);
     await services.triageNewSonarrSeries();
-    assert.equal(db.hasKnownNewShowTriage(11), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(11), false);
     assert.equal(db.getNewShowTriageFallbackBaselineAt(), null);
 
     state.series = [series(11, "New without added", 1, "2026-08-11T12:00:01.000Z")];
@@ -151,7 +151,7 @@ test("dry-run does not persist a fallback baseline that could suppress a later l
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
-    assert.equal(db.hasKnownNewShowTriage(11), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(11), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -173,7 +173,7 @@ test("an activation that changes during a Sonarr poll does not triage using the 
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
-    assert.equal(db.hasKnownNewShowTriage(12), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(12), false);
     assert.equal(db.getNewShowTriageFallbackBaselineAt(), null);
   } finally {
     restoreFetch();
@@ -189,14 +189,14 @@ test("new-show triage uses a first-poll ID baseline when Sonarr omits added", as
   try {
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     await services.triageNewSonarrSeries();
-    assert.equal(db.hasKnownNewShowTriage(5), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(5), true);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
 
     state.series = [...state.series, series(6, "Later without added", 1)];
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
-    assert.equal(db.hasKnownNewShowTriage(6), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(6), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -211,7 +211,7 @@ test("a pre-existing series remains ignored when its added field disappears", as
   try {
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     await services.triageNewSonarrSeries();
-    assert.equal(db.hasKnownNewShowTriage(10), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(10), true);
 
     state.series = [series(10, "Existing", 1)];
     await services.triageNewSonarrSeries();
@@ -235,8 +235,8 @@ test("a failed new-show triage does not block later arrivals", async () => {
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     await services.triageNewSonarrSeries();
 
-    assert.equal(db.hasKnownNewShowTriage(7), false);
-    assert.equal(db.hasKnownNewShowTriage(8), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(7), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(8), true);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 2);
     assert.equal(db.listHistory().some((event) => event.action === "show.auto_triage" && event.level === "warn"), true);
   } finally {
@@ -256,7 +256,7 @@ test("new-show triage leaves a manual enrollment alone", async () => {
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.some((request) => request.method === "PUT" || request.pathname === "/api/v3/command"), false);
-    assert.equal(db.hasKnownNewShowTriage(13), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(13), true);
     assert.equal(db.hasPendingNewShowTriageEnrollment(13), false);
   } finally {
     restoreFetch();
@@ -281,7 +281,7 @@ test("a failed automatic enrollment cannot mark a later manual enrollment as pen
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.some((request) => request.method === "PUT"), false);
-    assert.equal(db.hasKnownNewShowTriage(15), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(15), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -335,7 +335,7 @@ test("unenrolling a partial automatic enrollment clears its pending marker", asy
     await services.triageNewSonarrSeries();
 
     assert.equal(requests.filter((request) => request.method === "PUT").length, mutationsBeforeTriage);
-    assert.equal(db.hasKnownNewShowTriage(17), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(17), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -356,12 +356,12 @@ test("new-show triage waits for another series operation before starting a full 
     assert.notEqual(operation, null);
     await services.triageNewSonarrSeries();
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 0);
-    assert.equal(db.hasKnownNewShowTriage(14), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(14), false);
 
     operations.releaseSeriesOperation(14, operation as number);
     await services.triageNewSonarrSeries();
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command").length, 1);
-    assert.equal(db.hasKnownNewShowTriage(14), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(14), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -381,14 +381,14 @@ test("retrying a partial large-show enrollment resumes without duplicating enrol
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     await services.triageNewSonarrSeries();
     assert.ok(db.getRollingShowBySeriesId(9));
-    assert.equal(db.hasKnownNewShowTriage(9), false);
+    assert.equal(db.listKnownNewShowTriageIds().has(9), false);
     assert.equal(db.hasPendingNewShowTriageEnrollment(9), true);
     assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
 
     state.failingSeriesUpdateIds.clear();
     await services.triageNewSonarrSeries();
 
-    assert.equal(db.hasKnownNewShowTriage(9), true);
+    assert.equal(db.listKnownNewShowTriageIds().has(9), true);
     assert.equal(db.hasPendingNewShowTriageEnrollment(9), false);
     assert.equal(db.listHistory().filter((event) => event.action === "show.enrolled").length, 1);
     assert.equal(state.series[0]?.monitored, true);

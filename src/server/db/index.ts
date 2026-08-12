@@ -376,10 +376,6 @@ export class PacearrDatabase {
     return generatedAt;
   }
 
-  hasKnownNewShowTriage(seriesId: number): boolean {
-    return this.listKnownNewShowTriageIds().has(seriesId);
-  }
-
   listKnownNewShowTriageIds(): Set<number> {
     return new Set((this.db.prepare("SELECT sonarr_series_id FROM new_show_triage").all() as Array<{ sonarr_series_id: number }>)
       .map((row) => row.sonarr_series_id));
