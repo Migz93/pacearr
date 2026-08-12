@@ -613,6 +613,31 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.get("/api/users", requireAuth, asyncRoute(async (_req, res) => {
     res.json({ users: await services.listUsers() });
   }));
+  app.get("/api/users/unmapped-tautulli", requireAuth, (_req, res) => {
+    res.json({ users: services.listUnmappedTautulliUsers() });
+  });
+  app.post("/api/users/:id/tautulli", requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const tautulliUserId = typeof req.body?.tautulliUserId === "string" ? req.body.tautulliUserId.trim() : "";
+    const tautulliUsername = typeof req.body?.tautulliUsername === "string" ? req.body.tautulliUsername.trim() || null : null;
+    if (!Number.isInteger(id) || id <= 0 || !tautulliUserId) {
+      res.status(400).json({ error: "A valid user and Tautulli user ID are required." });
+      return;
+    }
+    if (!db.getUser(id)) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
+    try {
+      res.json(services.mapTautulliUser(id, tautulliUserId, tautulliUsername));
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+        res.status(409).json({ error: "That Tautulli user is already mapped to another Pacearr user." });
+        return;
+      }
+      throw error;
+    }
+  });
   app.post("/api/users/discover", requireAuth, asyncRoute(async (_req, res) => {
     const discovered = await services.discoverPlexUsers();
     logger.info("Plex user discovery requested", { users: discovered.length });
@@ -643,16 +668,23 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // patch.enabled ?? current.enabled can do its job. And Boolean(value) on a value
     // that IS present would accept any truthy non-boolean ("no", {}, ...) as true, so a
     // present field must be an actual boolean rather than merely coerced.
-    const body = req.body as { enabled?: unknown };
+    const body = req.body as { enabled?: unknown; tautulliUsername?: unknown };
     if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
       res.status(400).json({ error: "enabled must be a boolean." });
+      return;
+    }
+    if (body.tautulliUsername !== undefined && typeof body.tautulliUsername !== "string" && body.tautulliUsername !== null) {
+      res.status(400).json({ error: "tautulliUsername must be a string or null." });
       return;
     }
     if (!db.getUser(id)) {
       res.status(404).json({ error: "User not found." });
       return;
     }
-    const patch: Partial<Pick<UserRecord, "enabled">> = body.enabled !== undefined ? { enabled: body.enabled } : {};
+    const patch: Partial<Pick<UserRecord, "enabled" | "tautulliUsername">> = {
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      ...(body.tautulliUsername !== undefined ? { tautulliUsername: body.tautulliUsername?.trim() || null } : {}),
+    };
     const user = db.updateUser(id, patch);
     logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });

@@ -149,6 +149,8 @@ export interface UserRecord {
   plexUserId: string;
   plexAccountId: string | null;
   tautulliUserId: string | null;
+  /** The Tautulli username shown and editable in Pacearr's user settings. */
+  tautulliUsername?: string | null;
   username: string;
   displayName: string;
   avatarUrl: string | null;
@@ -162,6 +164,15 @@ export interface UserListItem extends UserRecord {
   activeShowCount: number;
   /** Most recent watch on any enrolled show, regardless of the activity window. */
   lastWatchedAt: string | null;
+}
+
+/** A Tautulli identity whose stored history has not yet been linked to a Plex user. */
+export interface UnmappedTautulliUser {
+  tautulliUserId: string;
+  username: string | null;
+  friendlyName: string | null;
+  eventCount: number;
+  lastWatchedAt: string;
 }
 
 export interface UserShowActivity {

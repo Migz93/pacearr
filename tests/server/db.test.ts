@@ -704,6 +704,34 @@ test("a previously orphaned Tautulli watch event can be repaired once its user r
   }
 });
 
+test("mapping a Tautulli identity persists it and links that identity's orphaned history", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [dave] = db.upsertUsers([
+      { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
+    ]);
+    db.insertWatchEvent({
+      source: "tautulli", sourceEventId: "tautulli-orphan-mapping", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 5,
+      watchedAt: "2026-04-13T10:00:00.000Z", rawPayload: { user_id: 47, user: "Different Tautulli Name" },
+    });
+
+    assert.deepEqual(db.listUnmappedTautulliUsers(), [{
+      tautulliUserId: "47", username: "Different Tautulli Name", friendlyName: "Different Tautulli Name", eventCount: 1,
+      lastWatchedAt: "2026-04-13T10:00:00.000Z",
+    }]);
+    db.mapTautulliUser(dave.id, "47", "Different Tautulli Name");
+    assert.equal(db.linkUnassignedTautulliWatchEvents(dave.id, "47"), 1);
+    assert.equal(db.findUserByTautulliIdentity("47", "renamed-again")?.id, dave.id);
+    assert.equal(db.findUserByTautulliIdentity(null, "Different Tautulli Name")?.id, dave.id);
+    assert.equal(db.getUser(dave.id)?.tautulliUsername, "Different Tautulli Name");
+    assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 5, watchedAt: "2026-04-13T10:00:00.000Z" }]);
+    assert.deepEqual(db.listUnmappedTautulliUsers(), []);
+  } finally {
+    cleanup();
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {

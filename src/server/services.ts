@@ -16,6 +16,7 @@ import type {
   SonarrSeries,
   UserListItem,
   UserShowActivity,
+  UnmappedTautulliUser,
 } from "../shared/types.js";
 import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
@@ -292,6 +293,21 @@ export class PacearrServices {
     // which gates the same way for the card this dialog opens from.
     const enabled = this.db.getUser(userId)?.enabled ?? false;
     return this.db.listShowsDrivenByUser(userId).map((show) => ({ ...show, active: enabled && show.seasonNumber > 0 && show.watchedAt >= cutoff }));
+  }
+
+  listUnmappedTautulliUsers(): UnmappedTautulliUser[] {
+    return this.db.listUnmappedTautulliUsers();
+  }
+
+  mapTautulliUser(userId: number, tautulliUserId: string, tautulliUsername: string | null): { linkedEvents: number } {
+    this.db.mapTautulliUser(userId, tautulliUserId, tautulliUsername);
+    const linkedEvents = this.db.linkUnassignedTautulliWatchEvents(userId, tautulliUserId);
+    for (const progress of this.db.listLatestWatchProgressForUser(userId)) {
+      const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
+      if (rolling) this.db.upsertRollingUserProgress(rolling.id, userId, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
+    }
+    this.logger.info("Mapped Tautulli user to Pacearr user", { userId, tautulliUserId, tautulliUsername, linkedEvents });
+    return { linkedEvents };
   }
 
   private activityCutoff(): string {
@@ -1149,20 +1165,34 @@ export class PacearrServices {
    */
   private insertImmediateWatchEvents(
     prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }>
-  ): { imported: number; matched: number; unmatched: number; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[] } {
+  ): { imported: number; matched: number; unmatched: number; unmatchedInputs: NormalizedWatchEventInput[]; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[] } {
     const immediate = prepared.filter((item) => !item.applyRolling).map((item) => item.input);
     const rolling = prepared.filter((item) => item.applyRolling).map((item) => item.input);
     const results = this.db.insertWatchEventsBatch(immediate);
     let imported = 0;
     let matched = 0;
     let unmatched = 0;
+    const unmatchedInputs: NormalizedWatchEventInput[] = [];
     const duplicates: NormalizedWatchEventInput[] = [];
     for (let index = 0; index < immediate.length; index++) {
       if (!results[index]!.inserted) { duplicates.push(immediate[index]!); continue; }
       imported++;
-      if (immediate[index]!.sonarrSeriesId) matched++; else unmatched++;
+      if (immediate[index]!.userId && immediate[index]!.sonarrSeriesId) matched++; else { unmatched++; unmatchedInputs.push(immediate[index]!); }
     }
-    return { imported, matched, unmatched, rolling, duplicates };
+    return { imported, matched, unmatched, unmatchedInputs, rolling, duplicates };
+  }
+
+  private logUnmatchedWatchEvent(input: NormalizedWatchEventInput): void {
+    if (input.userId && input.sonarrSeriesId) return;
+    this.logger.debug("Watch event did not fully match", {
+      source: input.source,
+      username: input.username,
+      showTitle: input.showTitle,
+      seasonNumber: input.seasonNumber,
+      episodeNumber: input.episodeNumber,
+      userMatched: Boolean(input.userId),
+      seriesMatched: Boolean(input.sonarrSeriesId),
+    });
   }
 
   private async prefetchNextSeason(input: NormalizedWatchEventInput, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
@@ -1217,6 +1247,7 @@ export class PacearrServices {
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     if (!stored.inserted) return { inserted: false, changed: false, progressUpdated: false };
+    this.logUnmatchedWatchEvent(input);
     // Complete history is retained for audit and the History tab, but replaying
     // old pilot watches must not expand seasons or retrigger Sonarr actions.
     if (!applyRolling) return { inserted: true, changed: false, progressUpdated: false };
@@ -1356,11 +1387,12 @@ export class PacearrServices {
       imported += counts.imported;
       matched += counts.matched;
       unmatched += counts.unmatched;
+      counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
       for (const input of counts.rolling) {
         const result = await this.processWatchEvent(input, "plex-history", true, episodeCache);
         if (result.inserted) {
           imported++;
-          if (input.sonarrSeriesId) matched++; else unmatched++;
+          if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
         }
         if (result.changed) changed++;
       }
@@ -1379,8 +1411,10 @@ export class PacearrServices {
       try {
         const tautulliEvents = await new TautulliIntegration(tautulliSettings, this.logger).getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
+        const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         for (const event of tautulliEvents) {
-          const user = this.db.findUserByTautulliName(event.username, event.friendlyName);
+          const user = this.db.findUserByTautulliIdentity(event.userId, event.username, event.friendlyName);
+          if (user) tautulliUsernames.push({ userId: user.id, username: event.username ?? event.friendlyName });
           const series = await this.matchSeries(event, seriesIndex);
           prepared.push({
             input: {
@@ -1399,11 +1433,13 @@ export class PacearrServices {
             applyRolling: !full && new Date(event.watchedAt).getTime() >= activityCutoff,
           });
         }
+        this.db.fillMissingTautulliUsernames(tautulliUsernames);
         processed += prepared.length;
         const counts = this.insertImmediateWatchEvents(prepared);
         imported += counts.imported;
         matched += counts.matched;
         unmatched += counts.unmatched;
+        counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
         const repairedUserIds = new Set<number>();
         // A duplicate here means this exact event was already imported — most commonly
         // before it could be matched to a Pacearr user, since #75 let the old friendly-name
@@ -1419,7 +1455,7 @@ export class PacearrServices {
           const result = await this.processWatchEvent(input, "tautulli", true, episodeCache);
           if (result.inserted) {
             imported++;
-            if (input.sonarrSeriesId) matched++; else unmatched++;
+            if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
           } else if (input.userId && this.db.repairUnmatchedTautulliWatchEvent(input.sourceEventId, input.userId)) {
             repairedUserIds.add(input.userId);
             changed++;
