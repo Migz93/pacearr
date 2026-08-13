@@ -33,19 +33,28 @@ function sanitizeMeta(value: unknown): unknown {
     }
     return false;
   }
-  const json = JSON.stringify(value, function (this: unknown, _key, val: unknown) {
-    if (typeof val === "bigint") return val.toString();
-    if (typeof val === "object" && val !== null) {
-      if (isAncestor(val, this)) return "[Circular]";
-      parentOf.set(val, this);
-    }
-    return val;
-  });
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(value, function (this: unknown, _key, val: unknown) {
+      if (typeof val === "bigint") return val.toString();
+      if (typeof val === "object" && val !== null) {
+        if (isAncestor(val, this)) return "[Circular]";
+        parentOf.set(val, this);
+      }
+      return val;
+    });
+  } catch {
+    return undefined;
+  }
   // A root value with no JSON representation (a bare function or Symbol) makes
   // JSON.stringify return undefined rather than a string - JSON.parse(undefined) would
   // throw SyntaxError before winston ever sees the entry. Treat it the same as no meta at
   // all instead, since there's nothing meaningful to log.
-  return json === undefined ? undefined : JSON.parse(json);
+  try {
+    return json === undefined ? undefined : JSON.parse(json);
+  } catch {
+    return undefined;
+  }
 }
 
 // Matches hubarr's log architecture exactly: a human-readable, pretty-printed file for

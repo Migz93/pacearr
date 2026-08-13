@@ -25,10 +25,10 @@ deployment *is*, not how to drive it.
 
 ## Persistent Data
 
-Everything Pacearr keeps — config, SQLite database, artwork backups, image cache, logs — lives in `/config`,
-bind-mounted from `/opt/pacearr` on the host. Keep it flat; don't add
-`config/`, `data/`, or `logs/` subdirectories. Don't use named Docker volumes for
-this app; the user needs host-visible files.
+Everything Pacearr keeps — config, SQLite database, artwork backups, and image cache — lives directly in `/config`,
+bind-mounted from `/opt/pacearr` on the host. Pacearr creates `/config/logs` for
+application logs; do not add other `config/` or `data/` subdirectories. Don't use
+named Docker volumes for this app; the user needs host-visible files.
 
 ## Container User
 

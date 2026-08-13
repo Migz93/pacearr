@@ -6,7 +6,8 @@ export const MAX_SCHEDULE_INTERVAL_DAYS = MAX_SCHEDULE_INTERVAL_HOURS / 24;
 
 function normaliseScheduleInterval(value: unknown, fallback: number, maximum: number): number {
   const parsed = Number(value);
-  return Math.min(maximum, Math.max(1, Math.floor(Number.isFinite(parsed) ? parsed : fallback)));
+  const candidate = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Math.min(maximum, Math.max(1, Math.floor(candidate)));
 }
 
 export function normaliseScheduleIntervalMinutes(value: unknown, fallbackMinutes: number): number {

@@ -35,7 +35,10 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
   const [belowMdBreakpoint, setBelowMdBreakpoint] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 767px)");
-    const updateBreakpoint = () => setBelowMdBreakpoint(mediaQuery.matches);
+    const updateBreakpoint = () => {
+      setBelowMdBreakpoint(mediaQuery.matches);
+      if (!mediaQuery.matches) setMobileOpen(false);
+    };
     updateBreakpoint();
     mediaQuery.addEventListener("change", updateBreakpoint);
     return () => mediaQuery.removeEventListener("change", updateBreakpoint);

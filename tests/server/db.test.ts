@@ -88,9 +88,10 @@ test("Tautulli resolver refuses to guess between two users whose usernames colli
 test("Tautulli resolver falls back to an unambiguous display name match", () => {
   const { db, cleanup } = createDb();
   try {
-    const [carol] = db.upsertUsers([
+    db.upsertUsers([
       { plexUserId: "plex-carol", plexAccountId: "3", tautulliUserId: null, username: "carol87", displayName: "Carol", avatarUrl: null },
     ]);
+    const carol = db.listUsers().find((user) => user.plexUserId === "plex-carol")!;
     // Tautulli reported "Carol" (a custom friendly name), which matches nobody's username
     // but exactly one display_name — the case this method exists for.
     assert.equal(db.createTautulliUserResolver()(null, "carol")?.id, carol.id);
@@ -747,6 +748,22 @@ test("mapping cannot replace a user's existing Tautulli identity", () => {
     db.mapTautulliUser(dave.id, "47", "Dave on Tautulli");
     assert.throws(() => db.mapTautulliUser(dave.id, "48", "Different Dave"), /Tautulli user mapping conflict/);
     assert.equal(db.getUser(dave.id)?.tautulliUserId, "47");
+  } finally {
+    cleanup();
+  }
+});
+
+test("mapping rejects a Tautulli identity already assigned to another user", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const [alice, bob] = db.upsertUsers([
+      { plexUserId: "plex-alice-conflict", plexAccountId: "47", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null },
+      { plexUserId: "plex-bob-conflict", plexAccountId: "48", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
+    ]);
+    db.mapTautulliUser(alice.id, "tautulli-47", "Alice on Tautulli");
+    assert.throws(() => db.mapTautulliUser(bob.id, "tautulli-47", "Alice on Tautulli"), /Tautulli identity already mapped/);
+    assert.equal(db.getUser(alice.id)?.tautulliUserId, "tautulli-47");
+    assert.equal(db.getUser(bob.id)?.tautulliUserId, null);
   } finally {
     cleanup();
   }

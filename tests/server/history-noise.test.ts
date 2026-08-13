@@ -94,6 +94,7 @@ test("a session check that only advances a viewer's progress, without expanding 
       { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
     ]);
     const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
+    db.updateAppSettings({ earlyPrefetchEnabled: false });
     // A watch of episode 2 already resolves at a newer timestamp than this seed, so
     // upsertRollingUserProgress persists a change. It isn't a premiere (skips
     // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason

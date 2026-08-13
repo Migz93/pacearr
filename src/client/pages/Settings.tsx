@@ -107,10 +107,14 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   );
 }
 
-type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount" | "newShowTriageEpisodeThreshold"> & {
+type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount" | "newShowTriageEpisodeThreshold" | "viewerActivityWindowDays" | "historyRetentionDays" | "progressiveCleanupDelayDays" | "recommendationMinimumSavingsGb"> & {
   earlyPrefetchTriggerEpisodesRemaining: string;
   earlyPrefetchEpisodeCount: string;
   newShowTriageEpisodeThreshold: string;
+  viewerActivityWindowDays: string;
+  historyRetentionDays: string;
+  progressiveCleanupDelayDays: string;
+  recommendationMinimumSavingsGb: string;
 };
 
 function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
@@ -119,6 +123,10 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
     earlyPrefetchTriggerEpisodesRemaining: String(app.earlyPrefetchTriggerEpisodesRemaining),
     earlyPrefetchEpisodeCount: String(app.earlyPrefetchEpisodeCount),
     newShowTriageEpisodeThreshold: String(app.newShowTriageEpisodeThreshold),
+    viewerActivityWindowDays: String(app.viewerActivityWindowDays),
+    historyRetentionDays: String(app.historyRetentionDays),
+    progressiveCleanupDelayDays: String(app.progressiveCleanupDelayDays),
+    recommendationMinimumSavingsGb: String(app.recommendationMinimumSavingsGb),
   };
 }
 
@@ -138,6 +146,12 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
+      // Number("") is 0, which is valid for two of these settings. Preserve an empty
+      // field as invalid instead of silently saving it as a real zero.
+      const viewerActivityWindowDays = form.viewerActivityWindowDays.trim() === "" ? Number.NaN : Number(form.viewerActivityWindowDays);
+      const historyRetentionDays = form.historyRetentionDays.trim() === "" ? Number.NaN : Number(form.historyRetentionDays);
+      const progressiveCleanupDelayDays = form.progressiveCleanupDelayDays.trim() === "" ? Number.NaN : Number(form.progressiveCleanupDelayDays);
+      const recommendationMinimumSavingsGb = form.recommendationMinimumSavingsGb.trim() === "" ? Number.NaN : Number(form.recommendationMinimumSavingsGb);
       if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
         setError("Early prefetch values must be positive whole numbers.");
         return;
@@ -150,19 +164,19 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
       // without this check it fails silently: the field just snaps to the clamped number
       // after the save completes, with no indication anything was wrong.
-      if (!Number.isInteger(form.viewerActivityWindowDays) || form.viewerActivityWindowDays < 1) {
+      if (!Number.isInteger(viewerActivityWindowDays) || viewerActivityWindowDays < 1) {
         setError("Viewer activity window must be a positive whole number of days.");
         return;
       }
-      if (!Number.isInteger(form.historyRetentionDays) || form.historyRetentionDays < 1) {
+      if (!Number.isInteger(historyRetentionDays) || historyRetentionDays < 1) {
         setError("History retention must be a positive whole number of days.");
         return;
       }
-      if (!Number.isInteger(form.progressiveCleanupDelayDays) || form.progressiveCleanupDelayDays < 0) {
+      if (!Number.isInteger(progressiveCleanupDelayDays) || progressiveCleanupDelayDays < 0) {
         setError("Cleanup delay must be a whole number of days, zero or more.");
         return;
       }
-      if (!Number.isFinite(form.recommendationMinimumSavingsGb) || form.recommendationMinimumSavingsGb < 0) {
+      if (!Number.isFinite(recommendationMinimumSavingsGb) || recommendationMinimumSavingsGb < 0) {
         setError("Minimum savings must be zero or more.");
         return;
       }
@@ -172,11 +186,11 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       await apiPatch("/api/settings/app", {
         dryRun: form.dryRun,
         artworkEnabled: form.artworkEnabled,
-        viewerActivityWindowDays: form.viewerActivityWindowDays,
-        historyRetentionDays: form.historyRetentionDays,
+        viewerActivityWindowDays,
+        historyRetentionDays,
         progressiveCleanupEnabled: form.progressiveCleanupEnabled,
-        progressiveCleanupDelayDays: form.progressiveCleanupDelayDays,
-        recommendationMinimumSavingsGb: form.recommendationMinimumSavingsGb,
+        progressiveCleanupDelayDays,
+        recommendationMinimumSavingsGb,
         trustProxy: form.trustProxy,
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
         ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
@@ -218,7 +232,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           unit="days"
           min={1}
           value={form.viewerActivityWindowDays}
-          onChange={(value) => setForm({ ...form, viewerActivityWindowDays: Number(value) })}
+          onChange={(value) => setForm({ ...form, viewerActivityWindowDays: value })}
         />
         <ToggleField
           label="Early season prefetch"
@@ -282,7 +296,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           unit="days"
           min={0}
           value={form.progressiveCleanupDelayDays}
-          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: Number(value) })}
+          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: value })}
         />
       </SectionCard>
 
@@ -293,7 +307,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           unit="GB"
           min={0}
           value={form.recommendationMinimumSavingsGb}
-          onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: Number(value) })}
+          onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: value })}
         />
       </SectionCard>
 
@@ -304,7 +318,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           unit="days"
           min={1}
           value={form.historyRetentionDays}
-          onChange={(value) => setForm({ ...form, historyRetentionDays: Number(value) })}
+          onChange={(value) => setForm({ ...form, historyRetentionDays: value })}
         />
         <ToggleField
           label="Trust proxy"
@@ -733,9 +747,13 @@ function JobsTab() {
   function openEdit(job: JobInfo) {
     const preset = JOB_PRESETS[job.id];
     if (!preset) return;
-    const match = job.intervalDescription?.match(/Every (\d+)/i);
-    const current = Number(match?.[1] ?? preset.values[0]);
-    setEditValue(String(preset.unit === "hours" ? current * 60 : preset.unit === "days" ? current * 24 * 60 : current));
+    const match = job.intervalDescription?.match(/every\s+(\d+)\s+(minute|hour|day)/i);
+    const parsed = match ? Number(match[1]) : null;
+    const unit = match?.[2]?.toLowerCase();
+    const current = parsed === null || !Number.isFinite(parsed) || parsed < 1
+      ? preset.values[0]
+      : unit === "hour" ? parsed * 60 : unit === "day" ? parsed * 24 * 60 : parsed;
+    setEditValue(String(current));
     setEditingJob(job);
   }
 

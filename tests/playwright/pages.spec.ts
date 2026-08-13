@@ -22,7 +22,7 @@ test("settings loads without browser errors", async ({ page }) => {
 });
 
 test("sidebar navigation links are present", async ({ page }) => {
-  await page.goto("/dashboard");
+  await openPage(page, "/dashboard", "Dashboard");
   const navigation = page.getByRole("navigation");
   await expect(navigation.getByRole("link", { name: "Dashboard" })).toBeVisible();
   await expect(navigation.getByRole("link", { name: "Shows" })).toBeVisible();

@@ -606,7 +606,7 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
   const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>

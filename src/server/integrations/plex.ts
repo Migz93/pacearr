@@ -123,10 +123,10 @@ export class PlexIntegration {
     return buildPlexServerUrl(this.settings.serverUrl, pathname);
   }
 
-  private async requestServerXml(pathname: string) {
+  private async requestServerXml(pathname: string, timeoutMs?: number) {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
-    const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } });
+    const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } }, timeoutMs);
     if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
     return parseStringPromise(await response.text(), { explicitArray: false, mergeAttrs: false });
   }
@@ -198,7 +198,7 @@ export class PlexIntegration {
     let start = 0;
     const size = 1000;
     for (;;) {
-      const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`);
+      const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`, 60_000);
       const videos = toArray(data?.MediaContainer?.Video);
       const pageEvents: PlexEpisodeActivity[] = [];
       for (const video of videos) {
