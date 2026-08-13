@@ -1,16 +1,73 @@
+import { clientLogger } from "./logger";
+
+const MAX_API_FAILURE_STREAKS = 100;
+const apiFailureStreaks = new Map<string, number>();
+
+function recordApiFailure(failureKey: string): boolean {
+  const failures = (apiFailureStreaks.get(failureKey) ?? 0) + 1;
+  if (!apiFailureStreaks.has(failureKey) && apiFailureStreaks.size >= MAX_API_FAILURE_STREAKS) {
+    const oldestKey = apiFailureStreaks.keys().next().value as string | undefined;
+    if (oldestKey) apiFailureStreaks.delete(oldestKey);
+  }
+  apiFailureStreaks.delete(failureKey);
+  apiFailureStreaks.set(failureKey, failures);
+  return failures === 1;
+}
+
+function logPath(path: string): string {
+  try {
+    return new URL(path, window.location.origin).pathname;
+  } catch {
+    return "[invalid path]";
+  }
+}
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {}),
-    },
-  });
+  const method = options.method ?? "GET";
+  const safePath = logPath(path);
+  const failureKey = `${method} ${safePath}`;
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: new Headers({ "Content-Type": "application/json", ...Object.fromEntries(new Headers(options.headers)) }),
+    });
+  } catch (caught) {
+    if (recordApiFailure(failureKey)) {
+      clientLogger.error("API request could not be completed", {
+        method,
+        path: safePath,
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+    }
+    throw caught;
+  }
   if (!response.ok) {
+    if (recordApiFailure(failureKey)) {
+      clientLogger.warn("API request returned an error", {
+        method,
+        path: safePath,
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
     const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
     throw new Error(body.error || body.message || `${response.status} ${response.statusText}`);
   }
-  return response.json() as Promise<T>;
+  try {
+    const body = await response.json() as T;
+    apiFailureStreaks.delete(failureKey);
+    return body;
+  } catch (caught) {
+    if (recordApiFailure(failureKey)) {
+      clientLogger.error("API response could not be parsed", {
+        method,
+        path: safePath,
+        errorType: caught instanceof Error ? caught.name : typeof caught,
+      });
+    }
+    throw caught;
+  }
 }
 
 export function apiGet<T>(path: string) {

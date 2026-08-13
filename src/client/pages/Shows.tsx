@@ -4,9 +4,12 @@ import {
   ArrowLeft, ArrowRight, ArrowUpDown, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
-import { formatBytes } from "../lib/utils";
+import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
-import { ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
+import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
 } from "../../shared/types";
@@ -24,7 +27,7 @@ const TABS: { id: ShowsTab; label: string }[] = [
 
 const SORT_MODES: SortMode[] = ["title-asc", "title-desc", "size-desc", "size-asc"];
 
-// Recommendations/Ignored are led by projected savings (see TAB_SUBTITLES), not raw size on
+// Recommendations/Ignored are led by projected savings, not raw size on
 // disk, so the "size" sort modes rank by that metric there — labeled "Savings" rather than
 // "Size" so the control doesn't imply it matches the "Size on disk" column shown in-list.
 const DEFAULT_SORT: Record<ShowsTab, SortMode> = {
@@ -60,13 +63,6 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
   const cmp = sizeOf(a) - sizeOf(b);
   return sort === "size-asc" ? cmp : -cmp;
 }
-
-const TAB_SUBTITLES: Record<ShowsTab, string> = {
-  enrolled: "Shows currently controlled by Pacearr.",
-  recommendations: "Un-enrolled Sonarr shows, ranked by how much disk space enrolling would free up.",
-  ignored: "Recommendations you've chosen to ignore.",
-  sonarr: "Every show in your Sonarr library.",
-};
 
 const PAGE_SIZE = 24;
 
@@ -129,6 +125,7 @@ function ShowsBrowser() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const addTriggerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
   const [sort, setSort] = useState<SortMode>(() => loadStoredSort(tab));
 
@@ -231,6 +228,11 @@ function ShowsBrowser() {
     [items]
   );
 
+  const totalSizeOnDiskBytes = useMemo(
+    () => items.reduce((sum, item) => sum + (item.kind === "library" ? item.data.sizeOnDiskBytes : 0), 0),
+    [items]
+  );
+
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
   const visibleItems = sorted.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -239,122 +241,137 @@ function ShowsBrowser() {
 
   function emptyMessage() {
     if (refreshing && items.length === 0) return "The Sonarr library is being prepared in the background. This page will update automatically.";
-    if (tab === "enrolled") return "No controlled shows match that search. Use Enroll show to add one from Sonarr.";
+    if (tab === "enrolled") return "No enrolled shows match that search. Use Enroll show to add one from Sonarr.";
     if (tab === "sonarr") return "No Sonarr shows match that search.";
     if (tab === "recommendations") return "No recommendations right now — every un-enrolled show would stay fully retained, or every show is already enrolled.";
     return "No ignored recommendations.";
   }
 
   return (
-    <div className="page shows-page">
-      <div className="page-header">
-        <div>
-          <h1>Shows</h1>
-          <p className="muted">{TAB_SUBTITLES[tab]}</p>
-        </div>
-        <div className="button-row">
-          <button type="button" className="primary-button" onClick={() => setAdding(true)}><Plus size={16} /> Enroll show</button>
-          <button type="button" className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshing}>
-            <RefreshCw size={16} className={loading || refreshing ? "spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-      </div>
-      {error && <div className="error">{error}</div>}
-      <div className="tab-strip" role="tablist">
+    <Page>
+      <PageHeader title="Shows">
+        <button type="button" className={primaryButtonClass} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void refresh()} disabled={loading || refreshing}>
+          <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
+        </button>
+      </PageHeader>
+      {error && <ErrorBanner message={error} />}
+      <fieldset className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+        <legend className="sr-only">Show category</legend>
         {TABS.map((entry) => (
           <button
             type="button"
             key={entry.id}
-            role="tab"
-            aria-selected={tab === entry.id}
-            className={tab === entry.id ? "active" : ""}
+            aria-pressed={tab === entry.id}
+            className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
             onClick={() => setTab(entry.id)}
           >
             {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
           </button>
         ))}
-      </div>
-      <div className="shows-toolbar-row">
-        <div className="shows-toolbar">
+      </fieldset>
+      <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
+        <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />
-          <input aria-label="Search shows" value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
+          <input className="h-full w-full border-0 bg-transparent p-0 text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none" aria-label="Search shows" value={query} onChange={(event) => handleQueryChange(event.target.value)} placeholder="Search shows..." />
         </div>
-        <div className="shows-sort-toolbar">
+        <div className="flex h-10 shrink-0 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <ArrowUpDown size={16} />
-          <select aria-label="Sort shows" value={sort} onChange={(event) => changeSort(event.target.value as SortMode)}>
+          <select className="mt-0 min-w-[150px] border-0 bg-transparent p-0 text-on-surface max-[820px]:w-full" aria-label="Sort shows" value={sort} onChange={(event) => changeSort(event.target.value as SortMode)}>
             {sortOptionsFor(tab).map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}
           </select>
         </div>
-        <div className="view-toggle" role="group" aria-label="View mode">
-          <button type="button" aria-pressed={view === "poster"} aria-label="Poster view" className={view === "poster" ? "active" : ""} onClick={() => toggleView("poster")} title="Poster view">
-            <LayoutGrid size={16} />
+        <div className="flex h-10 shrink-0 gap-0.5 rounded-lg border border-outline-variant/30 bg-background-container-high p-[3px]" role="group" aria-label="View mode">
+          <button type="button" aria-pressed={view === "poster"} aria-label="Poster view" className={`grid size-8 place-items-center rounded-md border-0 ${view === "poster" ? "bg-background-container" : "bg-transparent hover:bg-background-container"}`} onClick={() => toggleView("poster")} title="Poster view">
+            <LayoutGrid size={16} className={view === "poster" ? "text-on-surface" : "text-on-surface-variant"} />
           </button>
-          <button type="button" aria-pressed={view === "list"} aria-label="List view" className={view === "list" ? "active" : ""} onClick={() => toggleView("list")} title="List view">
-            <List size={16} />
+          <button type="button" aria-pressed={view === "list"} aria-label="List view" className={`grid size-8 place-items-center rounded-md border-0 ${view === "list" ? "bg-background-container" : "bg-transparent hover:bg-background-container"}`} onClick={() => toggleView("list")} title="List view">
+            <List size={16} className={view === "list" ? "text-on-surface" : "text-on-surface-variant"} />
           </button>
         </div>
       </div>
-      {isRecommendationTab && !loading && items.length > 0 && (
-        <div className="recommend-stat-row">
-          <div className="recommend-stat"><span>Candidates</span><strong>{items.length}</strong></div>
-          <div className="recommend-stat"><span>Potential Savings</span><strong>{formatBytes(totalSavingsBytes)}</strong></div>
+      {!loading && items.length > 0 && (isRecommendationTab ? (
+        <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
+          <SummaryChip label="Candidates" value={items.length} />
+          <SummaryChip label="Potential savings" value={formatBytes(totalSavingsBytes)} />
         </div>
-      )}
+      ) : tab === "enrolled" && (
+        // The tab people live on had no summary at all, while the two recommendation
+        // tabs did. Both numbers are already in the list response.
+        <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
+          <SummaryChip label="Enrolled shows" value={items.length} />
+          <SummaryChip label="Size on disk" value={formatBytes(totalSizeOnDiskBytes)} />
+        </div>
+      ))}
       {loading ? (
-        <div className="centered-panel">Loading shows...</div>
+        <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
-        <div className="poster-grid">
-          {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
-          {filtered.length === 0 && <div className="empty">{emptyMessage()}</div>}
-        </div>
+        filtered.length === 0 ? <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div> : (
+          <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]">
+            {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
+          </div>
+        )
       ) : (
-        <div className="recommend-table">
+        <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
           {isRecommendationTab ? (
-            <div className="recommend-head">
-              <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Watchers</span><span>Projected savings</span>
+            <div className="grid grid-cols-[minmax(220px,1.6fr)_110px_170px_140px_140px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[1170px]:hidden">
+              <span>Show</span><span>Size on disk</span><span>Seasons</span><span>Viewers</span><span>Projected savings</span>
             </div>
           ) : (
-            <div className="library-head">
-              <span>Show</span><span>Seasons</span><span>Watchers</span>
+            <div className="grid grid-cols-[minmax(220px,1.6fr)_170px_220px] items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-[11px] font-black uppercase text-on-surface-variant max-[970px]:hidden">
+              <span>Show</span><span>Seasons</span><span>Viewers</span>
             </div>
           )}
           {visibleItems.map((item) => <ShowListRow item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
-          {filtered.length === 0 && <div className="empty">{emptyMessage()}</div>}
+          {filtered.length === 0 && <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div>}
         </div>
       )}
       {filtered.length > PAGE_SIZE && (
-        <div className="recommend-pagination">
-          <span className="muted small">
+        <div className="flex items-center justify-between gap-4 px-4 py-3">
+          <span className="text-xs text-on-surface-variant">
             Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
           </span>
-          <div className="button-row">
-            <button type="button" className="secondary-button compact" disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
-            <span className="small">Page {safePage} of {pageCount}</span>
-            <button type="button" className="secondary-button compact" disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+            <span className="text-xs">Page {safePage} of {pageCount}</span>
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
           </div>
         </div>
       )}
-      {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} />}
+      {adding && <AddShowModal onClose={() => setAdding(false)} onAdded={async () => { setAdding(false); await load(); }} trigger={addTriggerRef.current} />}
+    </Page>
+  );
+}
+
+function SummaryChip({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex min-w-[210px] items-center justify-between gap-6 rounded-xl border border-outline-variant/30 bg-background-container px-3.5 py-2.5">
+      <span className="text-xs font-bold text-on-surface-variant">{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
 
-function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => Promise<void> }) {
+function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAdded: () => Promise<void>; trigger: HTMLElement | null }) {
   const [query, setQuery] = useState("");
   const [shows, setShows] = useState<ShowListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [addingId, setAddingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
     const term = query.trim();
-    if (term.length < 2) { setShows([]); return; }
+    setError(null);
+    if (term.length < 2) { setShows([]); setLoading(false); return; }
+    setShows([]);
+    setLoading(true);
     const timer = setTimeout(() => {
-      setLoading(true);
       apiGet<{ shows: ShowListItem[] }>(`/api/shows?query=${encodeURIComponent(term)}`)
-        .then((data) => setShows(data.shows.filter((show) => !show.enrolled)))
-        .catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)))
-        .finally(() => setLoading(false));
+        .then((data) => { if (requestId === requestIdRef.current) setShows(data.shows.filter((show) => !show.enrolled)); })
+        .catch((caught) => { if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught)); })
+        .finally(() => { if (requestId === requestIdRef.current) setLoading(false); });
     }, 250);
     return () => clearTimeout(timer);
   }, [query]);
@@ -372,12 +389,15 @@ function AddShowModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
     }
   }
 
-  return <div className="modal-backdrop" onClick={onClose}>
-    <div className="modal" onClick={(event) => event.stopPropagation()}>
-      <div className="modal-header"><div><h2>Enroll show</h2><p className="muted">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
-      <div className="shows-toolbar"><Search size={17} /><input aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
-      {error && <div className="error">{error}</div>}
-      {query.trim().length < 2 ? <div className="empty">Enter at least two characters to search Sonarr.</div> : loading ? <div className="empty">Searching Sonarr...</div> : <div className="add-show-results">{shows.map((show) => <div className="add-show-row" key={show.sonarrSeriesId}><div><strong>{show.title}</strong><span>{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className="primary-button compact" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="empty">No available Sonarr shows match this search.</div>}</div>}
+  const dialogRef = useDialogA11y<HTMLDivElement>(true, onClose, trigger);
+
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+    <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close enroll show dialog" onClick={onClose} />
+    <div ref={dialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="enroll-show-title" tabIndex={-1}>
+      <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 id="enroll-show-title" className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className={iconButtonClass} onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+      <div className="mb-[18px] flex h-10 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant"><Search size={17} /><input className="m-0 h-full border-0 bg-transparent p-0" aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
+      {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+      {query.trim().length < 2 ? <div className="p-6 text-center text-on-surface-variant">Enter at least two characters to search Sonarr.</div> : loading ? <div className="p-6 text-center text-on-surface-variant">Searching Sonarr...</div> : <div className="grid gap-2">{shows.map((show) => <div className="flex items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container-low p-3" key={show.sonarrSeriesId}><div><strong className="block">{show.title}</strong><span className="mt-1 block text-xs text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className={compactPrimaryButtonClass} disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="p-6 text-center text-on-surface-variant">No available Sonarr shows match this search.</div>}</div>}
     </div>
   </div>;
 }
@@ -387,7 +407,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   const location = useLocation();
   const returnPath = (location.state as { from?: string } | null)?.from ?? "/shows";
   const returnTabParam = (returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null) ?? "enrolled";
-  const returnLabel = TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
+  const returnLabel = returnPath === "/dashboard" ? "Dashboard" : TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
   const [detail, setDetail] = useState<ShowDetailResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -438,64 +458,60 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
 
   if (!detail) {
     return (
-      <div className="page">
-        <button type="button" className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        {error ? <div className="error detail-loading-error">{error}</div> : <div className="centered-panel">Loading show...</div>}
-      </div>
+      <Page>
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        {error ? <ErrorBanner message={error} className="mb-0 mt-4" /> : <PageLoading label="Loading show..." />}
+      </Page>
     );
   }
 
   const { show } = detail;
 
   return (
-    <div className="page show-detail-page">
-      <div className="show-detail-topbar">
-        <button type="button" className="secondary-button" onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        <button type="button" className="secondary-button" onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
+    <Page>
+      <div className="mb-[18px] flex justify-between gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
-      {error && <div className="error">{error}</div>}
-      <section className="show-detail-hero">
-        <Poster show={show} className="detail-poster" />
-        <div className="show-detail-copy">
-          <div className="show-detail-badges">
-            <div className={`show-state ${show.enrolled ? "enrolled" : ""}`}>{show.enrolled ? "Enrolled" : "Not enrolled"}</div>
+      {error && <ErrorBanner message={error} />}
+      <section className="mb-[22px] grid grid-cols-[220px_minmax(0,1fr)] items-end gap-6 max-[820px]:grid-cols-1">
+        <Poster show={show} className="max-w-[220px] rounded-lg object-cover max-[820px]:max-w-[180px]" />
+        <div className="grid justify-items-start gap-3 pb-1">
+          <div className="flex items-center gap-2">
+            <span className={badgeClass(show.enrolled ? "success" : undefined)}>{show.enrolled ? "Enrolled" : "Not enrolled"}</span>
             <span
-              className={`badge ${detail.dryRunPreview.enabled ? "warn" : "good"}`}
+              className={badgeClass(detail.dryRunPreview.enabled ? "warning" : "success")}
               title={detail.dryRunPreview.enabled
                 ? "Dry run: monitoring changes are calculated but not sent to Sonarr"
                 : "Live: monitoring changes are sent to Sonarr automatically"}
             >
               {detail.dryRunPreview.enabled ? "Dry run" : "Live"}
             </span>
-            {detail.recommendation?.ignored && <span className="badge warn">Ignored</span>}
+            {detail.recommendation?.ignored && <span className={badgeClass("warning")}>Ignored</span>}
           </div>
-          <h1>{show.title}</h1>
-          <p className="muted">{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"} · {show.episodeCount} episodes · {show.status ?? "unknown status"}</p>
+          <h1 className="font-headline text-2xl font-bold">{show.title}</h1>
+          <p className="text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} season{show.seasonCount === 1 ? "" : "s"} · {show.episodeCount} episodes · {show.status ?? "unknown status"}</p>
           {detail.recommendation && (
-            <div className="recommend-stat-row detail-recommend-stats">
-              <div className="recommend-stat"><span>Size on disk</span><strong>{formatBytes(detail.recommendation.sizeOnDiskBytes)}</strong></div>
-              <div className="recommend-stat"><span>Projected savings if enrolled</span><strong>{formatBytes(detail.recommendation.projectedSavingsBytes)}</strong></div>
+            <div className="mt-0.5 flex gap-2.5 max-[820px]:flex-col">
+              <SummaryChip label="Size on disk" value={formatBytes(detail.recommendation.sizeOnDiskBytes)} />
+              <SummaryChip label="Savings if enrolled" value={formatBytes(detail.recommendation.projectedSavingsBytes)} />
             </div>
           )}
-          <div className="button-row">
+          <div className="flex flex-wrap items-center gap-2">
             {show.enrolled && show.rollingShowId ? (
               <>
                 <button
                   type="button"
-                  className="secondary-button danger"
+                  className={dangerButtonClass}
                   disabled={busy}
-                  title={detail.dryRunPreview.enabled
-                    ? "Dry run: previews resetting the show to first-episode-only monitoring for every season. No Sonarr changes or file deletions are made."
-                    : "Resets the show to first-episode-only monitoring for every season and clears its expanded-season progress. Excess episode files may be deleted if deletion is enabled in Settings."}
                   onClick={() => runAction(() => apiPost(`/api/rolling-shows/${show.rollingShowId}/reset`))}
                 >
                   <RotateCcw size={15} /> Reset
                 </button>
                 <button
                   type="button"
-                  className="secondary-button danger"
+                  className={dangerButtonClass}
                   disabled={busy}
-                  title="Stops Pacearr from managing this show and removes its stored rolling progress. It does not delete media or undo the show's current Sonarr monitoring state."
                   onClick={() => runAction(() => apiDelete(`/api/rolling-shows/${show.rollingShowId}`))}
                 >
                   <Trash2 size={15} /> Unenroll
@@ -503,13 +519,13 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             ) : (
               <>
-                <button type="button" className="primary-button" disabled={busy} onClick={() => void enroll()}>
-                  Enroll in rolling episodes
+                <button type="button" className={primaryButtonClass} disabled={busy} onClick={() => void enroll()}>
+                  Enroll show
                 </button>
                 {detail.recommendation && (detail.recommendation.eligible || detail.recommendation.ignored) && (
                   <button
                     type="button"
-                    className="secondary-button"
+                    className={secondaryButtonClass}
                     disabled={busy}
                     onClick={() => runAction(() => detail.recommendation!.ignored
                       ? apiDelete(`/api/recommendations/${seriesId}/ignore`)
@@ -522,21 +538,26 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             )}
           </div>
+          {/* These two used to be title= tooltips of two long paragraphs each, which is
+              the one place a destructive action's consequences must not hide. */}
+          {show.enrolled && show.rollingShowId && (
+            <p className="text-xs leading-relaxed text-on-surface-variant">
+              {detail.dryRunPreview.enabled
+                ? "Dry run is on, so both actions are previewed only."
+                : "Reset trims every season back to its first episode and can delete the extra files. Unenroll only stops Pacearr managing the show — nothing is deleted."}
+            </p>
+          )}
         </div>
       </section>
-      <section className="section season-browser">
-        <div className="season-browser-head">
+      <section className="rounded-xl border border-outline-variant/30 bg-background-container p-[18px]">
+        <div className="mb-1 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2>Seasons</h2>
-            <p className="muted">Expand a season to review its episodes, who's watching, and current vs. intended Sonarr monitoring state.</p>
+            <h2 className="font-headline mb-1 text-lg font-semibold">Seasons</h2>
+            <p className="text-on-surface-variant">Expand a season to see its episodes, who's watching, and what Pacearr will change in Sonarr.</p>
           </div>
-          <label className="toggle-field">
-            <input type="checkbox" checked={showHistoryViewers} onChange={(event) => setShowHistoryViewers(event.target.checked)} />
-            <span className="toggle-track"><span /></span>
-            <span><strong>Show inactive viewers</strong></span>
-          </label>
+          <ToggleField label="Show inactive viewers" checked={showHistoryViewers} onChange={setShowHistoryViewers} />
         </div>
-        <div className="season-list">
+        <div className="grid gap-2">
           {detail.seasons.map((season) => (
             <SeasonPanel
               season={season}
@@ -549,20 +570,20 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
           ))}
         </div>
       </section>
-    </div>
+    </Page>
   );
 }
 
 function MonitorState({ current, target, dryRunEnabled }: { current: boolean; target: boolean; dryRunEnabled: boolean }) {
   const mismatch = current !== target;
   return (
-    <div className="monitor-state">
-      <span className={`badge ${current ? "good" : ""}`}>
+    <span className="flex flex-wrap items-center gap-1.5">
+      <span className={badgeClass(current ? "success" : undefined)}>
         {current ? <Eye size={12} /> : <EyeOff size={12} />} {current ? "Monitored" : "Not monitored"}
       </span>
       {mismatch && (
         <span
-          className="badge warn"
+          className={badgeClass("warning")}
           title={dryRunEnabled
             ? `Dry run: would become ${target ? "monitored" : "not monitored"} once applied`
             : `Pending: will become ${target ? "monitored" : "not monitored"} on the next run`}
@@ -570,7 +591,7 @@ function MonitorState({ current, target, dryRunEnabled }: { current: boolean; ta
           <ArrowRight size={12} /> {target ? "Monitored" : "Not monitored"}
         </span>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -582,53 +603,68 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
   dryRunEnabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
-    <div className="season-panel">
-      <button type="button" className="season-row" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+    <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
+      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-      <div>
-        <strong>Season {season.seasonNumber}</strong>
-        <span>
+      <span className="flex-1">
+        <strong className="block">Season {season.seasonNumber}</strong>
+        <span className="mt-1 block text-xs text-on-surface-variant">
           {season.episodeCount || season.totalEpisodeCount} episodes
           {season.watchedUsers > 0 ? ` · ${season.watchedUsers} watched` : ""}
           {season.latestWatchedAt ? ` · last ${formatDate(season.latestWatchedAt)}` : ""}
         </span>
-      </div>
+      </span>
       <AvatarStack viewers={viewers} />
-      <div className="season-signals">
-        {season.isExpanded && <span className="badge good">Expanded</span>}
+      <span className="flex flex-wrap items-center justify-end gap-1.5 text-right">
+        {season.isExpanded && <span className={badgeClass("success")}>Expanded</span>}
+        {season.prefetchedEpisodes.length > 0 && <span className={badgeClass("warning")} title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
-      </div>
+      </span>
       </button>
-      {open && <EpisodeTable episodes={episodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
+      {open && <EpisodeTable id={episodeTableId} episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
     </div>
   );
 }
 
-function EpisodeTable({ episodes, viewersByEpisode, dryRunEnabled }: {
+function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
+  id: string;
   episodes: ShowEpisodeSummary[];
+  prefetchedEpisodes: ShowSeasonSummary["prefetchedEpisodes"];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
 }) {
+  const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
   return (
-      <div className="episode-table">
-        <div className="episode-head">
+      <div id={id} className="overflow-hidden border-t border-outline-variant/30">
+        <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
           <span>Episode</span>
           <span>Title</span>
+          <span>Viewers</span>
           <span>State</span>
           <span>Air date</span>
         </div>
         {episodes.map((episode) => {
           const viewers = viewersByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`) ?? [];
           return (
-            <div className="episode-row" key={episode.id}>
+            <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
               <strong>{episodeLabel(episode.seasonNumber, episode.episodeNumber)}</strong>
-              <div className="episode-title">
-                <span>{episode.title ?? "Untitled"}</span>
+              <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
+              <div className="flex items-center gap-1.5">
+                {viewers.length > 0 && <RowLabel className="hidden max-[820px]:inline">Viewers</RowLabel>}
                 <AvatarStack viewers={viewers} size={22} />
               </div>
-              <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
-              <span>{formatDate(episode.airDate)}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
+                <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
+                {(() => {
+                  const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`);
+                  if (!prefetch) return null;
+                  return <span className={badgeClass("warning")} title={`Triggered by ${prefetch.displayName} on ${formatDate(prefetch.triggeredAt)}`}>Prefetched · {prefetch.displayName}</span>;
+                })()}
+              </div>
+              <span className="text-on-surface-variant"><RowLabel className="hidden max-[820px]:inline">Air date</RowLabel>{formatDate(episode.airDate)}</span>
             </div>
           );
         })}

@@ -1,18 +1,21 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import type { AppSettings, JobInfo, PlexConfigPayload, PlexConnectionOption, SessionUser } from "../shared/types.js";
-import { createSessionId, signedValue } from "./auth.js";
+import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
+import { isHistoryCategory } from "../shared/history.js";
+import { createSessionId, isValidSignature, signedValue } from "./auth.js";
 import type { RuntimeConfig } from "./config.js";
-import { DEFAULT_APP_SETTINGS, PacearrDatabase } from "./db/index.js";
+import { DEFAULT_APP_SETTINGS, MAX_SAFE_RETENTION_DAYS, PacearrDatabase } from "./db/index.js";
 import { PlexIntegration } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
+import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes, scheduleIntervalValueInUnit } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
 
@@ -34,6 +37,86 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req, res).catch(next);
   };
+}
+
+/**
+ * Reads today's active log file directly rather than merging every retained rotated
+ * file: the log viewer only needs a bounded, restart-surviving source for whatever the
+ * in-memory ring hasn't kept, not the app's full retention history. Returns an empty
+ * array (not the ring's job to fill in for this function) if the file is missing,
+ * unreadable, or just freshly rotated — normal right after the very first log write of
+ * a fresh install, or just after midnight's daily rotation.
+ */
+function readTodaysLogEntries(logger: Logger): LogEntry[] {
+  let raw: string;
+  try {
+    const filePath = logger.currentLogFilePath;
+    const descriptor = fs.openSync(filePath, "r");
+    try {
+      const size = fs.fstatSync(descriptor).size;
+      const tailSize = Math.min(size, 1_000_000);
+      const offset = size - tailSize;
+      const buffer = Buffer.alloc(tailSize);
+      const bytesRead = fs.readSync(descriptor, buffer, 0, tailSize, offset);
+      raw = buffer.subarray(0, bytesRead).toString("utf8");
+      // If the tail begins in the middle of a line, discard that partial entry. A
+      // tail beginning immediately after a newline already starts at a full entry.
+      if (tailSize < size && offset > 0) {
+        const precedingByte = Buffer.alloc(1);
+        fs.readSync(descriptor, precedingByte, 0, 1, offset - 1);
+        if (precedingByte[0] !== 0x0a) raw = raw.slice(raw.indexOf("\n") + 1);
+      }
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    return [];
+  }
+  const entries: LogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<LogEntry>;
+      if (typeof parsed.timestamp === "string" && typeof parsed.message === "string" &&
+        (parsed.level === "debug" || parsed.level === "info" || parsed.level === "warn" || parsed.level === "error")) {
+        entries.push({ timestamp: parsed.timestamp, level: parsed.level, message: parsed.message, ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}) });
+      }
+    } catch {
+      // A partially written final line must not make the log viewer unavailable.
+    }
+  }
+  return entries;
+}
+
+/**
+ * Combines today's file with the in-memory ring rather than treating one as a fallback
+ * for the other: right after a restart the ring is empty and the file carries recent
+ * history, but right after midnight's rotation it's the reverse — the fresh file is
+ * still near-empty while the ring still holds the tail end of yesterday's entries (that
+ * file is already rotated away and not re-read, by design). Bounded to two small
+ * sources — one day's plain-text file plus up to 500 ring entries, no gzip, no scanning
+ * prior days — so merging stays cheap.
+ */
+export function readRecentLogEntries(logger: Logger): LogEntry[] {
+  return mergeLogEntries(readTodaysLogEntries(logger), logger.getRecentLogs(500));
+}
+
+/**
+ * Deduplicates and chronologically sorts entries from multiple sources (today's log file,
+ * the in-memory ring). timestamp+message alone isn't a safe dedup key: a synchronous loop
+ * can log the same message text for several different items within the same millisecond
+ * (e.g. reconcileRollingShows's per-show skip log), varying only in meta — collapsing
+ * those would silently drop all but one. Includes level and meta in the key for that
+ * reason, matching what this replaced before the ring/file merge existed.
+ */
+export function mergeLogEntries(...sources: LogEntry[][]): LogEntry[] {
+  const merged = new Map<string, LogEntry>();
+  for (const source of sources) {
+    for (const entry of source) {
+      merged.set(`${entry.timestamp} ${entry.level} ${entry.message} ${JSON.stringify(entry.meta)}`, entry);
+    }
+  }
+  return [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
 function requiredString(value: unknown, name: string) {
@@ -75,24 +158,32 @@ function buildPlexSettingsFromPayload(token: string, payload: PlexConfigPayload 
 
 const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings: AppSettings) => string; nextRunLabel?: string }> = {
   "session-check": {
-    name: "Plex Session Check",
-    intervalDescription: (settings) => `Every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
+    name: "Plex session fallback check",
+    intervalDescription: (settings) => `Fallback every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
   "history-import": {
-    name: "History Import",
+    name: "History import",
     intervalDescription: (settings) => `Every ${settings.historyImportIntervalHours} hour${settings.historyImportIntervalHours !== 1 ? "s" : ""}`,
   },
   "full-history-reconcile": {
-    name: "Full History Reconciliation",
-    intervalDescription: () => "Every 30 days",
+    name: "Full history reconciliation",
+    intervalDescription: (settings) => `Every ${settings.fullHistoryReconcileIntervalDays} day${settings.fullHistoryReconcileIntervalDays !== 1 ? "s" : ""}`,
   },
   "rolling-reconcile": {
-    name: "Rolling Monitoring Reconciliation",
-    intervalDescription: () => "Every 6 hours",
+    name: "Rolling reconciliation",
+    intervalDescription: (settings) => `Every ${settings.rollingReconcileIntervalHours} hour${settings.rollingReconcileIntervalHours !== 1 ? "s" : ""}`,
+  },
+  "sonarr-library-refresh": {
+    name: "Sonarr library refresh",
+    intervalDescription: (settings) => `Every ${settings.sonarrLibraryRefreshIntervalHours} hour${settings.sonarrLibraryRefreshIntervalHours !== 1 ? "s" : ""}`,
   },
   "recommendation-refresh": {
-    name: "Sonarr Library & Recommendation Refresh",
-    intervalDescription: () => "Every 6 hours",
+    name: "Recommendation calculation",
+    intervalDescription: (settings) => `Every ${settings.recommendationRefreshIntervalHours} hour${settings.recommendationRefreshIntervalHours !== 1 ? "s" : ""}`,
+  },
+  "new-show-triage": {
+    name: "New Sonarr show triage",
+    intervalDescription: (settings) => `Every ${settings.newShowTriageIntervalMinutes} minute${settings.newShowTriageIntervalMinutes !== 1 ? "s" : ""} when enabled`,
   },
 };
 
@@ -103,6 +194,18 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   const services = new PacearrServices(db, logger, imageCache, config.dataDir);
   const app = express();
   const sessionSecret = db.getSessionSecret();
+
+  function isAnyJobRunning(...ids: string[]) {
+    return scheduler?.listJobs().some((job) => ids.includes(job.id) && job.running) ?? false;
+  }
+
+  function recommendationRefreshTargetId() {
+    return db.getSonarrLibraryCache() ? "recommendation-refresh" : "sonarr-library-refresh";
+  }
+
+  function runRecommendationRefreshNow() {
+    return scheduler?.runNowOrQueue(recommendationRefreshTargetId()) ?? false;
+  }
 
   if (db.getAppSettings().trustProxy) app.set("trust proxy", 1);
 
@@ -126,6 +229,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     legacyHeaders: false,
     skip: (req) => req.path.startsWith("/images/") || req.path.startsWith("/assets/") || req.path === "/favicon.ico",
   }));
+  app.use("/api/auth/plex", rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      logger.warn("Plex login rate limit exceeded");
+      res.status(429).json({ error: "Too many sign-in attempts. Please try again later." });
+    },
+  }));
   app.use(express.json({ limit: "2mb" }));
 
   app.use((req, _res, next) => {
@@ -136,7 +249,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       return;
     }
     const [sessionId, signature] = raw.split(".");
-    if (!sessionId || !signature || signedValue(sessionSecret, sessionId) !== signature) {
+    if (!sessionId || !signature || !isValidSignature(sessionSecret, sessionId, signature)) {
       req.sessionUser = null;
       next();
       return;
@@ -153,9 +266,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     next();
   }
 
-  function setSessionCookie(res: Response, sessionId: string) {
+  function setSessionCookie(req: Request, res: Response, sessionId: string) {
     const signed = `${sessionId}.${signedValue(sessionSecret, sessionId)}`;
-    res.setHeader("Set-Cookie", `${config.sessionCookieName}=${encodeURIComponent(signed)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}`);
+    res.setHeader("Set-Cookie", `${config.sessionCookieName}=${encodeURIComponent(signed)}; HttpOnly; Path=/; SameSite=Strict${req.secure ? "; Secure" : ""}; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}`);
   }
 
   app.get("/api/bootstrap/status", (req, res) => {
@@ -180,7 +293,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     db.savePlexOwner({ ...account, avatarUrl: cachedAvatarUrl });
     const sessionId = createSessionId();
     db.createSession(sessionId, account.plexId, new Date(Date.now() + config.sessionTtlMs).toISOString());
-    setSessionCookie(res, sessionId);
+    setSessionCookie(req, res, sessionId);
     logger.info("Plex owner signed in", { plexId: account.plexId, username: account.username });
     res.json({ ok: true, user: { plexId: account.plexId, username: account.username, displayName: account.displayName, email: account.email, avatarUrl: cachedAvatarUrl } });
   }));
@@ -189,7 +302,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const raw = parseCookies(req.headers.cookie).get(config.sessionCookieName);
     const sessionId = raw?.split(".")[0];
     if (sessionId) db.deleteSession(sessionId);
-    res.setHeader("Set-Cookie", `${config.sessionCookieName}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+    res.setHeader("Set-Cookie", `${config.sessionCookieName}=; HttpOnly; Path=/; SameSite=Lax${req.secure ? "; Secure" : ""}; Max-Age=0`);
     res.json({ ok: true });
     logger.info("User signed out", { plexId: req.sessionUser?.plexId ?? null });
   });
@@ -237,6 +350,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/settings/plex", requireAuth, asyncRoute(async (req, res) => {
     const owner = db.getPlexOwner();
     if (!owner) throw new Error("Plex owner is not configured.");
+    const previousSettings = db.getPlexSettings();
     const settings = buildPlexSettingsFromPayload(owner.plexToken, req.body as PlexConfigPayload);
     const result = await new PlexIntegration(settings, logger).testConnection();
     if (!result.ok) {
@@ -247,6 +361,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
+    if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
     await services.discoverPlexUsers();
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
@@ -274,7 +389,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.saveSonarrSettings(settings);
     logger.info("Sonarr settings saved", { baseUrl: settings.baseUrl });
-    scheduler?.runNow("recommendation-refresh");
+    // An active refresh may still be using the old connection; retain one follow-up so
+    // the saved credentials always produce a current library snapshot.
+    scheduler?.runNowOrQueue("sonarr-library-refresh");
     res.json({ ok: true, sonarr: db.getSonarrSettingsView() });
   }));
 
@@ -307,9 +424,31 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
-    if (body.sessionPollIntervalMinutes !== undefined) patch.sessionPollIntervalMinutes = Math.max(1, Math.floor(Number(body.sessionPollIntervalMinutes) || 5));
-    if (body.historyImportIntervalHours !== undefined) patch.historyImportIntervalHours = Math.max(1, Math.floor(Number(body.historyImportIntervalHours) || 24));
-    if (body.inactivityResetDays !== undefined) patch.inactivityResetDays = Math.max(1, Math.floor(Number(body.inactivityResetDays) || 7));
+    if (body.historyRetentionDays !== undefined) {
+      const retentionDays = Number(body.historyRetentionDays);
+      patch.historyRetentionDays = Math.min(MAX_SAFE_RETENTION_DAYS, Math.max(1, Math.floor(Number.isFinite(retentionDays) ? retentionDays : DEFAULT_APP_SETTINGS.historyRetentionDays)));
+    }
+    if (body.sessionPollIntervalMinutes !== undefined) {
+      patch.sessionPollIntervalMinutes = normaliseScheduleIntervalMinutes(body.sessionPollIntervalMinutes, DEFAULT_APP_SETTINGS.sessionPollIntervalMinutes);
+    }
+    if (body.historyImportIntervalHours !== undefined) {
+      patch.historyImportIntervalHours = normaliseScheduleIntervalHours(body.historyImportIntervalHours, DEFAULT_APP_SETTINGS.historyImportIntervalHours);
+    }
+    if (body.fullHistoryReconcileIntervalDays !== undefined) {
+      patch.fullHistoryReconcileIntervalDays = normaliseScheduleIntervalDays(
+        body.fullHistoryReconcileIntervalDays,
+        DEFAULT_APP_SETTINGS.fullHistoryReconcileIntervalDays
+      );
+    }
+    if (body.rollingReconcileIntervalHours !== undefined) {
+      patch.rollingReconcileIntervalHours = normaliseScheduleIntervalHours(body.rollingReconcileIntervalHours, DEFAULT_APP_SETTINGS.rollingReconcileIntervalHours);
+    }
+    if (body.sonarrLibraryRefreshIntervalHours !== undefined) {
+      patch.sonarrLibraryRefreshIntervalHours = normaliseScheduleIntervalHours(body.sonarrLibraryRefreshIntervalHours, DEFAULT_APP_SETTINGS.sonarrLibraryRefreshIntervalHours);
+    }
+    if (body.recommendationRefreshIntervalHours !== undefined) {
+      patch.recommendationRefreshIntervalHours = normaliseScheduleIntervalHours(body.recommendationRefreshIntervalHours, DEFAULT_APP_SETTINGS.recommendationRefreshIntervalHours);
+    }
     if (body.progressiveCleanupEnabled !== undefined) patch.progressiveCleanupEnabled = Boolean(body.progressiveCleanupEnabled);
     if (body.progressiveCleanupDelayDays !== undefined) {
       const delayDays = Number(body.progressiveCleanupDelayDays);
@@ -320,11 +459,58 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     if (body.trustProxy !== undefined) patch.trustProxy = Boolean(body.trustProxy);
     if (body.onboardingComplete !== undefined) patch.onboardingComplete = Boolean(body.onboardingComplete);
+    if (body.earlyPrefetchEnabled !== undefined) {
+      if (typeof body.earlyPrefetchEnabled !== "boolean") {
+        res.status(400).json({ error: "earlyPrefetchEnabled must be a boolean." });
+        return;
+      }
+      patch.earlyPrefetchEnabled = body.earlyPrefetchEnabled;
+    }
+    if (body.earlyPrefetchTriggerEpisodesRemaining !== undefined) {
+      const trigger = Number(body.earlyPrefetchTriggerEpisodesRemaining);
+      patch.earlyPrefetchTriggerEpisodesRemaining = Math.max(1, Math.floor(Number.isFinite(trigger) ? trigger : DEFAULT_APP_SETTINGS.earlyPrefetchTriggerEpisodesRemaining));
+    }
+    if (body.earlyPrefetchEpisodeCount !== undefined) {
+      const count = Number(body.earlyPrefetchEpisodeCount);
+      patch.earlyPrefetchEpisodeCount = Math.max(1, Math.floor(Number.isFinite(count) ? count : DEFAULT_APP_SETTINGS.earlyPrefetchEpisodeCount));
+    }
     const previousSettings = db.getAppSettings();
+    if (body.newShowTriageEnabled !== undefined) {
+      if (typeof body.newShowTriageEnabled !== "boolean") {
+        res.status(400).json({ error: "newShowTriageEnabled must be a boolean." });
+        return;
+      }
+      patch.newShowTriageEnabled = body.newShowTriageEnabled;
+      // The General settings form submits its current toggle value with every save.
+      // Move the boundary only on a real off → on transition, otherwise an unrelated
+      // settings change would make already-arrived series look new again.
+      patch.newShowTriageEnabledAt = body.newShowTriageEnabled
+        ? previousSettings.newShowTriageEnabled ? previousSettings.newShowTriageEnabledAt : new Date().toISOString()
+        : null;
+    }
+    if (body.newShowTriageEpisodeThreshold !== undefined) {
+      const threshold = Number(body.newShowTriageEpisodeThreshold);
+      patch.newShowTriageEpisodeThreshold = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : DEFAULT_APP_SETTINGS.newShowTriageEpisodeThreshold));
+    }
+    if (body.newShowTriageIntervalMinutes !== undefined) {
+      patch.newShowTriageIntervalMinutes = normaliseScheduleIntervalMinutes(body.newShowTriageIntervalMinutes, DEFAULT_APP_SETTINGS.newShowTriageIntervalMinutes);
+    }
     const appSettings = db.updateAppSettings(patch);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
     scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("full-history-reconcile", { intervalMs: appSettings.fullHistoryReconcileIntervalDays * 24 * 60 * 60 * 1000 });
+    scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("sonarr-library-refresh", { intervalMs: appSettings.sonarrLibraryRefreshIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("recommendation-refresh", { intervalMs: appSettings.recommendationRefreshIntervalHours * 60 * 60 * 1000 });
+    scheduler?.updateJob("new-show-triage", { intervalMs: appSettings.newShowTriageIntervalMinutes * 60 * 1000, enabled: appSettings.newShowTriageEnabled });
+    if (!previousSettings.newShowTriageEnabled && appSettings.newShowTriageEnabled) {
+      db.setNewShowTriageFallbackBaselineAt(null);
+      logger.info("New Sonarr show triage enabled; existing Sonarr series will be ignored", { enabledAt: appSettings.newShowTriageEnabledAt });
+      // Do not drop a new activation if the preceding activation is still
+      // unwinding. The queued run uses the new activation boundary.
+      scheduler?.runNowOrQueue("new-show-triage");
+    }
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
       scheduler?.runNow("rolling-reconcile");
@@ -344,6 +530,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   });
 
+  app.use("/api/settings/logs", rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+  }));
   app.get("/api/settings/logs", requireAuth, (req, res) => {
     const rawPage = Number(req.query.page ?? 1);
     const rawPageSize = Number(req.query.pageSize ?? 25);
@@ -353,7 +545,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const filter = levels.includes(req.query.filter as typeof levels[number]) ? req.query.filter as typeof levels[number] : "debug";
     const allowed = new Set(levels.slice(levels.indexOf(filter)));
     const search = typeof req.query.search === "string" ? req.query.search.toLowerCase().slice(0, 200) : "";
-    const filtered = logger.getRecentLogs(500)
+    const entries = readRecentLogEntries(logger);
+    const filtered = entries
       .filter((entry) => allowed.has(entry.level))
       .filter((entry) => !search || entry.message.toLowerCase().includes(search) || JSON.stringify(entry.meta ?? "").toLowerCase().includes(search))
       .reverse();
@@ -373,41 +566,65 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const settings = db.getAppSettings();
     const jobs: JobInfo[] = (scheduler?.listJobs() ?? []).map((job) => {
       const label = JOB_LABELS[job.id];
+      const sessionMonitorStatus = job.id === "session-check" ? services.getPlexSessionMonitorStatus() : null;
       return {
         ...job,
         name: label?.name ?? job.id,
         intervalDescription: label?.intervalDescription(settings) ?? "Manual",
         nextRunLabel: label?.nextRunLabel,
         isRunning: job.running,
+        ...(sessionMonitorStatus ? {
+          statusMode: sessionMonitorStatus.mode,
+          statusDescription: sessionMonitorStatus.description,
+        } : {}),
       };
     });
     res.json(jobs);
   });
 
   app.post("/api/settings/jobs/:id/run", requireAuth, (req, res) => {
-    res.json({ triggered: scheduler?.runNow(String(req.params.id)) ?? false });
+    const jobId = String(req.params.id);
+    // A manual recommendation calculation needs a library snapshot. Starting the
+    // prerequisite job also triggers the calculation when it completes, so the UI never
+    // reports a successful no-op on a cold cache.
+    const targetId = jobId === "recommendation-refresh" ? recommendationRefreshTargetId() : jobId;
+    // A manual library/recommendation action must not be lost to an in-flight scheduled
+    // library fetch, which deliberately does not trigger the independent recurring calc.
+    const triggered = targetId === "sonarr-library-refresh" || targetId === "recommendation-refresh"
+      ? scheduler?.runNowOrQueue(targetId) ?? false
+      : scheduler?.runNow(targetId) ?? false;
+    res.json({ triggered, triggeredJobId: targetId });
   });
 
   app.patch("/api/settings/jobs/:id", requireAuth, (req, res) => {
-    const intervalMinutes = Math.max(1, Math.floor(Number((req.body as { intervalMinutes?: number }).intervalMinutes) || 0));
-    if (!intervalMinutes) {
+    const intervalMinutes = parseScheduleIntervalMinutes((req.body as { intervalMinutes?: number }).intervalMinutes);
+    if (intervalMinutes === null) {
       res.status(400).json({ error: "intervalMinutes is required." });
       return;
     }
-    if (req.params.id === "session-check") {
-      const appSettings = db.updateAppSettings({ sessionPollIntervalMinutes: intervalMinutes });
-      scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
-      res.json({ updated: true });
+    const schedules: Record<string, { setting: keyof AppSettings; unitMinutes: number; intervalMs: (value: number) => number }> = {
+      "session-check": { setting: "sessionPollIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
+      "history-import": { setting: "historyImportIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "full-history-reconcile": { setting: "fullHistoryReconcileIntervalDays", unitMinutes: 24 * 60, intervalMs: (value) => value * 24 * 60 * 60 * 1000 },
+      "rolling-reconcile": { setting: "rollingReconcileIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "sonarr-library-refresh": { setting: "sonarrLibraryRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "recommendation-refresh": { setting: "recommendationRefreshIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
+      "new-show-triage": { setting: "newShowTriageIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
+    };
+    const jobId = String(req.params.id);
+    const schedule = schedules[jobId];
+    if (!schedule) {
+      res.status(400).json({ error: "This job schedule cannot be edited." });
       return;
     }
-    if (req.params.id === "history-import") {
-      const hours = Math.max(1, Math.floor(intervalMinutes / 60));
-      const appSettings = db.updateAppSettings({ historyImportIntervalHours: hours });
-      scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
-      res.json({ updated: true });
+    const configuredValue = scheduleIntervalValueInUnit(intervalMinutes, schedule.unitMinutes);
+    if (configuredValue === null) {
+      res.status(400).json({ error: "intervalMinutes must align with this job's configured unit." });
       return;
     }
-    res.status(400).json({ error: "This job schedule cannot be edited." });
+    db.updateAppSettings({ [schedule.setting]: configuredValue } as Partial<AppSettings>);
+    scheduler?.updateJob(jobId, { intervalMs: schedule.intervalMs(configuredValue) });
+    res.json({ updated: true });
   });
 
   app.get("/api/dashboard", requireAuth, asyncRoute(async (_req, res) => {
@@ -417,20 +634,94 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.get("/api/users", requireAuth, asyncRoute(async (_req, res) => {
     res.json({ users: await services.listUsers() });
   }));
+  app.get("/api/users/unmapped-tautulli", requireAuth, (_req, res) => {
+    res.json({ users: services.listUnmappedTautulliUsers() });
+  });
+  app.post("/api/users/:id/tautulli", requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const tautulliUserId = typeof req.body?.tautulliUserId === "string" ? req.body.tautulliUserId.trim() : "";
+    const tautulliUsername = typeof req.body?.tautulliUsername === "string" ? req.body.tautulliUsername.trim() || null : null;
+    if (!Number.isInteger(id) || id <= 0 || !tautulliUserId) {
+      res.status(400).json({ error: "A valid user and Tautulli user ID are required." });
+      return;
+    }
+    if (!db.getUser(id)) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
+    try {
+      res.json(services.mapTautulliUser(id, tautulliUserId, tautulliUsername));
+    } catch (error) {
+      if (error instanceof Error && error.message === "Tautulli user mapping conflict") {
+        res.status(409).json({ error: "That Pacearr user already has a different Tautulli user mapped." });
+        return;
+      }
+      if (error instanceof Error && error.message === "Tautulli identity already mapped") {
+        res.status(409).json({ error: "That Tautulli user is already mapped to another Pacearr user." });
+        return;
+      }
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+        res.status(409).json({ error: "That Tautulli user is already mapped to another Pacearr user." });
+        return;
+      }
+      throw error;
+    }
+  });
   app.post("/api/users/discover", requireAuth, asyncRoute(async (_req, res) => {
-    const users = await services.discoverPlexUsers();
-    logger.info("Plex user discovery requested", { users: users.length });
-    res.json({ users });
+    const discovered = await services.discoverPlexUsers();
+    logger.info("Plex user discovery requested", { users: discovered.length });
+    // discoverPlexUsers returns the raw UserRecord shape; the client needs the
+    // UserListItem shape (activeShowCount, lastWatchedAt) it renders. Re-fetch through
+    // listUsers rather than adding those fields to discovery's own return, so there is
+    // one place that computes per-user activity.
+    res.json({ users: await services.listUsers() });
   }));
+  app.get("/api/users/:id/shows", requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
+    res.json({ shows: services.listShowsDrivenByUser(id) });
+  });
   app.patch("/api/users/:id", requireAuth, (req, res) => {
-    const user = db.updateUser(Number(req.params.id), req.body as { enabled?: boolean; tautulliUserId?: string | null });
-    logger.info("User settings updated", { userId: user.id, enabled: user.enabled, tautulliLinked: Boolean(user.tautulliUserId) });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id must be a positive integer." });
+      return;
+    }
+    // Coercing an absent field with Boolean(undefined) would send `enabled: false` to
+    // updateUser on every call, including a body that never mentioned it — silently
+    // disabling the user instead of leaving them as they were. Only pass `enabled`
+    // through when the request actually included it, so updateUser's own
+    // patch.enabled ?? current.enabled can do its job. And Boolean(value) on a value
+    // that IS present would accept any truthy non-boolean ("no", {}, ...) as true, so a
+    // present field must be an actual boolean rather than merely coerced.
+    const body = req.body as { enabled?: unknown; tautulliUsername?: unknown };
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be a boolean." });
+      return;
+    }
+    if (body.tautulliUsername !== undefined && typeof body.tautulliUsername !== "string" && body.tautulliUsername !== null) {
+      res.status(400).json({ error: "tautulliUsername must be a string or null." });
+      return;
+    }
+    if (!db.getUser(id)) {
+      res.status(404).json({ error: "User not found." });
+      return;
+    }
+    const patch: Partial<Pick<UserRecord, "enabled" | "tautulliUsername">> = {
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      ...(body.tautulliUsername !== undefined ? { tautulliUsername: body.tautulliUsername?.trim() || null } : {}),
+    };
+    const user = db.updateUser(id, patch);
+    logger.info("User settings updated", { userId: user.id, enabled: user.enabled });
     res.json({ user });
   });
 
   app.get("/api/shows", requireAuth, asyncRoute(async (req, res) => {
-    const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    if (!db.getSonarrLibraryCache() && !refreshing) scheduler?.runNow("recommendation-refresh");
+    const refreshing = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
+    if (!db.getSonarrLibraryCache() && !refreshing) scheduler?.runNow("sonarr-library-refresh");
     res.json({
       shows: services.listShows({
         enrolledOnly: req.query.enrolled === "true",
@@ -441,8 +732,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   }));
   app.post("/api/shows/refresh", requireAuth, (_req, res) => {
-    const alreadyRunning = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("recommendation-refresh") ?? false });
+    const alreadyRunning = isAnyJobRunning("sonarr-library-refresh");
+    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("sonarr-library-refresh") ?? false });
   });
   app.get("/api/shows/:seriesId", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.getShowDetail(Number(req.params.seriesId)));
@@ -464,13 +755,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   }));
   app.get("/api/recommendations", requireAuth, asyncRoute(async (req, res) => {
-    const refreshing = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow("recommendation-refresh");
+    const refreshing = isAnyJobRunning("sonarr-library-refresh", "recommendation-refresh");
+    if (!db.getRecommendationCache() && !refreshing) scheduler?.runNow(recommendationRefreshTargetId());
     res.json(services.listRecommendations(req.query.includeIgnored === "true", refreshing || !db.getRecommendationCache()));
   }));
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
-    const alreadyRunning = scheduler?.listJobs().some((job) => job.id === "recommendation-refresh" && job.running) ?? false;
-    res.json({ triggered: alreadyRunning ? false : scheduler?.runNow("recommendation-refresh") ?? false });
+    res.json({ triggered: runRecommendationRefreshNow() });
   });
   app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -487,27 +777,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   }));
   app.delete("/api/rolling-shows/:id", requireAuth, asyncRoute(async (req, res) => {
     const result = await services.removeShow(Number(req.params.id));
-    if (result.ok) scheduler?.runNow("recommendation-refresh");
+    if (result.ok) runRecommendationRefreshNow();
     res.json(result);
   }));
 
-  app.post("/api/jobs/session-check/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.checkSessions());
-  }));
-  app.post("/api/jobs/history-import/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.importHistory());
-  }));
-  app.post("/api/jobs/full-history-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileFullHistory());
-  }));
-  app.post("/api/jobs/rolling-reconcile/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  // Preserve the old endpoint for callers that have not yet refreshed their UI.
-  app.post("/api/jobs/inactive-reset/run", requireAuth, asyncRoute(async (_req, res) => {
-    res.json(await services.reconcileRollingShows());
-  }));
-  app.post("/api/jobs/:id/run", requireAuth, (req, res) => res.json({ triggered: scheduler?.runNow(String(req.params.id)) ?? false }));
+  // Manual job triggers live at /api/settings/jobs/:id/run, which is what Settings → Jobs
+  // calls. The parallel /api/jobs/* endpoints that used to back the Dashboard's quick
+  // actions are gone with those buttons — they had no remaining callers, and two routes
+  // for one action is how they drift apart.
 
   app.get("/api/history", requireAuth, (req, res) => {
     const requestedPage = Math.floor(Number(req.query.page));
@@ -515,17 +792,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1;
     const pageSize = Number.isFinite(requestedPageSize) ? Math.min(100, Math.max(1, requestedPageSize)) : 10;
     const requestedLevel = String(req.query.level ?? "all");
-    const level = requestedLevel === "info" || requestedLevel === "warn" || requestedLevel === "error"
-      ? requestedLevel
-      : undefined;
-    const action = typeof req.query.action === "string" && req.query.action !== "all"
-      ? req.query.action
-      : undefined;
-    const { results, total, actions } = db.listHistoryPaginated({ page, pageSize, level, action });
+    // No code path writes an error-level history event — every addHistory call uses info
+    // or warn — so "error" is deliberately not an accepted level here either.
+    const level = requestedLevel === "info" || requestedLevel === "warn" ? requestedLevel : undefined;
+    const category = isHistoryCategory(req.query.category) ? req.query.category : undefined;
+    const { results, total } = db.listHistoryPaginated({ page, pageSize, level, category });
 
     res.json({
       results,
-      actions,
       pageInfo: {
         page,
         pageSize,
@@ -548,6 +822,11 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   const clientDir = path.resolve(process.cwd(), "dist/client");
   app.use("/images", express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
   app.use("/images", (_req, res) => res.sendStatus(404));
+  // Vite content-hashes every filename under /assets, so a build's output never collides
+  // with a previous one — safe to cache for as long as a browser will keep it. Everything
+  // else in dist/client (notably index.html, which names the current asset hashes and must
+  // always revalidate) keeps the conservative default below.
+  app.use("/assets", express.static(path.join(clientDir, "assets"), { maxAge: "1y", immutable: true }));
   app.use(express.static(clientDir, { maxAge: "1h" }));
   app.get(/.*/, (_req, res) => res.sendFile(path.join(clientDir, "index.html")));
 

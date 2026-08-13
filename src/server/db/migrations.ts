@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { Logger } from "../logger.js";
 
@@ -225,15 +226,163 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 12,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_prefetched_episodes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rolling_show_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          triggered_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(rolling_show_id, season_number, episode_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX idx_rolling_prefetched_episodes_show ON rolling_prefetched_episodes(rolling_show_id);
+      `);
+    },
+  },
+  {
+    // Two indexes for the same watch_events window-function shape, covering it in both
+    // directions: listLatestUserProgressForSeries(Batch) leads with sonarr_series_id (the
+    // Dashboard and Shows-page queries fixed in #59 — measured on a 932-show library /
+    // ~96k watch_events, this took the Shows-page progress query from ~150ms to ~8ms).
+    // listLatestWatchProgressForUser leads with user_id instead, for the rarer path that
+    // runs during Plex user discovery. Both let SQLite resolve the most recent watch event
+    // directly from the index instead of sorting matching rows in a temp b-tree.
+    version: 13,
+    up(db) {
+      db.exec(`
+        CREATE INDEX idx_watch_events_series_user_watched
+        ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+        ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
+  {
+    // Session IDs are bearer credentials. Hashing existing rows during the migration
+    // preserves valid logins while ensuring a database read cannot be replayed as one.
+    version: 14,
+    up(db) {
+      const sessions = db.prepare("SELECT id FROM sessions").all() as Array<{ id: string }>;
+      const update = db.prepare("UPDATE sessions SET id = ? WHERE id = ?");
+      for (const { id } of sessions) update.run(crypto.createHash("sha256").update(id).digest("hex"), id);
+    },
+  },
+  {
+    // Keep completed automatic decisions separate from the replaceable Sonarr library
+    // cache, so a restart never repeats a search or baseline for the same arrival.
+    version: 15,
+    up(db) {
+      db.exec(`
+        CREATE TABLE new_show_triage (
+          sonarr_series_id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          added_at TEXT,
+          decision TEXT NOT NULL CHECK(decision IN ('baseline', 'enroll', 'search')),
+          completed_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
+  {
+    // An automatic enrollment can fail after creating its rolling-show row. Persist
+    // that its subsequent mutation phase was Pacearr-initiated so retries never
+    // mistake a manual enrollment for incomplete automatic work and apply the pilot
+    // baseline to it.
+    version: 16,
+    up(db) {
+      db.exec(`
+        CREATE TABLE new_show_triage_pending_enrollments (
+          sonarr_series_id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          added_at TEXT,
+          started_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
+  {
+    // A Tautulli identity may belong to only one Plex user. NULL remains valid for
+    // every user until an administrator explicitly maps the identity.
+    version: 17,
+    up(db) {
+      // This migration has not reached a tagged release. Preserve the earliest user ID
+      // for each identity so an imported duplicate cannot block the uniqueness invariant.
+      // Do not move watch events or rolling progress between the duplicate Plex users:
+      // the bad mapping gives no evidence that either user's historical activity belongs
+      // to the other. Clearing only the later stable-ID mapping preserves that history
+      // and lets an administrator correct the ambiguous identity deliberately.
+      db.exec(`
+        UPDATE users
+        SET tautulli_user_id = NULL
+        WHERE tautulli_user_id IS NOT NULL
+          AND id NOT IN (
+            SELECT MIN(id) FROM users
+            WHERE tautulli_user_id IS NOT NULL
+            GROUP BY tautulli_user_id
+          );
+        CREATE UNIQUE INDEX idx_users_tautulli_user_id ON users(tautulli_user_id) WHERE tautulli_user_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    // Preserve the Tautulli username separately from its stable ID so it can be
+    // shown and manually corrected in the Pacearr user editor.
+    version: 18,
+    up(db) {
+      db.exec("ALTER TABLE users ADD COLUMN tautulli_username TEXT;");
+    },
+  },
+  {
+    // Existing matched Tautulli history already contains the username Pacearr used,
+    // so expose it in the user editor without requiring another import first.
+    version: 19,
+    up(db) {
+      db.exec(`
+        UPDATE users
+        SET tautulli_username = (
+          SELECT username FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id AND username IS NOT NULL AND trim(username) <> ''
+          ORDER BY watched_at DESC, id DESC LIMIT 1
+        )
+        WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
+      `);
+    },
+  },
+  {
+    // Migration 19 shipped before managed-user history used Tautulli's friendly
+    // name as a fallback. Re-run the corrected blank-only backfill for upgrades.
+    version: 20,
+    up(db) {
+      db.exec(`
+        UPDATE users
+        SET tautulli_username = (
+          SELECT COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), ''))
+          FROM watch_events
+          WHERE source = 'tautulli' AND user_id = users.id
+            AND COALESCE(NULLIF(trim(username), ''), NULLIF(trim(json_extract(raw_payload, '$.user')), '')) IS NOT NULL
+          ORDER BY watched_at DESC, id DESC LIMIT 1
+        )
+        WHERE tautulli_username IS NULL OR trim(tautulli_username) = '';
+      `);
+    },
+  },
 ];
 
-export function runMigrations(db: Database.Database, logger?: Logger): void {
+export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
   let currentVersion = db.pragma("user_version", { simple: true }) as number;
   const latestVersion = migrations[migrations.length - 1]?.version ?? 0;
-  if (currentVersion >= latestVersion) return;
+  const finalVersion = Math.min(targetVersion ?? latestVersion, latestVersion);
+  if (currentVersion >= finalVersion) return;
 
   for (const migration of migrations) {
-    if (migration.version <= currentVersion) continue;
+    if (migration.version <= currentVersion || migration.version > finalVersion) continue;
     logger?.info("Applying database migration", { from: currentVersion, to: migration.version });
     db.transaction(() => {
       migration.up(db);

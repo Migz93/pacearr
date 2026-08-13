@@ -2,6 +2,8 @@
 
 <img src="./public/logo.png" alt="Pacearr logo" width="256" height="256" />
 
+**Episodes at your pace.**
+
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]][license]
 [![Project Maintainer][maintainer-shield]][user_profile]
@@ -124,7 +126,7 @@ Pacearr is configured through its web UI after first run. The main things you ma
 
 ### Dry-Run Mode
 
-Dry-run mode is enabled by default. While it is enabled, Pacearr reads Sonarr and calculates the monitoring, search, artwork, and cleanup actions it would take, but it does not send mutating requests to Sonarr or Plex. Disable dry-run mode explicitly in Settings only after you have reviewed the proposed behavior.
+Dry-run mode is enabled by default. While it is enabled, Pacearr reads Sonarr and calculates the monitoring, search, artwork, and cleanup actions it would take, but it does not send mutating requests to Sonarr or Plex. Disable dry-run mode explicitly in Settings only after you have reviewed the proposed behaviour.
 
 ### Sonarr Changes And Cleanup
 

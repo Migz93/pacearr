@@ -1,8 +1,8 @@
 import { HardDrive } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ShowListItem, ShowRecommendation } from "../../shared/types";
-import { formatBytes } from "../lib/utils";
-import { AvatarStack, Poster } from "./ShowVisuals";
+import { badgeClass, formatBytes } from "../lib/utils";
+import { AvatarStack, ExpandedSeasons, Poster, PosterTile, PosterTileBadge } from "./ShowVisuals";
 
 export type ShowBrowserItem =
   | { kind: "library"; data: ShowListItem }
@@ -10,6 +10,14 @@ export type ShowBrowserItem =
 
 function seasonLabel(count: number) {
   return `${count} season${count === 1 ? "" : "s"}`;
+}
+
+// Column header text is hidden below the list breakpoints (see the header
+// rows in Shows.tsx), so stacked mobile values need their own inline label
+// to stay identifiable — otherwise a mobile user sees bare numbers/badges
+// with no indication of what each one means.
+export function RowLabel({ children, className }: { children: React.ReactNode; className: string }) {
+  return <span className={`mr-1.5 shrink-0 text-[10px] font-black uppercase tracking-wide text-on-surface-variant ${className}`}>{children}</span>;
 }
 
 function commonFields(item: ShowBrowserItem) {
@@ -20,64 +28,62 @@ function commonFields(item: ShowBrowserItem) {
     year: data.year,
     status: data.status,
     seasonCount: data.seasonCount,
-    watcherCount: data.watcherCount,
-    watchers: data.watchers.map((watcher) => ({ ...watcher, isHistory: false })),
+    viewerCount: data.viewerCount,
+    viewers: data.viewers.map((viewer) => ({ ...viewer, isHistory: false })),
   };
 }
 
 export function ShowCard({ item, returnTo }: { item: ShowBrowserItem; returnTo: string }) {
   const common = commonFields(item);
   return (
-    <Link className="poster-card" to={`/shows/${common.sonarrSeriesId}`} state={{ from: returnTo }}>
-      <div className="poster-art">
-        <Poster show={item.data} />
-        <div className="poster-art-gradient" aria-hidden="true" />
-        {item.kind === "recommendation" && (
-          <div className="poster-savings-badge"><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</div>
-        )}
-        <div className="poster-hover-info">
-          <span className="poster-hover-year">{common.year ?? "Unknown year"}</span>
-          <strong className="poster-hover-title">{common.title}</strong>
-          <span className="poster-hover-meta">{seasonLabel(common.seasonCount)}</span>
-          {common.watchers.length > 0 && <AvatarStack viewers={common.watchers} size={18} />}
-        </div>
-      </div>
-    </Link>
+    <PosterTile
+      show={item.data}
+      to={`/shows/${common.sonarrSeriesId}`}
+      state={{ from: returnTo }}
+      topBadge={item.kind === "recommendation" && <PosterTileBadge><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</PosterTileBadge>}
+    >
+      <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
+      <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
+      <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
+      {item.kind === "library" && item.data.enrolled && <ExpandedSeasons seasons={item.data.expandedSeasons} />}
+      {common.viewers.length > 0 && <AvatarStack viewers={common.viewers} size={18} />}
+    </PosterTile>
   );
 }
 
 export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnTo: string }) {
   const common = commonFields(item);
-  const rowClass = item.kind === "recommendation" ? "recommend-row" : "library-row";
   const ignored = item.kind === "recommendation" && item.data.ignored;
   return (
-    <Link className={`${rowClass}${ignored ? " ignored" : ""}`} to={`/shows/${common.sonarrSeriesId}`} state={{ from: returnTo }}>
-      <span className="recommend-show">
-        <Poster show={item.data} className="recommend-poster" />
-        <div>
-          <strong>{common.title}</strong>
-          <span className="muted small">
+    <Link className={`${ignored ? "opacity-60" : ""} grid items-center gap-3.5 border-b border-outline-variant/30 px-4 py-3 text-on-surface no-underline last:border-b-0 hover:[&>div:first-child>div>strong]:text-primary ${item.kind === "recommendation" ? "grid-cols-[minmax(220px,1.6fr)_110px_170px_140px_140px] max-[1170px]:grid-cols-1" : "grid-cols-[minmax(220px,1.6fr)_170px_220px] max-[970px]:grid-cols-1"}`} to={`/shows/${common.sonarrSeriesId}`} state={{ from: returnTo }}>
+      <div className="flex min-w-0 items-center gap-3">
+        <Poster show={item.data} className="w-10 shrink-0 rounded object-cover" />
+        <div className="min-w-0">
+          <strong className="block overflow-hidden text-ellipsis whitespace-nowrap">{common.title}</strong>
+          <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-xs text-on-surface-variant">
             {common.year ?? "Unknown year"} · {common.status ?? "unknown status"}
-            {item.kind === "library" && item.data.enrolled && <span className="badge good inline-badge">Enrolled</span>}
-            {ignored && <span className="badge warn inline-badge">Ignored</span>}
+            {item.kind === "library" && item.data.enrolled && <span className={`${badgeClass("success")} ml-1.5`}>Enrolled</span>}
+            {ignored && <span className={`${badgeClass("warning")} ml-1.5`}>Ignored</span>}
           </span>
         </div>
-      </span>
-      {item.kind === "recommendation" && <span>{formatBytes(item.data.sizeOnDiskBytes)}</span>}
+      </div>
+      {item.kind === "recommendation" && <span><RowLabel className="hidden max-[1170px]:inline">Size on disk</RowLabel>{formatBytes(item.data.sizeOnDiskBytes)}</span>}
       {item.kind === "recommendation" ? (
-        <span className="recommend-seasons">
-          <span className="badge good">{item.data.retainedSeasons.length} kept</span>
-          <span className="badge warn">{item.data.droppedSeasons.length} pilot-only</span>
+      <span className="flex flex-wrap items-center gap-1.5">
+          <RowLabel className="hidden max-[1170px]:inline">Seasons</RowLabel>
+          <span className={badgeClass("success")}>{item.data.retainedSeasons.length} kept</span>
+          <span className={badgeClass("warning")}>{item.data.droppedSeasons.length} pilot-only</span>
         </span>
       ) : (
         <span>{seasonLabel(common.seasonCount)}</span>
       )}
-      <span className="recommend-watchers">
-        <AvatarStack viewers={common.watchers} size={22} />
-        {common.watcherCount === 0 && <span className="muted small">No recent viewers</span>}
+      <span className="flex items-center gap-2">
+        <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Viewers</RowLabel>
+        <AvatarStack viewers={common.viewers} size={22} />
+        {common.viewerCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
       </span>
       {item.kind === "recommendation" && (
-        <strong className="recommend-savings"><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>
+        <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>
       )}
     </Link>
   );

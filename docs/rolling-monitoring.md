@@ -24,6 +24,32 @@ When a show is enrolled:
 
 The current UI enroll action sends both `applyBaseline: true` and `importHistory: true`.
 
+## Early Season Prefetch
+
+Early season prefetch is optional and disabled by default. When enabled, a watch
+event within the configured remaining-episode threshold monitors and searches
+E02 onward (up to the configured count) in the next real season. Sonarr only
+receives episodes that actually exist, so short seasons are naturally capped.
+
+Prefetched episodes are stored separately from `expanded_seasons`, including the
+user and timestamp that triggered them. Reconciliation preserves those
+individual episode targets without treating the entire season as expanded. When
+E01 is watched and the season expands, its prefetch records are cleared. The
+show detail page displays the prefetched episodes and triggering user. During
+scheduled reconciliation, a prefetch is reclaimed after the progressive cleanup
+delay when no active enabled viewer still needs that season (because viewers are
+inactive or have progressed beyond it). Dry-run previews this cleanup without
+clearing persisted prefetch state. This reclaim, like expanded-season cleanup,
+is disabled when the **Progressive cleanup** setting is disabled.
+
+The setting is controlled under Settings → Automation:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| Early season prefetch | off | Enable early monitoring/searching of the next season |
+| Episodes remaining trigger | 3 | Start when this many episodes remain after the watched episode |
+| Episodes to prefetch | 2 | Number of next-season episodes after E01 to target |
+
 When the optional rolling-season artwork setting is enabled in live mode,
 Pacearr also labels pilot-only Plex season posters with `WATCH E01 TO UNLOCK`.
 It restores the saved original poster as soon as that season is expanded.

@@ -80,16 +80,27 @@ export interface AppSettings {
   dryRun: boolean;
   artworkEnabled: boolean;
   viewerActivityWindowDays: number;
+  historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
-  inactivityResetDays: number;
-  autoResetEnabled: boolean;
+  fullHistoryReconcileIntervalDays: number;
+  rollingReconcileIntervalHours: number;
+  sonarrLibraryRefreshIntervalHours: number;
+  recommendationRefreshIntervalHours: number;
   progressiveCleanupEnabled: boolean;
   progressiveCleanupDelayDays: number;
   cleanupDeletesFiles: boolean;
   recommendationMinimumSavingsGb: number;
   trustProxy: boolean;
   onboardingComplete: boolean;
+  earlyPrefetchEnabled: boolean;
+  earlyPrefetchTriggerEpisodesRemaining: number;
+  earlyPrefetchEpisodeCount: number;
+  newShowTriageEnabled: boolean;
+  newShowTriageIntervalMinutes: number;
+  newShowTriageEpisodeThreshold: number;
+  /** Internal activation boundary; series already in Sonarr before this instant are ignored. */
+  newShowTriageEnabledAt: string | null;
 }
 
 export interface PlexArtworkRecord {
@@ -139,11 +150,40 @@ export interface UserRecord {
   plexUserId: string;
   plexAccountId: string | null;
   tautulliUserId: string | null;
+  /** The Tautulli username shown and editable in Pacearr's user settings. */
+  tautulliUsername: string | null;
   username: string;
   displayName: string;
   avatarUrl: string | null;
   enabled: boolean;
   lastSeenAt: string | null;
+}
+
+/** A user plus the activity the Users page shows. UserRecord stays the raw row shape. */
+export interface UserListItem extends UserRecord {
+  /** Enrolled shows this viewer is currently keeping expanded. */
+  activeShowCount: number;
+  /** Most recent watch on any enrolled show, regardless of the activity window. */
+  lastWatchedAt: string | null;
+}
+
+/** A Tautulli identity whose stored history has not yet been linked to a Plex user. */
+export interface UnmappedTautulliUser {
+  tautulliUserId: string;
+  username: string | null;
+  friendlyName: string | null;
+  eventCount: number;
+  lastWatchedAt: string;
+}
+
+export interface UserShowActivity {
+  sonarrSeriesId: number;
+  title: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  watchedAt: string;
+  /** False once the watch falls outside the viewer activity window. */
+  active: boolean;
 }
 
 export interface SonarrSeries {
@@ -154,6 +194,7 @@ export interface SonarrSeries {
   imdbId?: string | null;
   year?: number;
   status?: string;
+  added?: string;
   monitored?: boolean;
   monitorNewItems?: "all" | "none";
   images?: Array<{
@@ -216,8 +257,8 @@ export interface ShowListItem {
   seasonCount: number;
   episodeCount: number;
   sizeOnDiskBytes: number;
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
 }
 
 export interface ShowSeasonSummary {
@@ -229,6 +270,25 @@ export interface ShowSeasonSummary {
   watchedUsers: number;
   latestWatchedAt: string | null;
   isExpanded: boolean;
+  prefetchedEpisodes: PrefetchedEpisodeSummary[];
+}
+
+export interface PrefetchedEpisodeSummary {
+  seasonNumber: number;
+  episodeNumber: number;
+  userId: number;
+  displayName: string;
+  avatarUrl: string | null;
+  triggeredAt: string;
+}
+
+export interface PrefetchedEpisodeRecord {
+  id: number;
+  rollingShowId: number;
+  userId: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  triggeredAt: string;
 }
 
 export interface ShowEpisodeSummary {
@@ -293,8 +353,8 @@ export interface ShowRecommendation {
   sizeOnDiskBytes: number;
   retainedSeasons: number[];
   droppedSeasons: number[];
-  watcherCount: number;
-  watchers: ShowUserProgress[];
+  viewerCount: number;
+  viewers: ShowUserProgress[];
   projectedSavingsBytes: number;
   ignored: boolean;
 }
@@ -356,7 +416,6 @@ export interface HistoryEvent {
 
 export interface HistoryPageResponse {
   results: HistoryEvent[];
-  actions: string[];
   pageInfo: {
     page: number;
     pageSize: number;
@@ -375,7 +434,7 @@ export interface DashboardResponse {
     reclaimedFiles: number;
   };
   activeShows: DashboardShowActivity[];
-  recentChanges: HistoryEvent[];
+  recentActivity: HistoryEvent[];
   jobs: JobInfo[];
   dryRun: boolean;
 }
@@ -404,6 +463,8 @@ export interface JobInfo {
   lastRunStatus: "success" | "error" | null;
   running: boolean;
   isRunning?: boolean;
+  statusDescription?: string;
+  statusMode?: "live" | "polling-fallback" | "unavailable";
 }
 
 export interface AboutInfo {

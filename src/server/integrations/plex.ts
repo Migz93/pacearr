@@ -3,6 +3,7 @@ import { parseStringPromise } from "xml2js";
 import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
 import { PLEX_USER_AGENT } from "../version.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
 const PLEX_TV_RESOURCES_URL = "https://plex.tv/api/v2/resources";
@@ -69,6 +70,10 @@ function unixToIso(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? new Date(parsed * 1000).toISOString() : new Date().toISOString();
 }
 
+export function buildPlexServerUrl(serverUrl: string, pathname: string): URL {
+  return buildIntegrationUrl(serverUrl, pathname);
+}
+
 function normalizeHistoryVideo(video: any): PlexEpisodeActivity | null {
   const v = attr(video);
   if (v.type !== "episode") return null;
@@ -115,14 +120,13 @@ export class PlexIntegration {
   constructor(private readonly settings: PlexSettingsInput, private readonly logger: Logger) {}
 
   private buildServerUrl(pathname: string) {
-    const base = this.settings.serverUrl.endsWith("/") ? this.settings.serverUrl : `${this.settings.serverUrl}/`;
-    return new URL(pathname.replace(/^\/+/, ""), base);
+    return buildPlexServerUrl(this.settings.serverUrl, pathname);
   }
 
-  private async requestServerXml(pathname: string) {
+  private async requestServerXml(pathname: string, timeoutMs?: number) {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
-    const response = await fetch(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } });
+    const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } }, timeoutMs);
     if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
     return parseStringPromise(await response.text(), { explicitArray: false, mergeAttrs: false });
   }
@@ -130,7 +134,7 @@ export class PlexIntegration {
   private async requestServer(pathname: string, options: RequestInit = {}): Promise<Response> {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       ...options,
       headers: { "User-Agent": PLEX_USER_AGENT, ...(options.headers ?? {}) },
     });
@@ -160,7 +164,7 @@ export class PlexIntegration {
       avatarUrl: owner.avatarUrl,
     }];
     try {
-      const response = await fetch(PLEX_TV_USERS_URL, {
+      const response = await fetchIntegration(new URL(PLEX_TV_USERS_URL), {
         headers: {
           "X-Plex-Token": this.settings.token,
           "User-Agent": PLEX_USER_AGENT,
@@ -194,7 +198,7 @@ export class PlexIntegration {
     let start = 0;
     const size = 1000;
     for (;;) {
-      const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`);
+      const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`, 60_000);
       const videos = toArray(data?.MediaContainer?.Video);
       const pageEvents: PlexEpisodeActivity[] = [];
       for (const video of videos) {
@@ -332,7 +336,7 @@ export class PlexIntegration {
   }
 
   static async fetchAccountByToken(token: string) {
-    const response = await fetch(PLEX_TV_ACCOUNT_URL, {
+    const response = await fetchIntegration(new URL(PLEX_TV_ACCOUNT_URL), {
       headers: { "User-Agent": PLEX_USER_AGENT, "X-Plex-Token": token, Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`Plex account fetch failed: ${response.status} ${response.statusText}`);
@@ -350,7 +354,7 @@ export class PlexIntegration {
   }
 
   static async pingToken(token: string): Promise<void> {
-    const response = await fetch(PLEX_TV_PING_URL, {
+    const response = await fetchIntegration(new URL(PLEX_TV_PING_URL), {
       headers: {
         "User-Agent": PLEX_USER_AGENT,
         "X-Plex-Token": token,
@@ -366,7 +370,7 @@ export class PlexIntegration {
     const url = new URL(PLEX_TV_RESOURCES_URL);
     url.searchParams.set("includeHttps", "1");
     url.searchParams.set("includeRelay", "1");
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       headers: {
         "User-Agent": PLEX_USER_AGENT,
         "X-Plex-Token": token,

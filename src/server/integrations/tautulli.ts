@@ -1,10 +1,14 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 export interface TautulliHistoryRecord {
   referenceId: string;
   userId: string | null;
+  /** The Plex username (Tautulli's `username` field) — absent for Plex Home/managed users. */
   username: string | null;
+  /** Tautulli's admin-editable friendly name (its `user` field) — can be renamed independently of Plex. */
+  friendlyName: string | null;
   showTitle: string;
   seasonNumber: number;
   episodeNumber: number;
@@ -18,8 +22,7 @@ export class TautulliIntegration {
   constructor(private readonly settings: TautulliSettings, private readonly logger: Logger) {}
 
   private buildUrl(params: Record<string, string | number | undefined>) {
-    const base = this.settings.baseUrl.endsWith("/") ? this.settings.baseUrl : `${this.settings.baseUrl}/`;
-    const url = new URL("api/v2", base);
+    const url = buildIntegrationUrl(this.settings.baseUrl, "api/v2");
     url.searchParams.set("apikey", this.settings.apiKey);
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -27,8 +30,8 @@ export class TautulliIntegration {
     return url;
   }
 
-  private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-    const response = await fetch(this.buildUrl({ cmd, ...params }));
+  private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}, timeoutMs?: number): Promise<T> {
+    const response = await fetchIntegration(this.buildUrl({ cmd, ...params }), {}, timeoutMs);
     if (!response.ok) throw new Error(`Tautulli ${response.status} ${response.statusText}`);
     const body = await response.json() as { response?: { result?: string; message?: string; data?: T } };
     if (body.response?.result === "error") throw new Error(body.response.message || "Tautulli API error");
@@ -56,7 +59,7 @@ export class TautulliIntegration {
         media_type: "episode",
         start,
         length,
-      });
+      }, 60_000);
       const rows = data?.data ?? [];
       const pageRecords: TautulliHistoryRecord[] = [];
       for (const row of rows) {
@@ -67,7 +70,8 @@ export class TautulliIntegration {
         pageRecords.push({
           referenceId: String(row.reference_id ?? row.id ?? `${row.user_id}:${row.rating_key}:${watchedAtUnix}`),
           userId: row.user_id ? String(row.user_id) : null,
-          username: row.user ?? row.username ?? null,
+          username: row.username === null || row.username === undefined ? null : String(row.username),
+          friendlyName: row.user === null || row.user === undefined ? null : String(row.user),
           showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
           seasonNumber,
           episodeNumber,

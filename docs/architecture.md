@@ -1,3 +1,5 @@
+<!-- shared: structure — headings kept in sync across Migz93 self-hosted apps, content is app-specific -->
+
 # Pacearr Architecture Overview
 
 ## What Pacearr Is
@@ -11,7 +13,7 @@ It does not request media and it does not add shows to Sonarr. Instead, it lists
 - Sonarr is the source of truth for the available TV series and episode metadata.
 - Plex is the default source of truth for playback history and live sessions.
 - Tautulli is an optional additional history source.
-- Pacearr is the source of truth for enrollment, normalized watch events, per-user rolling progress, expanded seasons, job state, and audit history.
+- Pacearr is the source of truth for enrollment, normalised watch events, per-user rolling progress, expanded seasons, job state, and audit history.
 - V1 supports one Sonarr instance.
 - V1 supports one rolling mode: all-season pilots.
 
@@ -36,26 +38,11 @@ Pacearr uses SQLite `PRAGMA user_version` for schema migrations.
 
 - Versioned migrations live in `src/server/db/migrations.ts`.
 - `runMigrations(db)` runs on startup, applies any migration whose version is higher than the current `user_version`, and advances `user_version` after each successful migration.
-- Each migration runs inside a transaction so a failure should leave the database unchanged.
-
-The current v1 baseline migration creates:
-
-- `settings`
-- `users`
-- `rolling_shows`
-- `rolling_show_users`
-- `watch_events`
-- `history_events`
-- `job_run_state`
-- `sessions`
-
-Migration v2 adds `ignored_recommendations`, keyed by Sonarr series id, so recommendation exclusions survive application restarts.
-
-Migration v3 adds the calculated `recommendation_cache`. Migration v4 adds `sonarr_library_cache`, which stores the shared Sonarr series snapshot and locally cached poster paths.
+- Each migration runs inside a transaction, so a failure should leave the database unchanged.
 
 When changing the schema in the future:
 
-1. Add a new migration entry with the next integer version.
+1. Add a new migration entry with the next integer version, with a comment explaining what it does and why.
 2. Write the schema change in that migration's `up(db)` function.
 3. Do not edit older migrations that may already have shipped.
 4. Keep default-setting seeding separate from schema migrations.
@@ -64,6 +51,8 @@ When changing the schema in the future:
 
 - Authentication is Plex-owner based.
 - The first successful Plex login becomes the stored owner account.
+- Session IDs are random bearer tokens but SQLite stores only their SHA-256 hash; upgrading hashes existing rows without invalidating active cookies.
+- Cookies are `HttpOnly`, `SameSite=Strict`, and add `Secure` for HTTPS requests. `trustProxy` must be enabled when TLS terminates at a reverse proxy; it is read when the server starts, so changing it requires a restart.
 - OAuth popup login is available from the UI; manual token entry is retained as a fallback.
 - Setup flow is currently lightweight:
   1. sign in with Plex
@@ -77,7 +66,7 @@ When changing the schema in the future:
 
 ### Show enrollment
 
-The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the same background job used by Recommendations. That job refreshes the library, caches missing posters, and then recalculates recommendations every six hours, after history imports, on first configured startup, or on demand.
+The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the `sonarr-library-refresh` job, which owns routine whole-library fetching and caching of missing posters. `recommendation-refresh` separately recalculates recommendations from that snapshot on its own configurable schedule, at initial setup, or on demand; it does not repeat the whole-library fetch. History processing uses the snapshot, falling back to a direct fetch only before the first cache exists. Session processing also makes one direct fetch when an active session is absent from the cached snapshot.
 
 Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run history import immediately.
 
@@ -91,11 +80,11 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled.
 
-Imported rows are normalized into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
+Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
 
 ### Live session monitoring
 
-The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalized into the same watch-event path used by history import.
+The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalised into the same watch-event path used by history import.
 
 Watching SxxE01 for an enrolled show expands that season.
 
@@ -109,7 +98,20 @@ Pacearr uses Sonarr v3 API endpoints to:
 - set episode monitored flags
 - trigger `EpisodeSearch`
 - trigger `SeasonSearch`
+- trigger `SeriesSearch` for eligible new arrivals
 - delete episode files during cleanup/reset when enabled
+
+Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their credentialed requests reject redirects and use a 15-second default timeout; the Sonarr library refresh uses a 60-second timeout for large libraries. These controls prevent client-side redirects from forwarding credentials to a different origin and bound stalled scheduled work. The configured endpoint itself remains trusted by the administrator.
+
+### Automatic new-show triage
+
+When enabled, the `new-show-triage` job polls Sonarr on a configurable interval
+(default every five minutes) and acts only on series added after its activation
+boundary. It searches smaller arrivals in full and enrolls larger arrivals onto
+the pilot baseline. Completed
+decisions and partial automatic enrollments are persisted independently of the
+replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
+never alter a manual enrollment.
 
 ### Frontend
 
@@ -128,6 +130,7 @@ It is designed as an operational admin surface rather than a public landing page
 - Dry-run mode defaults to enabled and blocks every Sonarr PUT, POST, and DELETE operation at the integration boundary.
 - Pacearr never adds a series to Sonarr.
 - Pacearr only manages shows explicitly enrolled in `rolling_shows`.
+- New-show triage is disabled by default and never changes series that predate its activation boundary.
 - Specials, season `0`, are ignored by rolling baseline and expansion logic.
 - All-season-pilot baseline keeps E01 of every real season monitored and searches those pilot episodes.
 - Expanded seasons are stored as a sorted unique season-number array.

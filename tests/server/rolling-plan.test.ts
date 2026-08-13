@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateRollingPlan } from "../../src/server/services.js";
+import { calculateRollingPlan, selectEarlyPrefetchEpisodes } from "../../src/server/services.js";
 import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
 
 const series = {
@@ -45,6 +45,44 @@ test("rolling plan does not search monitored episodes that already have files", 
 
   assert.deepEqual(plan.pilotSearches, []);
   assert.deepEqual(plan.seasonSearches, []);
+});
+
+test("early prefetch selects only existing episodes after the next season pilot", () => {
+  const episodes = [1, 2, 3, 4].flatMap((seasonNumber) =>
+    [1, 2, 3].filter((episodeNumber) => !(seasonNumber === 2 && episodeNumber === 3)).map((episodeNumber) => ({
+      id: seasonNumber * 100 + episodeNumber,
+      seriesId: 1,
+      seasonNumber,
+      episodeNumber,
+      monitored: episodeNumber === 1,
+      hasFile: false,
+    }))
+  );
+  const selection = selectEarlyPrefetchEpisodes(episodes, 1, 1, 2, 3);
+  assert.equal(selection.episodesRemaining, 2);
+  assert.equal(selection.nextSeasonNumber, 2);
+  assert.deepEqual(selection.episodes.map((episode) => episode.episodeNumber), [2]);
+});
+
+test("rolling plan preserves prefetched episodes without retaining their whole season", () => {
+  const series = { id: 1, title: "Example", monitored: true, monitorNewItems: "none" as const, seasons: [
+    { seasonNumber: 1, monitored: false },
+    { seasonNumber: 2, monitored: false },
+  ] };
+  const episodes = [1, 2, 3].flatMap((seasonNumber) => [1, 2].map((episodeNumber) => ({
+    id: seasonNumber * 10 + episodeNumber,
+    seriesId: 1,
+    seasonNumber,
+    episodeNumber,
+    monitored: episodeNumber === 1,
+    hasFile: episodeNumber === 2,
+    episodeFileId: episodeNumber === 2 ? seasonNumber * 100 + episodeNumber : undefined,
+  })));
+  const plan = calculateRollingPlan(series, episodes, [], true, [22]);
+  assert.equal(plan.retainedSeasons.includes(2), false);
+  assert.equal(plan.episodesToMonitor.some((episode) => episode.id === 22), true);
+  assert.equal(plan.episodesToUnmonitor.some((episode) => episode.id === 22), false);
+  assert.equal(plan.filesToDelete.includes(202), false);
 });
 
 test("rolling plan deletes an orphaned non-pilot file even when it was already unmonitored", () => {

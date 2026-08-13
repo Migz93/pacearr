@@ -62,7 +62,7 @@ Pacearr imports episode history through:
 /status/sessions/history/all
 ```
 
-Imported episode events are normalized into `watch_events`.
+Imported episode events are normalised into `watch_events`.
 
 ### Live Sessions
 
@@ -80,7 +80,7 @@ Pacearr tries to match Plex/Tautulli events to enrolled Sonarr shows in this ord
 
 1. TVDB id, when Plex show metadata can provide it
 2. IMDB id, when Plex show metadata can provide it
-3. normalized show title fallback
+3. normalised show title fallback
 
 This means Plex events with a show rating key may trigger an extra Plex metadata fetch to read GUIDs.
 
@@ -92,6 +92,8 @@ The Sonarr settings are:
 
 - base URL
 - API key
+
+Use the final, canonical base URL for every configured integration. Pacearr sends credentials with integration requests and deliberately rejects redirects, so a URL that redirects (for example, from HTTP to HTTPS or to another base path) will fail instead of being followed.
 
 ### Endpoints Used
 
@@ -106,13 +108,25 @@ The Sonarr settings are:
 | Update episode monitoring | `PUT /api/v3/episode/monitor` |
 | Search pilots | `POST /api/v3/command` with `EpisodeSearch` |
 | Search full season | `POST /api/v3/command` with `SeasonSearch` |
+| Search full series | `POST /api/v3/command` with `SeriesSearch` |
 | Delete episode file | `DELETE /api/v3/episodefile/{id}` |
 
 ### Show Review Data
 
 The Shows UI reads Sonarr series, season, episode, and poster metadata through the backend. Posters are downloaded by the server and served from the local image cache under `/images`, so browsers do not need direct Sonarr access. Pacearr prefers Sonarr's poster `remoteUrl` because local `/MediaCover` URLs can return the Sonarr web app HTML on deployments that protect media routes behind UI auth; the local URL remains a fallback when no remote URL is available.
 
-The show detail view combines Sonarr's current library state with Pacearr's normalized `watch_events` table. This lets reviewers see which seasons and episodes have imported viewer activity before deciding whether a show is a good fit for rolling episode enrollment.
+The show detail view combines Sonarr's current library state with Pacearr's normalised `watch_events` table. This lets reviewers see which seasons and episodes have imported viewer activity before deciding whether a show is a good fit for rolling episode enrollment.
+
+### Automatic new-show triage
+
+When enabled, Pacearr polls Sonarr every five minutes by default; the interval
+is configurable in Settings → Jobs. It ignores series that
+were already present when the setting was enabled, then searches smaller new
+series in full and enrolls series over the configured total-episode limit onto
+the pilot baseline. Successful live decisions are persisted so a restart does
+not repeat them; dry-run and failed arrivals remain pending for a later poll.
+To minimise downloads that Pacearr subsequently purges, disable
+**Search on Add** in any source that adds series to Sonarr.
 
 ### Non-Goals
 
@@ -134,11 +148,30 @@ When enabled, Pacearr imports episode watch history through Tautulli's API:
 cmd=get_history
 ```
 
-Tautulli events are normalized into the same `watch_events` table as Plex events.
+Tautulli events are normalised into the same `watch_events` table as Plex events.
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 
-## Failure Behavior
+### User Matching
+
+`get_history` reports two names per event, and Pacearr treats them as independent signals with different trust levels:
+
+| Tautulli field | Meaning | Trust |
+|---|---|---|
+| `username` | The real Plex username. Empty for Plex Home/managed users. | Tried first |
+| `user` | The friendly name, editable per user in Tautulli's admin UI at any time. | Fallback only |
+
+Matching is case-insensitive and follows this order:
+
+1. A manually saved Tautulli `user_id` mapping wins outright. The Users page lists unmatched Tautulli identities in a collapsed section; mapping one saves its stable ID and displayed username against the Pacearr user, then re-links its stored unmatched history. The editable Tautulli user field is a fallback if the stable ID is unavailable.
+2. Try the saved editable Tautulli username against the event `username`, then `user`. An ambiguous saved-name match stops the lookup rather than guessing.
+3. Try `username` against Pacearr's Plex-sourced `users.username` then `users.display_name`. An unambiguous match wins outright.
+4. A `username` match that is ambiguous (colliding case-insensitively across multiple Pacearr users) stops the lookup — the friendly name is not tried, since a coincidental match there could attribute the event to an unrelated third user.
+5. If `username` produced no match at all (not ambiguous, just nothing), try the friendly name the same way.
+
+A duplicate event (same `source_event_id`) that was previously imported with `user_id = NULL` is repaired in place once a later import resolves a match, and that user's rolling progress is refreshed — otherwise `INSERT OR IGNORE` would leave it orphaned forever.
+
+## Failure Behaviour
 
 External API failures should:
 

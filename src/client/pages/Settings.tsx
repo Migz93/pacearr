@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
-import { formatRelativeTime } from "../lib/utils";
+import { badgeClass, cn, formatRelativeTime } from "../lib/utils";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, Field, iconButtonClass, NumberField, primaryButtonClass, SaveBar, secondaryButtonClass, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
+import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
   AboutInfo,
   JobInfo,
@@ -27,15 +30,20 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const LEVEL_BADGE: Record<LogFilter, string> = {
-  debug: "badge",
-  info: "badge good",
-  warn: "badge warn",
-  error: "badge danger",
+  debug: badgeClass(),
+  info: badgeClass("success"),
+  warn: badgeClass("warning"),
+  error: badgeClass("error"),
 };
 
-const JOB_PRESETS: Record<string, { unit: "minutes" | "hours"; values: number[] }> = {
+const JOB_PRESETS: Record<string, { unit: "minutes" | "hours" | "days"; values: number[] }> = {
   "session-check": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
   "history-import": { unit: "hours", values: [60, 120, 240, 360, 720, 1440] },
+  "full-history-reconcile": { unit: "days", values: [10080, 20160, 43200, 86400, 129600] },
+  "rolling-reconcile": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "sonarr-library-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "recommendation-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "new-show-triage": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
 };
 
 export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) {
@@ -66,29 +74,24 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   }
 
   return (
-    <div className="page settings-page">
-      <div className="page-header">
-        <div>
-          <h1>Settings</h1>
-          <p className="muted">Configure automation, integrations, background jobs, and runtime diagnostics.</p>
-        </div>
-      </div>
+    <Page>
+      <PageHeader title="Settings" />
 
-      <select className="settings-tab-select" value={activeTab} onChange={(event) => setTab(event.target.value as Tab)}>
+      <SelectInput className="hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
-      </select>
+      </SelectInput>
 
-      <div className="settings-tabs">
+      <div className="mb-[22px] flex gap-1 rounded-xl border border-outline-variant/30 bg-background-container-high p-1 max-[820px]:hidden">
         {TABS.map((tab) => (
-          <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setTab(tab.id)}>
+          <button type="button" key={tab.id} className={`min-h-10 flex-1 rounded-lg border-0 font-bold ${activeTab === tab.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`} onClick={() => setTab(tab.id)}>
             {tab.label}
           </button>
         ))}
       </div>
 
-      {error && <div className="error">{error}</div>}
+      {error && <ErrorBanner message={error} />}
       {loading ? (
-        <div className="centered-panel">Loading settings...</div>
+        <PageLoading label="Loading settings..." />
       ) : (
         <>
           {activeTab === "general" && settings && <GeneralTab settings={settings} onSave={async () => { await loadSettings(); await onSaved(); }} />}
@@ -100,71 +103,100 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
           {activeTab === "about" && <AboutTab />}
         </>
       )}
-    </div>
+    </Page>
   );
 }
 
-function SectionCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
-  return (
-    <section className="settings-card">
-      <div className="settings-card-header">
-        <h2>{title}</h2>
-        {description && <p className="muted">{description}</p>}
-      </div>
-      <div className="settings-stack">{children}</div>
-    </section>
-  );
-}
+type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount" | "newShowTriageEpisodeThreshold" | "viewerActivityWindowDays" | "historyRetentionDays" | "progressiveCleanupDelayDays" | "recommendationMinimumSavingsGb"> & {
+  earlyPrefetchTriggerEpisodesRemaining: string;
+  earlyPrefetchEpisodeCount: string;
+  newShowTriageEpisodeThreshold: string;
+  viewerActivityWindowDays: string;
+  historyRetentionDays: string;
+  progressiveCleanupDelayDays: string;
+  recommendationMinimumSavingsGb: string;
+};
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="field">
-      <label>{label}</label>
-      {hint && <p className="field-hint">{hint}</p>}
-      {children}
-    </div>
-  );
-}
-
-function ToggleField({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return (
-    <label className="toggle-field">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span className="toggle-track"><span /></span>
-      <span>
-        <strong>{label}</strong>
-        {hint && <small>{hint}</small>}
-      </span>
-    </label>
-  );
-}
-
-function SaveBar({ saving, success, error, label, onSave }: { saving: boolean; success: boolean; error: string | null; label: string; onSave: () => void }) {
-  return (
-    <div className="save-bar">
-      <div>{success && <span className="inline-success">Saved</span>}{error && <span className="inline-error">{error}</span>}</div>
-      <button className="primary-button" disabled={saving} onClick={onSave}>
-        {saving ? "Saving..." : label}
-        {!saving && <ChevronRight size={15} />}
-      </button>
-    </div>
-  );
+function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
+  return {
+    ...app,
+    earlyPrefetchTriggerEpisodesRemaining: String(app.earlyPrefetchTriggerEpisodesRemaining),
+    earlyPrefetchEpisodeCount: String(app.earlyPrefetchEpisodeCount),
+    newShowTriageEpisodeThreshold: String(app.newShowTriageEpisodeThreshold),
+    viewerActivityWindowDays: String(app.viewerActivityWindowDays),
+    historyRetentionDays: String(app.historyRetentionDays),
+    progressiveCleanupDelayDays: String(app.progressiveCleanupDelayDays),
+    recommendationMinimumSavingsGb: String(app.recommendationMinimumSavingsGb),
+  };
 }
 
 function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const [form, setForm] = useState({ ...settings.app });
+  const [form, setForm] = useState<GeneralForm>(() => generalFormFromSettings(settings.app));
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => setForm({ ...settings.app }), [settings.app]);
+  useEffect(() => setForm(generalFormFromSettings(settings.app)), [settings.app]);
 
   async function save() {
     setSaving(true);
     setSuccess(false);
     setError(null);
     try {
-      await apiPatch("/api/settings/app", form);
+      const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
+      const count = Number(form.earlyPrefetchEpisodeCount);
+      const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
+      // Number("") is 0, which is valid for two of these settings. Preserve an empty
+      // field as invalid instead of silently saving it as a real zero.
+      const viewerActivityWindowDays = form.viewerActivityWindowDays.trim() === "" ? Number.NaN : Number(form.viewerActivityWindowDays);
+      const historyRetentionDays = form.historyRetentionDays.trim() === "" ? Number.NaN : Number(form.historyRetentionDays);
+      const progressiveCleanupDelayDays = form.progressiveCleanupDelayDays.trim() === "" ? Number.NaN : Number(form.progressiveCleanupDelayDays);
+      const recommendationMinimumSavingsGb = form.recommendationMinimumSavingsGb.trim() === "" ? Number.NaN : Number(form.recommendationMinimumSavingsGb);
+      if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
+        setError("Early prefetch values must be positive whole numbers.");
+        return;
+      }
+      if (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1)) {
+        setError("New-show triage episode limit must be a positive whole number.");
+        return;
+      }
+      // The server clamps every one of these to a safe value regardless (see
+      // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
+      // without this check it fails silently: the field just snaps to the clamped number
+      // after the save completes, with no indication anything was wrong.
+      if (!Number.isInteger(viewerActivityWindowDays) || viewerActivityWindowDays < 1) {
+        setError("Viewer activity window must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(historyRetentionDays) || historyRetentionDays < 1) {
+        setError("History retention must be a positive whole number of days.");
+        return;
+      }
+      if (!Number.isInteger(progressiveCleanupDelayDays) || progressiveCleanupDelayDays < 0) {
+        setError("Cleanup delay must be a whole number of days, zero or more.");
+        return;
+      }
+      if (!Number.isFinite(recommendationMinimumSavingsGb) || recommendationMinimumSavingsGb < 0) {
+        setError("Minimum savings must be zero or more.");
+        return;
+      }
+      // Only the fields this tab owns. Spreading the whole form would PATCH back the
+      // job intervals as they were when the tab loaded, silently undoing a schedule
+      // changed on the Jobs tab in the meantime.
+      await apiPatch("/api/settings/app", {
+        dryRun: form.dryRun,
+        artworkEnabled: form.artworkEnabled,
+        viewerActivityWindowDays,
+        historyRetentionDays,
+        progressiveCleanupEnabled: form.progressiveCleanupEnabled,
+        progressiveCleanupDelayDays,
+        recommendationMinimumSavingsGb,
+        trustProxy: form.trustProxy,
+        earlyPrefetchEnabled: form.earlyPrefetchEnabled,
+        ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
+        newShowTriageEnabled: form.newShowTriageEnabled,
+        ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold } : {}),
+      });
       setSuccess(true);
       await onSave();
     } catch (caught) {
@@ -174,30 +206,129 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
     }
   }
 
+  // One card per concern, one control per row. Hints say what the setting does to your
+  // shows, not how the mechanism works — anything longer than a line belongs in docs/.
   return (
-    <SectionCard title="Automation" description="Control Pacearr's monitoring behavior, history import, and cleanup rules.">
-      <ToggleField label="Dry run mode" hint="Enabled by default. Pacearr records and logs planned Sonarr changes but does not monitor, unmonitor, search, or delete anything." checked={form.dryRun} onChange={(value) => setForm({ ...form, dryRun: value })} />
-      <ToggleField label="Rolling artwork" hint="When live, Pacearr marks the Plex show as rolling and labels pilot-only seasons and their episode-one thumbnails. Original artwork is restored when a season expands or the show is unenrolled." checked={form.artworkEnabled} onChange={(value) => setForm({ ...form, artworkEnabled: value })} />
-      <div className="settings-form-grid">
-        <Field label="History import hours" hint="How often playback history is imported.">
-          <input type="number" min={1} value={form.historyImportIntervalHours} onChange={(event) => setForm({ ...form, historyImportIntervalHours: Number(event.target.value) })} />
-        </Field>
-        <Field label="Viewer activity window days" hint="Only viewers active in this window count as current progress or keep a season expanded. Shows without any current viewers return to pilots.">
-          <input type="number" min={1} value={form.viewerActivityWindowDays} onChange={(event) => setForm({ ...form, viewerActivityWindowDays: Number(event.target.value) })} />
-        </Field>
-        <Field label="Recommendation minimum savings (GB)" hint="Shows with projected savings below this amount are hidden from Recommendations.">
-          <input type="number" min={0} step={1} value={form.recommendationMinimumSavingsGb} onChange={(event) => setForm({ ...form, recommendationMinimumSavingsGb: Number(event.target.value) })} />
-        </Field>
-      </div>
-      <div className="settings-divider"><span>Cleanup</span></div>
-      <ToggleField label="Progressive cleanup" hint="While processing new watch activity, Pacearr can return older expanded seasons to pilot-only monitoring once every enabled viewer has moved beyond them." checked={form.progressiveCleanupEnabled} onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })} />
-      <Field label="Inactive-season cleanup delay (days)" hint="Wait this long after an expanded season has no active viewers before returning it to pilot-only. Set to 0 for immediate cleanup.">
-        <input type="number" min={0} step={1} value={form.progressiveCleanupDelayDays} onChange={(event) => setForm({ ...form, progressiveCleanupDelayDays: Number(event.target.value) })} />
-      </Field>
-      <p className="field-hint">Every six hours, Pacearr reconciles every enrolled show with current enabled-viewer progress and inactivity delays. In live mode it unmonitors and permanently deletes non-pilot episodes that are no longer needed; Dry Run is the safety boundary for previewing those actions.</p>
-      <ToggleField label="Trust proxy" hint="Enable when Pacearr is behind a reverse proxy. Requires a container restart." checked={form.trustProxy} onChange={(value) => setForm({ ...form, trustProxy: value })} />
-      <SaveBar saving={saving} success={success} error={error} label="Save General" onSave={() => void save()} />
-    </SectionCard>
+    <div className="grid gap-4">
+      <SectionCard title="Safety">
+        <ToggleField
+          label="Dry run"
+          hint="Show what Pacearr would do without actually changing or deleting anything. On by default."
+          checked={form.dryRun}
+          onChange={(value) => setForm({ ...form, dryRun: value })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Rolling behaviour">
+        <ToggleField
+          label="Rolling artwork"
+          hint="Mark managed shows in Plex so you can tell at a glance which ones Pacearr is trimming."
+          checked={form.artworkEnabled}
+          onChange={(value) => setForm({ ...form, artworkEnabled: value })}
+        />
+        <NumberField
+          label="Viewer activity window"
+          hint="How recently someone must have watched to still count as watching a show."
+          unit="days"
+          min={1}
+          value={form.viewerActivityWindowDays}
+          onChange={(value) => setForm({ ...form, viewerActivityWindowDays: value })}
+        />
+        <ToggleField
+          label="Early season prefetch"
+          hint="Start downloading the next season before someone finishes the current one, so playback never stalls."
+          checked={form.earlyPrefetchEnabled}
+          onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })}
+        />
+        {/* Both numbers only describe how prefetch behaves, so they are meaningless
+            while it is off. */}
+        {form.earlyPrefetchEnabled && (
+          <>
+            <NumberField
+              id="early-prefetch-trigger"
+              label="Episodes remaining trigger"
+              hint="How close to the end of a season this kicks in."
+              unit="episodes left"
+              min={1}
+              value={form.earlyPrefetchTriggerEpisodesRemaining}
+              onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })}
+            />
+            <NumberField
+              id="early-prefetch-count"
+              label="Episodes to prefetch"
+              hint="How many episodes of the next season to grab."
+              unit="episodes"
+              min={1}
+              value={form.earlyPrefetchEpisodeCount}
+              onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
+            />
+          </>
+        )}
+        <ToggleField
+          label="Auto-triage new Sonarr shows"
+          hint="Automatically pace shows with more than the episode limit. Recommended: disable Search on Add in sources that add to Sonarr, so files are not downloaded only to be purged."
+          checked={form.newShowTriageEnabled}
+          onChange={(value) => setForm({ ...form, newShowTriageEnabled: value })}
+        />
+        {form.newShowTriageEnabled && (
+          <NumberField
+            id="new-show-triage-episode-threshold"
+            label="Episode limit"
+            hint="Shows with more episodes than this are enrolled into Pacearr; smaller shows are searched in full."
+            unit="episodes"
+            min={1}
+            value={form.newShowTriageEpisodeThreshold}
+            onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
+          />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Cleanup">
+        <ToggleField
+          label="Progressive cleanup"
+          hint="Trim seasons back to the first episode once nobody is watching them any more."
+          checked={form.progressiveCleanupEnabled}
+          onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })}
+        />
+        <NumberField
+          label="Cleanup delay"
+          hint="How long to wait before trimming a season nobody is watching. 0 trims straight away."
+          unit="days"
+          min={0}
+          value={form.progressiveCleanupDelayDays}
+          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: value })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Recommendations">
+        <NumberField
+          label="Minimum savings"
+          hint="Hide recommendations that wouldn't free up at least this much space."
+          unit="GB"
+          min={0}
+          value={form.recommendationMinimumSavingsGb}
+          onChange={(value) => setForm({ ...form, recommendationMinimumSavingsGb: value })}
+        />
+      </SectionCard>
+
+      <SectionCard title="Data and access">
+        <NumberField
+          label="History retention"
+          hint="How long to keep entries on the History page."
+          unit="days"
+          min={1}
+          value={form.historyRetentionDays}
+          onChange={(value) => setForm({ ...form, historyRetentionDays: value })}
+        />
+        <ToggleField
+          label="Trust proxy"
+          hint="Turn on if Pacearr sits behind a reverse proxy. Needs a restart to take effect."
+          checked={form.trustProxy}
+          onChange={(value) => setForm({ ...form, trustProxy: value })}
+        />
+        <SaveBar saving={saving} success={success} error={error} label="Save general" onSave={() => void save()} />
+      </SectionCard>
+    </div>
   );
 }
 
@@ -209,7 +340,6 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   const [hostname, setHostname] = useState(settings.plex?.hostname ?? "");
   const [port, setPort] = useState(String(settings.plex?.port ?? 32400));
   const [useSsl, setUseSsl] = useState(settings.plex?.useSsl ?? false);
-  const [sessionPollIntervalMinutes, setSessionPollIntervalMinutes] = useState(settings.app.sessionPollIntervalMinutes);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,7 +381,10 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setTestResult(null);
     try {
       const result = await apiPost<{ ok: boolean; message?: string; error?: string }>("/api/settings/plex/test", buildPayload());
-      setTestResult({ ok: true, message: result.message ?? "Test Succeeded" });
+      setTestResult({
+        ok: result.ok,
+        message: result.message ?? result.error ?? (result.ok ? "Test Succeeded" : "Test failed"),
+      });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
     } finally {
@@ -264,10 +397,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     setSuccess(false);
     setError(null);
     try {
-      await Promise.all([
-        apiPost("/api/settings/plex", buildPayload()),
-        apiPatch("/api/settings/app", { sessionPollIntervalMinutes }),
-      ]);
+      await apiPost("/api/settings/plex", buildPayload());
       setSuccess(true);
       await onSave();
     } catch (caught) {
@@ -278,11 +408,12 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   }
 
   return (
-    <SectionCard title="Plex Settings" description="Connect Pacearr to your Plex server. Load available servers or enter the host manually.">
-      <Field label="Server" hint="Press the button to load available Plex servers.">
-        <div className="input-with-button">
-          <select value={selectedServerUri} onChange={(event) => {
-            const match = groupedServers.find((entry) => entry.value === event.target.value)?.option;
+    <SectionCard title="Plex" description="Connect Pacearr to your Plex server. Load your available servers, or enter the address yourself.">
+      <div>
+        <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-server-select">Server</label>
+        <div className="grid grid-cols-[minmax(0,1fr)_42px] items-end gap-2">
+          <SelectInput id="plex-server-select" value={selectedServerUri} onChange={(value) => {
+            const match = groupedServers.find((entry) => entry.value === value)?.option;
             if (!match) {
               switchToManual();
               return;
@@ -295,41 +426,33 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
           }}>
             <option value="">Press the button to load available servers</option>
             {groupedServers.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-          </select>
-          <button className="icon-button" disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers">
-            <RefreshCw size={15} className={loadingServers ? "spin" : ""} />
+          </SelectInput>
+          <button type="button" className={iconButtonClass} disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
+            <RefreshCw size={15} className={loadingServers ? "animate-spin" : ""} />
           </button>
         </div>
-      </Field>
-      <div className="settings-form-grid two-one">
-        <Field label="Hostname or IP Address">
-          <div className="protocol-input">
-            <span>{useSsl ? "https://" : "http://"}</span>
-            <input value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
+      </div>
+      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-[18px] max-[820px]:grid-cols-1">
+        <div>
+          <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-hostname">Hostname or IP Address</label>
+          <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
+            <span className="border-r border-outline-variant/30 bg-background-container-high px-3 py-2.5 text-[13px] text-on-surface-variant">{useSsl ? "https://" : "http://"}</span>
+            <input id="plex-hostname" className="w-full border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
           </div>
-        </Field>
+        </div>
         <Field label="Port">
-          <input type="number" value={port} onChange={(event) => { switchToManual(); setPort(event.target.value); }} placeholder="32400" />
+          <TextInput type="number" value={port} onChange={(value) => { switchToManual(); setPort(value); }} placeholder="32400" />
         </Field>
       </div>
       <ToggleField label="Use SSL" checked={useSsl} onChange={(value) => { switchToManual(); setUseSsl(value); }} />
-      <div className="settings-divider"><span>Session Monitoring</span></div>
-      <Field label="Session poll minutes" hint="How often Pacearr checks Plex for active episode sessions. New season-one watches can expand a season immediately.">
-        <input type="number" min={1} value={sessionPollIntervalMinutes} onChange={(event) => setSessionPollIntervalMinutes(Math.max(1, Number(event.target.value) || 1))} />
-      </Field>
-      <div className="save-bar">
-        <div className="button-row">
-          <button className="secondary-button" disabled={testing || (!selectedServerUri && !hostname.trim())} onClick={() => void testConnection()}>
-            {testing ? "Testing..." : "Test Connection"}
-          </button>
-          {testResult && <span className={testResult.ok ? "inline-success" : "inline-error"}>{testResult.message}</span>}
-        </div>
-        <div className="button-row">
-          {success && <span className="inline-success">Saved</span>}
-          {error && <span className="inline-error">{error}</span>}
-          <button className="primary-button" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Plex"} {!saving && <ChevronRight size={15} />}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Plex"
+        onSave={() => void save()}
+        test={{ testing, disabled: !selectedServerUri && !hostname.trim(), result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -342,12 +465,16 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.sonarr?.apiKeyConfigured);
+  const credentials = { baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -361,7 +488,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/sonarr", form);
+      await apiPost("/api/settings/sonarr", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);
@@ -374,29 +501,28 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   }
 
   return (
-    <SectionCard title="Sonarr Integration" description="Connect Sonarr so Pacearr can monitor and clean rolling shows.">
+    <SectionCard title="Sonarr" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
       <Field label="Base URL" hint="Example: http://sonarr:8989">
-        <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="http://sonarr:8989" />
+        <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
       </Field>
-      <Field label="API Key" hint="Leave unchanged to keep the configured key.">
+      <Field label="API key" hint="Leave unchanged to keep the configured key.">
         <input
           type="password"
+          className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
           value={apiKeyTouched ? form.apiKey : settings.sonarr?.apiKeyConfigured ? "**************" : ""}
           onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
           onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
         />
       </Field>
-      <div className="save-bar">
-        <div className="button-row">
-          <button className="secondary-button" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          {testResult && <span className={testResult.ok ? "inline-success" : "inline-error"}>{testResult.message}</span>}
-        </div>
-        <div className="button-row">
-          {success && <span className="inline-success">Saved</span>}
-          {error && <span className="inline-error">{error}</span>}
-          <button className="primary-button" disabled={saving || !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)} onClick={() => void save()}>{saving ? "Saving..." : "Save Sonarr"}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Sonarr"
+        onSave={() => void save()}
+        saveDisabled={credentialsIncomplete}
+        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -409,12 +535,16 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
+  const credentials = { ...form, baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -428,7 +558,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/tautulli", form);
+      await apiPost("/api/settings/tautulli", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);
@@ -441,30 +571,29 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   }
 
   return (
-    <SectionCard title="Tautulli Integration" description="Optionally import richer watch history from Tautulli.">
+    <SectionCard title="Tautulli" description="Optional. Import richer watch history than Plex alone provides.">
       <ToggleField label="Enable Tautulli import" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
       <Field label="Base URL" hint="Example: http://tautulli:8181">
-        <input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="http://tautulli:8181" />
+        <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://tautulli:8181" />
       </Field>
-      <Field label="API Key" hint="Leave unchanged to keep the configured key.">
+      <Field label="API key" hint="Leave unchanged to keep the configured key.">
         <input
           type="password"
+          className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
           value={apiKeyTouched ? form.apiKey : settings.tautulli.apiKeyConfigured ? "**************" : ""}
           onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
           onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
         />
       </Field>
-      <div className="save-bar">
-        <div className="button-row">
-          <button className="secondary-button" disabled={testing || !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured)} onClick={() => void testConnection()}>{testing ? "Testing..." : "Test Connection"}</button>
-          {testResult && <span className={testResult.ok ? "inline-success" : "inline-error"}>{testResult.message}</span>}
-        </div>
-        <div className="button-row">
-          {success && <span className="inline-success">Saved</span>}
-          {error && <span className="inline-error">{error}</span>}
-          <button className="primary-button" disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save Tautulli"}</button>
-        </div>
-      </div>
+      <SaveBar
+        saving={saving}
+        success={success}
+        error={error}
+        label="Save Tautulli"
+        onSave={() => void save()}
+        saveDisabled={form.enabled && credentialsIncomplete}
+        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
+      />
     </SectionCard>
   );
 }
@@ -515,61 +644,64 @@ function LogsTab() {
   const results = data?.results ?? [];
   const pageInfo = data?.pageInfo;
 
+  const logDialogRef = useDialogA11y<HTMLDivElement>(activeLog !== null, () => setActiveLog(null));
+
   return (
     <>
       {activeLog && (
-        <div className="modal-backdrop" onClick={() => setActiveLog(null)}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-header"><h2>Log Details</h2><button className="icon-button" onClick={() => setActiveLog(null)}><X size={18} /></button></div>
-            <div className="info-list">
-              <InfoRow label="Timestamp"><code>{activeLog.timestamp}</code></InfoRow>
+        <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
+          <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close log details" onClick={() => setActiveLog(null)} />
+          <div ref={logDialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log details</h2><button type="button" className={iconButtonClass} onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
+            <div className="grid gap-2.5">
+              <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
               <InfoRow label="Level"><span className={LEVEL_BADGE[activeLog.level]}>{activeLog.level}</span></InfoRow>
               <InfoRow label="Message"><span>{activeLog.message}</span></InfoRow>
-              {activeLog.meta !== undefined && <InfoRow label="Meta"><pre>{JSON.stringify(activeLog.meta, null, 2)}</pre></InfoRow>}
+              {activeLog.meta !== undefined && <InfoRow label="Meta"><pre className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{JSON.stringify(activeLog.meta, null, 2)}</pre></InfoRow>}
             </div>
-            <div className="button-row end"><button className="secondary-button" onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
+            <div className="mt-4 flex justify-end"><button type="button" className={secondaryButtonClass} onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
           </div>
         </div>
       )}
-      <SectionCard title="Logs" description="Recent application logs. Disk logs are written under /config/logs.">
-        <div className="settings-toolbar">
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search logs..." />
-          <select value={filter} onChange={(event) => setFilter(event.target.value as LogFilter)}>
+      <SectionCard title="Logs" description="Recent application logs. Full logs are written to /config/logs.">
+        <div className="flex flex-wrap items-center gap-2">
+          <TextInput className="w-auto flex-[1_1_220px]" value={search} onChange={setSearch} placeholder="Search logs..." />
+          <SelectInput className="w-auto basis-[140px]" value={filter} onChange={(value) => setFilter(value as LogFilter)}>
             <option value="debug">Debug (all)</option>
             <option value="info">Info+</option>
             <option value="warn">Warn+</option>
             <option value="error">Error only</option>
-          </select>
-          <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+          </SelectInput>
+          <SelectInput className="w-auto basis-[140px]" value={pageSize} onChange={(value) => setPageSize(Number(value))}>
             <option value={25}>25 / page</option>
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
-          </select>
-          <button className={autoRefresh ? "secondary-button active" : "secondary-button"} onClick={() => setAutoRefresh((value) => !value)}>
+          </SelectInput>
+          <button type="button" className={cn(secondaryButtonClass, autoRefresh && "bg-primary-dim")} onClick={() => setAutoRefresh((value) => !value)}>
             {autoRefresh ? <Pause size={14} /> : <Play size={14} />} {autoRefresh ? "Pause" : "Resume"}
           </button>
-          <button className="icon-button" onClick={() => void load()}><RefreshCw size={14} className={loading ? "spin" : ""} /></button>
+          <button type="button" className={iconButtonClass} onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>
         </div>
-        <div className="settings-table">
-          {loading && !data ? <div className="empty">Loading logs...</div> : results.length === 0 ? <div className="empty">No log entries match the current filter.</div> : results.map((entry, index) => (
-            <div className="log-row" key={`${entry.timestamp}-${index}`}>
-              <span className="log-time">{new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+        <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
+          {loading && !data ? <div className="p-6 text-center text-on-surface-variant">Loading logs...</div> : results.length === 0 ? <div className="p-6 text-center text-on-surface-variant">No log entries match the current filter.</div> : results.map((entry, index) => (
+            <div className="grid grid-cols-[7.5rem_58px_minmax(0,1fr)_auto] items-start gap-3 border-b border-outline-variant/30 px-3 py-2.5 text-xs last:border-b-0 max-[820px]:grid-cols-[1fr_auto]" key={`${entry.timestamp}-${index}`}>
+              <span className="text-on-surface-variant">{new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
               <span className={LEVEL_BADGE[entry.level]}>{entry.level}</span>
-              <span className="log-message">{entry.message}</span>
-              <span className="log-actions">
-                {entry.meta !== undefined && <button className="icon-button mini" onClick={() => setActiveLog(entry)} title="View details"><Eye size={13} /></button>}
-                <button className="icon-button mini" onClick={() => copyLog(entry)} title="Copy"><ClipboardCopy size={13} /></button>
+              <span className="break-words leading-relaxed">{entry.message}</span>
+              <span className="flex gap-1 opacity-70">
+                {entry.meta !== undefined && <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(entry)} title="View details" aria-label="View details"><Eye size={13} /></button>}
+                <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => copyLog(entry)} title="Copy" aria-label="Copy"><ClipboardCopy size={13} /></button>
               </span>
             </div>
           ))}
         </div>
         {pageInfo && pageInfo.total > 0 && (
-          <div className="settings-pagination">
+          <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant max-[820px]:flex-col max-[820px]:items-stretch">
             <span>{(pageInfo.page - 1) * pageInfo.pageSize + 1}-{Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)} of {pageInfo.total}</span>
-            <div className="button-row">
-              <button className="icon-button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronLeft size={14} /></button>
+            <div className="flex items-center gap-2">
+              <button type="button" className={iconButtonClass} disabled={page <= 1} onClick={() => setPage((value) => value - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
               <span>Page {page} / {pageInfo.pages}</span>
-              <button className="icon-button" disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)}><ChevronRight size={14} /></button>
+              <button type="button" className={iconButtonClass} disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
             </div>
           </div>
         )}
@@ -604,7 +736,8 @@ function JobsTab() {
   async function runJob(id: string) {
     setRunningId(id);
     try {
-      await apiPost(`/api/settings/jobs/${id}/run`);
+      const result = await apiPost<{ triggered: boolean; triggeredJobId: string }>(`/api/settings/jobs/${id}/run`);
+      setRunningId(result.triggeredJobId);
       await load(true);
     } finally {
       setRunningId(null);
@@ -614,9 +747,13 @@ function JobsTab() {
   function openEdit(job: JobInfo) {
     const preset = JOB_PRESETS[job.id];
     if (!preset) return;
-    const match = job.intervalDescription?.match(/Every (\d+)/i);
-    const current = Number(match?.[1] ?? preset.values[0]);
-    setEditValue(String(preset.unit === "hours" ? current * 60 : current));
+    const match = job.intervalDescription?.match(/every\s+(\d+)\s+(minute|hour|day)/i);
+    const parsed = match ? Number(match[1]) : null;
+    const unit = match?.[2]?.toLowerCase();
+    const current = parsed === null || !Number.isFinite(parsed) || parsed < 1
+      ? preset.values[0]
+      : unit === "hour" ? parsed * 60 : unit === "day" ? parsed * 24 * 60 : parsed;
+    setEditValue(String(current));
     setEditingJob(job);
   }
 
@@ -632,38 +769,43 @@ function JobsTab() {
     }
   }
 
+  // A save in flight must not be dismissable — Close/Cancel/Escape all route through
+  // here so none of them can back out of a dialog whose PATCH will land anyway.
+  const requestCloseJobDialog = () => { if (!saving) setEditingJob(null); };
+  const jobDialogRef = useDialogA11y<HTMLDivElement>(editingJob !== null, requestCloseJobDialog);
+
   return (
     <>
       {editingJob && (
-        <div className="modal-backdrop">
-          <div className="modal small">
-            <div className="modal-header"><h2>Edit Schedule</h2><button className="icon-button" onClick={() => setEditingJob(null)}><X size={18} /></button></div>
-            <Field label="New Frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
-              <select value={editValue} onChange={(event) => setEditValue(event.target.value)}>
+        <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
+          <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className={iconButtonClass} disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
+            <Field label="New frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
+              <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
-              </select>
+              </SelectInput>
             </Field>
-            <div className="button-row end">
-              <button className="secondary-button" onClick={() => setEditingJob(null)}>Cancel</button>
-              <button className="primary-button" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button type="button" className={secondaryButtonClass} disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
+              <button type="button" className={primaryButtonClass} disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>
         </div>
       )}
-      <SectionCard title="Jobs" description="Background jobs and their next scheduled execution.">
-        {loading ? <div className="empty">Loading jobs...</div> : (
-          <div className="jobs-table">
-            <div className="jobs-head"><span>Job Name</span><span>Next Execution</span><span>Last Run</span><span /></div>
+      <SectionCard title="Jobs" description="Pacearr's background jobs. Run one now, or change how often the schedulable ones run.">
+        {loading ? <div className="p-6 text-center text-on-surface-variant">Loading jobs...</div> : (
+          <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
+            <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(130px,.7fr)_minmax(160px,.8fr)_minmax(210px,auto)] items-center gap-4 border-b border-outline-variant/30 px-4 py-[13px] text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden"><span>Job</span><span>Next run</span><span>Last run</span><span /></div>
             {jobs.map((job) => {
               const active = runningId === job.id || Boolean(job.running || job.isRunning);
               return (
-                <div className="jobs-row" key={job.id}>
-                  <div><strong>{job.name ?? job.id}</strong>{active && <span className="status-dot" />}<small>{job.intervalDescription ?? "Manual"}</small></div>
+                <div className="grid grid-cols-[minmax(220px,1.4fr)_minmax(130px,.7fr)_minmax(160px,.8fr)_minmax(210px,auto)] items-center gap-4 border-b border-outline-variant/30 px-4 py-[13px] last:border-b-0 max-[820px]:grid-cols-1" key={job.id}>
+                  <div><strong className="mr-2">{job.name ?? job.id}</strong>{active && <span className="inline-block size-[9px] shrink-0 rounded-full bg-primary" />}<small className="mt-0.5 block text-on-surface-variant">{job.intervalDescription ?? "Manual"}</small>{job.statusDescription && <small className="mt-0.5 block text-on-surface-variant">{job.statusDescription}</small>}</div>
                   <span>{job.nextRunAt ? formatFutureTime(job.nextRunAt) : job.nextRunLabel ?? "-"}</span>
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
-                  <div className="button-row end">
-                    {JOB_PRESETS[job.id] && <button className="secondary-button compact" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button className="primary-button compact" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run Now"}</button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {JOB_PRESETS[job.id] && <button type="button" className={compactSecondaryButtonClass} onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
+                    {job.enabled && <button type="button" className={compactPrimaryButtonClass} disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>}
                   </div>
                 </div>
               );
@@ -730,55 +872,57 @@ function AboutTab() {
     return () => controller.abort();
   }, []);
 
+  const codeClass = "rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface";
+  const changelogDialogRef = useDialogA11y<HTMLDivElement>(changelogRelease !== null, () => setChangelogRelease(null));
+
   return (
-    <div className="settings-stack">
+    <div className="grid gap-4">
       <SectionCard title="About Pacearr">
-        <div className="info-list">
-          <InfoRow label="Version"><a className="text-link" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
-          <InfoRow label="Build Channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
-          {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code>{info?.commitSha ?? "..."}</code></InfoRow>}
-          <InfoRow label="Node"><code>{info?.nodeVersion ?? "..."}</code></InfoRow>
-          <InfoRow label="Platform"><code>{info?.platform ?? "..."}</code></InfoRow>
-          <InfoRow label="Data Directory"><code>{info?.dataDir ?? "..."}</code></InfoRow>
-          <InfoRow label="Timezone"><code>{info?.tz ?? "..."}</code></InfoRow>
+        <div className="grid gap-2.5">
+          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
+          <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
+          {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
+          <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
+          <InfoRow label="Platform"><code className={codeClass}>{info?.platform ?? "..."}</code></InfoRow>
+          <InfoRow label="Data directory"><code className={codeClass}>{info?.dataDir ?? "..."}</code></InfoRow>
+          <InfoRow label="Timezone"><code className={codeClass}>{info?.tz ?? "..."}</code></InfoRow>
         </div>
       </SectionCard>
-      <SectionCard title="Getting Support">
-        <div className="info-list">
-          <InfoRow label="GitHub"><a className="text-link" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
-          <InfoRow label="Configuration"><span className="muted">Data and logs are stored under /config in the container.</span></InfoRow>
-          <InfoRow label="Health Check"><code>/api/health</code></InfoRow>
+      <SectionCard title="Getting support">
+        <div className="grid gap-2.5">
+          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
+          <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
-      <SectionCard title="Releases" description="Release notes are fetched from the public Pacearr GitHub repository.">
-        {releasesError && <p className="muted">Release data is currently unavailable.</p>}
-        {!releases && !releasesError && <p className="muted">Loading releases...</p>}
-        {releases?.length === 0 && <p className="muted">No releases found.</p>}
-        {releases && releases.length > 0 && <div className="release-list">
+      <SectionCard title="Releases" description="Fetched from the public Pacearr repository on GitHub.">
+        {releasesError && <p className="text-on-surface-variant">Release data is currently unavailable.</p>}
+        {!releases && !releasesError && <p className="text-on-surface-variant">Loading releases...</p>}
+        {releases?.length === 0 && <p className="text-on-surface-variant">No releases found.</p>}
+        {releases && releases.length > 0 && <div className="grid gap-2">
           {releases.map((release, index) => (
-            <div className="release-row" key={release.id}>
-              <div className="release-details">
-                <div className="release-heading">
-                  <strong>{releaseTitle(release)}</strong>
-                  {index === 0 && <span className="release-badge">Latest</span>}
-                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className="release-badge current">Current</span>}
+            <div className="flex items-center justify-between gap-3.5 rounded-lg border border-outline-variant/30 bg-background-container-low p-3.5" key={release.id}>
+              <div className="grid min-w-0 gap-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-sm">{releaseTitle(release)}</strong>
+                  {index === 0 && <span className={`${badgeClass("success")} shrink-0`}>Latest</span>}
+                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className={`${badgeClass("successStrong")} shrink-0`}>Current</span>}
                 </div>
-                {release.published_at && <small>{new Date(release.published_at).toLocaleDateString()}</small>}
+                {release.published_at && <small className="text-xs text-on-surface-variant">{new Date(release.published_at).toLocaleDateString()}</small>}
               </div>
-              <button className="secondary-button compact" onClick={() => setChangelogRelease(release)}>View changelog</button>
+              <button type="button" className={compactSecondaryButtonClass} onClick={() => setChangelogRelease(release)}>View changelog</button>
             </div>
           ))}
         </div>}
       </SectionCard>
-      {changelogRelease && <div className="modal-backdrop" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
-        <div className="modal changelog-modal" role="dialog" aria-modal="true" aria-labelledby="changelog-title" onMouseDown={(event) => event.stopPropagation()}>
-          <div className="modal-header">
-            <div><h2 id="changelog-title">{releaseTitle(changelogRelease)} changelog</h2></div>
-            <button className="icon-button" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
+      {changelogRelease && <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
+        <div ref={changelogDialogRef} className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
+          <div className="flex items-center justify-between gap-3.5">
+            <div><h2 id="changelog-title" className="font-headline text-lg font-semibold">{releaseTitle(changelogRelease)} changelog</h2></div>
+            <button type="button" className={iconButtonClass} onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
           </div>
-          {changelogRelease.body ? <pre className="changelog-body">{changelogRelease.body}</pre> : <p className="muted">No changelog is available for this release.</p>}
-          <div className="button-row end">
-            <a className="secondary-button compact" href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
+          {changelogRelease.body ? <pre className="m-0 max-h-[52vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-outline-variant/30 bg-background p-3 font-mono text-[13px] leading-relaxed text-on-surface">{changelogRelease.body}</pre> : <p className="text-on-surface-variant">No changelog is available for this release.</p>}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <a className={compactSecondaryButtonClass} href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
           </div>
         </div>
       </div>}
@@ -787,13 +931,22 @@ function AboutTab() {
 }
 
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="info-row"><span>{label}</span><div>{children}</div></div>;
+  return (
+    <div className="grid grid-cols-[160px_minmax(0,1fr)] items-start gap-3.5 border-b border-outline-variant/30 py-2.5 last:border-b-0">
+      <span className="text-[13px] font-bold text-on-surface-variant">{label}</span>
+      <div>{children}</div>
+    </div>
+  );
 }
 
-function formatPresetLabel(value: number, unit: "minutes" | "hours") {
+function formatPresetLabel(value: number, unit: "minutes" | "hours" | "days") {
   if (unit === "hours") {
     const hours = value / 60;
     return `Every ${hours} hour${hours !== 1 ? "s" : ""}`;
+  }
+  if (unit === "days") {
+    const days = value / (24 * 60);
+    return `Every ${days} day${days !== 1 ? "s" : ""}`;
   }
   if (value < 60) return `Every ${value} minute${value !== 1 ? "s" : ""}`;
   const hours = value / 60;

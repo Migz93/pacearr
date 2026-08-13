@@ -1,5 +1,6 @@
 import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeries, SonarrSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 export class SonarrIntegration {
   constructor(private readonly settings: SonarrSettings, private readonly logger: Logger, private readonly dryRun = true) {}
@@ -11,8 +12,7 @@ export class SonarrIntegration {
   }
 
   private buildUrl(pathname: string) {
-    const base = this.settings.baseUrl.endsWith("/") ? this.settings.baseUrl : `${this.settings.baseUrl}/`;
-    return new URL(pathname.replace(/^\/+/, ""), base);
+    return buildIntegrationUrl(this.settings.baseUrl, pathname);
   }
 
   buildImageUrl(imagePath: string): string {
@@ -35,7 +35,7 @@ export class SonarrIntegration {
     return url ? this.buildImageUrl(url) : null;
   }
 
-  private async request<T>(pathname: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(pathname: string, options: RequestInit = {}, timeoutMs?: number): Promise<T> {
     const method = (options.method ?? "GET").toUpperCase();
     // This is the final safety boundary. Even if a future caller forgets to use
     // skipMutation(), dry-run mode must never send a write request to Sonarr.
@@ -44,14 +44,14 @@ export class SonarrIntegration {
       return undefined as T;
     }
     const url = this.buildUrl(`api/v3/${pathname}`);
-    const response = await fetch(url, {
+    const response = await fetchIntegration(url, {
       ...options,
       headers: {
         "X-Api-Key": this.settings.apiKey,
         "Content-Type": "application/json",
         ...(options.headers ?? {}),
       },
-    });
+    }, timeoutMs);
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       this.logger.warn("Sonarr request failed", { method, pathname, status: response.status, statusText: response.statusText });
@@ -76,7 +76,7 @@ export class SonarrIntegration {
   }
 
   async getSeries(): Promise<SonarrSeries[]> {
-    return this.request<SonarrSeries[]>("series");
+    return this.request<SonarrSeries[]>("series", {}, 60_000);
   }
 
   async getSeriesById(seriesId: number): Promise<SonarrSeries> {
@@ -138,6 +138,14 @@ export class SonarrIntegration {
     await this.request("command", {
       method: "POST",
       body: JSON.stringify({ name: "SeasonSearch", seriesId, seasonNumber }),
+    });
+  }
+
+  async searchSeries(seriesId: number) {
+    if (this.skipMutation("search-series", { seriesId })) return;
+    await this.request("command", {
+      method: "POST",
+      body: JSON.stringify({ name: "SeriesSearch", seriesId }),
     });
   }
 
