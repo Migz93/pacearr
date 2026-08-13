@@ -74,8 +74,9 @@ function installFetchStub(sessionsXml: string, options: { seriesJson?: string; s
 
 test("a session check that moved nobody's progress records no history event", async () => {
   const { db, services, cleanup } = createHarness();
-  const restoreFetch = installFetchStub('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>');
+  let restoreFetch = () => {};
   try {
+    restoreFetch = installFetchStub('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>');
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
     assert.deepEqual(db.listHistory(10), []);
@@ -87,26 +88,27 @@ test("a session check that moved nobody's progress records no history event", as
 
 test("a session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event", async () => {
   const { db, services, cleanup } = createHarness();
-  const [gina] = db.upsertUsers([
-    { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
-  ]);
-  const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
-  // A watch of episode 2 already resolves at a newer timestamp than this seed, so
-  // upsertRollingUserProgress persists a change. It isn't a premiere (skips
-  // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason
-  // before it ever calls Sonarr), so processWatchEvent reports changed: false even
-  // though a viewer's progress genuinely moved.
-  db.upsertRollingUserProgress(wire.id, gina.id, 1, 1, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  let restoreFetch = () => {};
+  try {
+    const [gina] = db.upsertUsers([
+      { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
+    ]);
+    const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
+    // A watch of episode 2 already resolves at a newer timestamp than this seed, so
+    // upsertRollingUserProgress persists a change. It isn't a premiere (skips
+    // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason
+    // before it ever calls Sonarr), so processWatchEvent reports changed: false even
+    // though a viewer's progress genuinely moved.
+    db.upsertRollingUserProgress(wire.id, gina.id, 1, 1, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
-  const sessionsXml = `<?xml version="1.0"?>
+    const sessionsXml = `<?xml version="1.0"?>
     <MediaContainer size="1">
       <Video type="episode" sessionKey="1" ratingKey="100" grandparentRatingKey="10" grandparentTitle="The Wire" parentIndex="1" index="2">
         <User id="42" title="gina" />
       </Video>
     </MediaContainer>`;
-  const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
-  const restoreFetch = installFetchStub(sessionsXml, { seriesJson });
-  try {
+    const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
+    restoreFetch = installFetchStub(sessionsXml, { seriesJson });
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
     const history = db.listHistory(10);
