@@ -30,9 +30,7 @@ Runs of the same job never overlap: manual, scheduled, and event-driven
 triggers coalesce while a run is active, and a skipped scheduled trigger still
 leaves the next timer armed. A failure is logged with structured detail,
 persists an `error` status in `job_run_state`, and appears as the job's last
-result in Settings → Jobs. Jobs retry at their configured interval; Pacearr
-does not add exponential backoff because each interval is administrator-owned
-and can already be lengthened from Settings when an integration is unavailable.
+result in Settings → Jobs. Jobs retry at their configured interval.
 
 Plex playback normally arrives through a persistent SSE connection. Settings →
 Jobs shows whether this live connection is active or Pacearr is using its polling

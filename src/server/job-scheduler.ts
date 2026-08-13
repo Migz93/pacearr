@@ -153,6 +153,8 @@ export class JobScheduler {
       this.logger?.info("Scheduled job complete", { id: job.id, scheduled });
       return true;
     } catch (error) {
+      // Jobs retry at their administrator-configured interval. A separate exponential
+      // backoff would obscure that schedule and can be adjusted explicitly in Settings.
       job.lastRunStatus = "error";
       this.savePersistedState?.(job.id, { lastRunAt: job.lastRunAt, lastRunStatus: job.lastRunStatus });
       this.logger?.error("Job failed", { id: job.id, error: error instanceof Error ? error.message : String(error) });

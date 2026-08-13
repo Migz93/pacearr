@@ -809,6 +809,7 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
   const raw = new Database(path.join(dir, "pacearr.db"));
   try {
+    // Version 18 is the pre-backfill state; version 19 performs the username backfill.
     runMigrations(raw, undefined, 18);
     const stamp = "2026-08-12T09:00:00.000Z";
     raw.prepare(`

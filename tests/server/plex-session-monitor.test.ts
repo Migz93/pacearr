@@ -26,9 +26,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 
 test("Plex SSE playback notifications trigger a session check without Plex", async () => {
   const streams: import("node:http").ServerResponse[] = [];
+  const received: Array<{ url?: string; token?: string | string[] }> = [];
   const server = createServer((req, res) => {
-    assert.equal(req.url, "/:/eventsource/notifications");
-    assert.equal(req.headers["x-plex-token"], "test-token");
+    received.push({ url: req.url, token: req.headers["x-plex-token"] });
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     res.flushHeaders();
     streams.push(res);
@@ -43,6 +43,7 @@ test("Plex SSE playback notifications trigger a session check without Plex", asy
   try {
     monitor.start();
     await waitFor(() => monitor.getStatus().mode === "live");
+    assert.deepEqual(received, [{ url: "/:/eventsource/notifications", token: "test-token" }]);
     streams[0]?.write(`event: playing\ndata: ${JSON.stringify({ PlaySessionStateNotification: { state: "playing" } })}\n\n`);
     await waitFor(() => triggers === 1);
     streams[0]?.write(`data: ${JSON.stringify({ NotificationContainer: { PlaySessionStateNotification: [{ state: "playing" }] } })}\n\n`);
