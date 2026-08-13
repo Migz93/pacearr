@@ -146,10 +146,12 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
-      const viewerActivityWindowDays = Number(form.viewerActivityWindowDays);
-      const historyRetentionDays = Number(form.historyRetentionDays);
-      const progressiveCleanupDelayDays = Number(form.progressiveCleanupDelayDays);
-      const recommendationMinimumSavingsGb = Number(form.recommendationMinimumSavingsGb);
+      // Number("") is 0, which is valid for two of these settings. Preserve an empty
+      // field as invalid instead of silently saving it as a real zero.
+      const viewerActivityWindowDays = form.viewerActivityWindowDays.trim() === "" ? Number.NaN : Number(form.viewerActivityWindowDays);
+      const historyRetentionDays = form.historyRetentionDays.trim() === "" ? Number.NaN : Number(form.historyRetentionDays);
+      const progressiveCleanupDelayDays = form.progressiveCleanupDelayDays.trim() === "" ? Number.NaN : Number(form.progressiveCleanupDelayDays);
+      const recommendationMinimumSavingsGb = form.recommendationMinimumSavingsGb.trim() === "" ? Number.NaN : Number(form.recommendationMinimumSavingsGb);
       if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
         setError("Early prefetch values must be positive whole numbers.");
         return;
@@ -748,7 +750,7 @@ function JobsTab() {
     const match = job.intervalDescription?.match(/every\s+(\d+)\s+(minute|hour|day)/i);
     const parsed = match ? Number(match[1]) : null;
     const unit = match?.[2]?.toLowerCase();
-    const current = parsed === null || !Number.isFinite(parsed)
+    const current = parsed === null || !Number.isFinite(parsed) || parsed < 1
       ? preset.values[0]
       : unit === "hour" ? parsed * 60 : unit === "day" ? parsed * 24 * 60 : parsed;
     setEditValue(String(current));

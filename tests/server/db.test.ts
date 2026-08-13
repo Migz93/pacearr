@@ -762,6 +762,7 @@ test("mapping rejects a Tautulli identity already assigned to another user", () 
     ]);
     db.mapTautulliUser(alice.id, "tautulli-47", "Alice on Tautulli");
     assert.throws(() => db.mapTautulliUser(bob.id, "tautulli-47", "Alice on Tautulli"), /Tautulli identity already mapped/);
+    assert.equal(db.getUser(alice.id)?.tautulliUserId, "tautulli-47");
     assert.equal(db.getUser(bob.id)?.tautulliUserId, null);
   } finally {
     cleanup();

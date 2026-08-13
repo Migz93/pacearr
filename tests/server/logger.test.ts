@@ -234,6 +234,12 @@ test("logging metadata that throws during serialization does not interrupt appli
     assert.doesNotThrow(() => logger.info("Throwing getter metadata", throwingGetter));
     assert.doesNotThrow(() => logger.info("Throwing toJSON metadata", throwingToJson));
     assert.deepEqual(logger.getRecentLogs(2).map((entry) => entry.meta), [undefined, undefined]);
+    // Both transports open and write asynchronously. Let their first writes complete
+    // before teardown so rmSync cannot race a transport still creating its log file.
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log"), 2000, (content) => content.trim().split("\n").length >= 2),
+    ]);
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

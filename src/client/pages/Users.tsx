@@ -105,7 +105,7 @@ export default function Users() {
     setSelectedIds((current) => current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]);
   }
 
-  if (loading && users.length === 0) {
+  if (loading && users.length === 0 && !error) {
     return (
       <Page>
         <PageLoading label="Loading users..." />
