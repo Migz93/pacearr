@@ -11,7 +11,7 @@ SQLite database with no external services involved.
 | Command | What it does |
 |---|---|
 | `npm run test:server` | Builds the server, compiles server tests, and runs Node's test runner |
-| `npm test` | Runs already-compiled server tests |
+| `npm test` | Delegates to `npm run test:server`: builds the server, compiles server tests, and runs Node's test runner |
 | `npm run check` | Runs TypeScript checks for the client, shared types, server, and Playwright config/tests |
 | `npm run build` | Builds the Vite client and TypeScript server |
 | `npm run test:e2e` | Runs Playwright auth setup and the live-instance browser suite |
@@ -92,7 +92,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Tautulli resolver tries the friendly name when the Plex username only collides ambiguously on display_name, not on username itself | Blocking the friendly-name fallback was only meant for a genuine conflict on the strong signal (the real username field) — an ambiguous display_name match during that same lookup's own fallback step is just a failed primary lookup, and the independent friendly name can still resolve it |
 | A previously orphaned Tautulli watch event can be repaired once its user resolves | Regression for #75 — `INSERT OR IGNORE` means a duplicate event is silently skipped forever unless something explicitly repairs its `user_id`; also locks in that repairing an already-assigned event is a no-op, not a re-attribution |
 | Mapping a Tautulli identity persists it and links that identity's orphaned history | The Users-page mapping stores Tautulli's stable user ID, makes it the preferred future match despite a renamed username, and assigns previously unmatched events so their progress is available again |
-| Mapping cannot replace a user's existing Tautulli identity | A second different stable ID is rejected without overwriting the existing user mapping |
+| Mapping cannot replace a user's existing Tautulli identity | A second different stable ID, or an ID already mapped to another user, is rejected with the domain mapping-conflict error without overwriting either mapping |
 | Unmapped Tautulli users display the names from their newest event | The mapping UI does not pair the latest activity timestamp with lexicographically selected stale names after a Tautulli rename |
 | The cached Tautulli resolver preserves stable-ID and ambiguity safeguards | Full-history reconciliation uses its in-memory resolver without changing the stable-ID priority or the refusal to guess on ambiguous names |
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
@@ -142,7 +142,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
-| Logging circular or BigInt metadata does not throw, in the ring, the persisted file, or the Logs API's own merge | `write()` sanitizes metadata once before it enters the ring, so every downstream consumer (the persisted file, and `mergeLogEntries` via the Logs API) only ever sees an already-safe value |
+| Logging circular, BigInt, or serialization-throwing metadata does not throw, in the ring, the persisted file, or the Logs API's own merge | `write()` sanitizes metadata once before it enters the ring, so every downstream consumer (the persisted file, and `mergeLogEntries` via the Logs API) only ever sees an already-safe value |
 | Logging the same object referenced twice preserves both, rather than marking the repeat as circular | `sanitizeMeta` tracks ancestry, not "every object ever seen", so two sibling properties referencing the same object aren't mistaken for a cycle |
 | Logging a root metadata value with no JSON representation (a function or Symbol) does not throw and omits metadata | `JSON.stringify` returns `undefined` for these at the root, so `sanitizeMeta` must recognize that instead of handing `undefined` to `JSON.parse`, which throws |
 | The human-readable log retains falsy scalar metadata (`0`, `false`, `""`, `null`) instead of treating it as absent | `humanFormat` checks whether meta is present, not whether it's truthy, so a real but falsy scalar isn't silently dropped from `pacearr.log` |
@@ -299,7 +299,7 @@ For a local Docker verification:
 
 ```bash
 docker build -t pacearr .
-docker stop pacearr && docker rm pacearr
+docker rm -f pacearr || true
 docker run -d \
   --name pacearr \
   --network bridge \

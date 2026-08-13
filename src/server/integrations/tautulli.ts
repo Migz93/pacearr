@@ -30,8 +30,8 @@ export class TautulliIntegration {
     return url;
   }
 
-  private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-    const response = await fetchIntegration(this.buildUrl({ cmd, ...params }));
+  private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}, timeoutMs?: number): Promise<T> {
+    const response = await fetchIntegration(this.buildUrl({ cmd, ...params }), {}, timeoutMs);
     if (!response.ok) throw new Error(`Tautulli ${response.status} ${response.statusText}`);
     const body = await response.json() as { response?: { result?: string; message?: string; data?: T } };
     if (body.response?.result === "error") throw new Error(body.response.message || "Tautulli API error");
@@ -59,7 +59,7 @@ export class TautulliIntegration {
         media_type: "episode",
         start,
         length,
-      });
+      }, 60_000);
       const rows = data?.data ?? [];
       const pageRecords: TautulliHistoryRecord[] = [];
       for (const row of rows) {

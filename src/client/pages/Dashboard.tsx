@@ -118,7 +118,7 @@ function RecentActivity({ events }: { events: HistoryEvent[] }) {
         <div className="grid gap-1.5">
           {events.map((event) => (
             <div className="flex min-w-0 items-center gap-2 text-xs" key={event.id}>
-              <span className={`size-1.5 shrink-0 rounded-full ${event.level === "error" ? "bg-error" : event.level === "warn" ? "bg-warning" : "bg-primary"}`} />
+              <span className={`size-1.5 shrink-0 rounded-full ${event.level === "error" ? "bg-error" : event.level === "warn" ? "bg-warning" : "bg-primary"}`} title={`${event.level} event`}><span className="sr-only">{event.level} event</span></span>
               <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{historyActionLabel(event.action)}: {event.title}</span>
               <span className="shrink-0 text-on-surface-variant">{formatRelativeTime(event.createdAt)}</span>
             </div>

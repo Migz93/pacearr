@@ -118,7 +118,12 @@ export default function Users() {
   if (error && users.length === 0) {
     return (
       <Page>
-        <PageHeader title="Users" />
+        <PageHeader title="Users">
+          <button type="button" className={secondaryButtonClass} disabled={discovering} onClick={() => void load()}>
+            <RefreshCw size={16} className={discovering ? "animate-spin" : ""} />
+            Retry
+          </button>
+        </PageHeader>
         <ErrorBanner message={error} />
       </Page>
     );
@@ -257,13 +262,13 @@ function UserCard({
   onEdit: () => void;
 }) {
   return (
-    <article className={`relative grid grid-cols-[36px_minmax(0,1fr)_auto] grid-rows-[38px_auto] items-center gap-x-2.5 gap-y-2 rounded-lg border p-2.5 transition-colors hover:bg-background-container-high ${selected ? "border-primary/55 bg-background-container-high" : "border-outline-variant/30 bg-background-container"} ${!user.enabled ? "opacity-[.62]" : ""}`}>
+    <article className={`relative grid grid-cols-[36px_minmax(0,1fr)_auto] grid-rows-[38px_auto] items-center gap-x-2.5 gap-y-2 rounded-lg border p-2.5 transition-colors hover:bg-background-container-high ${selected ? "border-primary/55 bg-background-container-high" : "border-outline-variant/30 bg-background-container"}`}>
       <label className="relative col-start-1 row-start-1 block size-[18px] cursor-pointer" title={selected ? "Deselect user" : "Select user"}>
         <input className="peer absolute inset-0 m-0 size-[18px] cursor-pointer opacity-0" type="checkbox" aria-label={`Select ${user.username}`} checked={selected} onChange={onToggleSelected} />
         <span className="grid size-[18px] place-items-center rounded-[5px] border border-on-surface/28 bg-background text-on-surface transition-colors peer-checked:border-primary peer-checked:bg-primary-dim peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary">{selected && <Check size={12} />}</span>
       </label>
 
-      <div className="col-start-2 row-start-1 min-w-0 self-center">
+      <div className={`col-start-2 row-start-1 min-w-0 self-center ${!user.enabled ? "opacity-[.62]" : ""}`}>
         <div className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-bold leading-none text-on-surface" title={user.username}>{user.username}</div>
       </div>
 
@@ -291,7 +296,7 @@ function UserCard({
           </span>
           <span className="text-xs text-on-surface-variant">{user.lastWatchedAt ? formatRelativeTime(user.lastWatchedAt) : "Never"}</span>
         </button>
-        <Avatar avatarUrl={user.avatarUrl} displayName={user.displayName} size={28} />
+        <span className={!user.enabled ? "opacity-[.62]" : ""}><Avatar avatarUrl={user.avatarUrl} displayName={user.displayName} size={28} /></span>
       </div>
     </article>
   );

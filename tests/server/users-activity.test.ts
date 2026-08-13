@@ -57,6 +57,7 @@ test("the shows-driven-by-user dialog reports a recent watch as active for an en
     const [erin] = db.upsertUsers([
       { plexUserId: "plex-erin", plexAccountId: "5", tautulliUserId: null, username: "erin", displayName: "Erin", avatarUrl: null },
     ]);
+    db.updateUser(erin.id, { enabled: true });
     const show = db.upsertRollingShow({ id: 21, title: "Fringe" });
     const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     db.upsertRollingUserProgress(show.id, erin.id, 2, 4, recent);
@@ -77,6 +78,7 @@ test("the shows-driven-by-user dialog reports a recent special (season 0) as ina
     const [frank] = db.upsertUsers([
       { plexUserId: "plex-frank", plexAccountId: "7", tautulliUserId: null, username: "frank", displayName: "Frank", avatarUrl: null },
     ]);
+    db.updateUser(frank.id, { enabled: true });
     const show = db.upsertRollingShow({ id: 22, title: "Doctor Who" });
     const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     db.upsertRollingUserProgress(show.id, frank.id, 0, 1, recent);

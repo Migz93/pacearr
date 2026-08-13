@@ -20,6 +20,10 @@ test("getRecentLogs only reflects the in-memory ring, not retained rotated files
   const logger = new Logger(dataDir);
   try {
     logger.info("Live entry");
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
     const messages = logger.getRecentLogs(10).map((entry) => entry.message);
     assert.deepEqual(messages, ["Live entry"]);
   } finally {
@@ -215,6 +219,21 @@ test("logging circular or BigInt metadata does not throw, in the ring, the persi
     const lines = fs.readFileSync(logger.currentLogFilePath, "utf8").trim().split("\n");
     assert.deepEqual(JSON.parse(lines[0]!).meta, { a: 1, self: "[Circular]" });
     assert.deepEqual(JSON.parse(lines[1]!).meta, { rowId: "123" });
+  } finally {
+    await logger.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("logging metadata that throws during serialization does not interrupt application work", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const logger = new Logger(dataDir);
+  try {
+    const throwingGetter = { get value() { throw new Error("getter failed"); } };
+    const throwingToJson = { toJSON() { throw new Error("toJSON failed"); } };
+    assert.doesNotThrow(() => logger.info("Throwing getter metadata", throwingGetter));
+    assert.doesNotThrow(() => logger.info("Throwing toJSON metadata", throwingToJson));
+    assert.deepEqual(logger.getRecentLogs(2).map((entry) => entry.meta), [undefined, undefined]);
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

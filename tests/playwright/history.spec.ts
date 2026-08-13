@@ -22,13 +22,13 @@ test("history type filter is a fixed set of categories, not one button per actio
 });
 
 test("history category filter updates the URL", async ({ page }) => {
-  await page.goto("/history");
+  await openPage(page, "/history", "History");
   await page.getByRole("button", { name: "Cleanup", exact: true }).click();
   await expect(page).toHaveURL(/\/history\?category=cleanup$/);
 });
 
 test("history level filter updates the URL", async ({ page }) => {
-  await page.goto("/history");
+  await openPage(page, "/history", "History");
   await page.getByRole("button", { name: "Warning", exact: true }).click();
   await expect(page).toHaveURL(/\/history\?level=warn$/);
 });

@@ -61,6 +61,8 @@ export class PlexOAuth {
       clientLogger.warn("Plex OAuth popup was unavailable before login started");
       throw new Error("Plex login popup could not be opened.");
     }
+    let authenticated = false;
+    try {
     // Give mobile browsers a moment to commit the user-opened same-origin popup
     // before redirecting it to the cross-origin Plex auth page.
     await wait(1500);
@@ -105,7 +107,12 @@ export class PlexOAuth {
       forwardUrl: `${window.location.origin}/login/plex/done`,
     };
     this.popup.location.href = `https://app.plex.tv/auth/#!?${encodeParams(params)}`;
-    return this.poll();
+    const token = await this.poll();
+    authenticated = true;
+    return token;
+    } finally {
+      if (!authenticated) this.popup?.close();
+    }
   }
 
   private async poll(): Promise<string> {
