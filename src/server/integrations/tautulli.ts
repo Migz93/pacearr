@@ -70,8 +70,8 @@ export class TautulliIntegration {
         pageRecords.push({
           referenceId: String(row.reference_id ?? row.id ?? `${row.user_id}:${row.rating_key}:${watchedAtUnix}`),
           userId: row.user_id ? String(row.user_id) : null,
-          username: row.username ?? null,
-          friendlyName: row.user ?? null,
+          username: row.username === null || row.username === undefined ? null : String(row.username),
+          friendlyName: row.user === null || row.user === undefined ? null : String(row.user),
           showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
           seasonNumber,
           episodeNumber,

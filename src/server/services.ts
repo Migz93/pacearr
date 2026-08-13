@@ -1106,6 +1106,7 @@ export class PacearrServices {
     const updates = episodes.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
     await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
     await sonarr.updateEpisodesMonitoring(updates);
+    episodeCache?.delete(seriesId);
     if (episodes.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
       await sonarr.searchSeason(seriesId, seasonNumber);
     }
@@ -1226,7 +1227,10 @@ export class PacearrServices {
     if (candidates.length === 0) return false;
 
     const updates = candidates.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
-    if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
+    if (updates.length > 0) {
+      await sonarr.updateEpisodesMonitoring(updates);
+      episodeCache?.delete(input.sonarrSeriesId);
+    }
     await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
 
     const dryRun = this.isDryRun();

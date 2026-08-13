@@ -496,7 +496,6 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       patch.newShowTriageIntervalMinutes = normaliseScheduleIntervalMinutes(body.newShowTriageIntervalMinutes, DEFAULT_APP_SETTINGS.newShowTriageIntervalMinutes);
     }
     const appSettings = db.updateAppSettings(patch);
-    if (patch.trustProxy !== undefined) app.set("trust proxy", appSettings.trustProxy ? 1 : false);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
     scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });

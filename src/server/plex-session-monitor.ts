@@ -159,7 +159,11 @@ export class PlexSessionMonitor {
   private resetHeartbeat = (): void => {
     if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
     this.heartbeatTimer = setTimeout(() => {
-      if (this.source?.readyState !== EventSource.OPEN) return;
+      if (this.stopped || !this.source) return;
+      if (this.source.readyState !== EventSource.OPEN) {
+        this.resetHeartbeat();
+        return;
+      }
       this.logger.warn("Live Plex playback connection went idle; using polling fallback");
       this.disconnectAndReconnect();
     }, this.heartbeatTimeoutMs);

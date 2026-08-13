@@ -63,6 +63,7 @@ test("close is idempotent", async () => {
     await Promise.all([logger.close(), logger.close()]);
     await logger.close();
   } finally {
+    await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -156,7 +157,10 @@ test("logged metadata survives the full write/read round trip through the persis
   const logger = new Logger(dataDir);
   try {
     logger.info("Scheduled job started", { id: "session-check", scheduled: true });
-    await waitForFileContent(logger.currentLogFilePath);
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
 
     const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
     const parsed = JSON.parse(raw.trim().split("\n").pop()!);
@@ -181,7 +185,10 @@ test("the ring entry's timestamp matches the persisted file's timestamp for the 
     logger.info("Timestamp consistency check");
     const [ringEntry] = logger.getRecentLogs(1);
 
-    await waitForFileContent(logger.currentLogFilePath);
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
     const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
     const parsed = JSON.parse(raw.trim().split("\n").pop()!);
 
@@ -215,7 +222,10 @@ test("logging circular or BigInt metadata does not throw, in the ring, the persi
 
     assert.doesNotThrow(() => readRecentLogEntries(logger));
 
-    await waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2);
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log"), 2000, (content) => content.trim().split("\n").length >= 2),
+    ]);
     const lines = fs.readFileSync(logger.currentLogFilePath, "utf8").trim().split("\n");
     assert.deepEqual(JSON.parse(lines[0]!).meta, { a: 1, self: "[Circular]" });
     assert.deepEqual(JSON.parse(lines[1]!).meta, { rowId: "123" });
@@ -262,7 +272,10 @@ test("logging the same object referenced twice preserves both, rather than marki
     const [ringEntry] = logger.getRecentLogs(1);
     assert.deepEqual(ringEntry!.meta, { previous: { id: 42, name: "Shared" }, current: { id: 42, name: "Shared" } });
 
-    await waitForFileContent(logger.currentLogFilePath);
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
     const raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
     const parsed = JSON.parse(raw.trim().split("\n").pop()!);
     assert.deepEqual(parsed.meta, { previous: { id: 42, name: "Shared" }, current: { id: 42, name: "Shared" } });
@@ -290,7 +303,10 @@ test("logging a root metadata value with no JSON representation does not throw a
     // Wait for both async writes to reach disk before close()/rmSync() below, or the
     // second write can still be in flight when the temp dir is removed - see the
     // waitForFileContent docstring above.
-    await waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2);
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log"), 2000, (content) => content.trim().split("\n").length >= 2),
+    ]);
   } finally {
     await logger.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -315,7 +331,10 @@ test("the human-readable log retains falsy scalar metadata instead of treating i
     // waitForFileContent's default predicate returns as soon as the file has any content -
     // with four separate async writes queued, that's only guaranteed to be the first of
     // them. Wait for all four lines specifically before reading.
-    await waitForFileContent(humanLogPath, 2000, (content) => expectedLines.every((line) => content.includes(line)));
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= expectedLines.length),
+      waitForFileContent(humanLogPath, 2000, (content) => expectedLines.every((line) => content.includes(line))),
+    ]);
     const lines = fs.readFileSync(humanLogPath, "utf8").trim().split("\n");
     for (const expected of expectedLines) assert.ok(lines.some((line) => line.endsWith(expected)));
   } finally {

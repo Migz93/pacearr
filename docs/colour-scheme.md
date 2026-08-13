@@ -31,12 +31,13 @@ order — deeper backgrounds sit behind shallower ones.
 
 | Variable | Hex | Role |
 |---|---|---|
-| `background` | `#0d0e12` | Page-level backgrounds, input wells, modal overlays |
+| `background` | `#0d0e12` | Page-level backgrounds and input wells |
 | `background-container-low` | `#121318` | Sidebar, nav rail, inset surfaces |
 | `background-container` | `#18191e` | Default cards and panels |
 | `background-container-high` | `#1e1f25` | Elevated cards, resting buttons, selected controls |
 | `background-container-highest` | `#24252b` | Tooltips, popovers, elevated row hovers |
 | `background-bright` | `#2a2c32` | Button hover state, interactive element hover |
+| `overlay` | `#000000` | Modal and drawer backdrops; use `bg-overlay/50` or `bg-overlay/60` as needed |
 
 ### Brand / interactive
 
@@ -81,7 +82,7 @@ All text/background pairings in active use pass WCAG AA (4.5:1 for normal text).
 | `on-surface` on `primary-dim` | Buttons, badges | 7.0:1 (AAA) |
 | `on-surface` on `primary` | Hover state | 4.6:1 (AA) |
 | `success` on tinted `success/18` badge fill | Status badges, worst case `background-container-high` | 5.2:1 (AA) |
-| `on-surface` on tinted `success/28` badge fill | Current-release badge | 10.4:1 (AAA) |
+| `on-surface` on tinted `success/28` badge fill | Current-release badge | 9.2:1 (AAA) |
 | `warning` on tinted `warning/16` badge fill | Status badges, worst case `background-container-high` | 5.7:1 (AA) |
 | `error` on tinted `error/15` badge fill | Status badges, worst case `background-container-high` | 4.6:1 (AA) |
 

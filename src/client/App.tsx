@@ -17,6 +17,7 @@ export default function App() {
   const [boot, setBoot] = useState<BootstrapStatus | null>(null);
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   if (window.location.pathname === "/login/plex/loading") {
@@ -27,6 +28,7 @@ export default function App() {
   }
 
   async function refresh() {
+    setBootstrapError(null);
     try {
       const [status, session] = await Promise.all([
         apiGet<BootstrapStatus>("/api/bootstrap/status"),
@@ -40,6 +42,7 @@ export default function App() {
       });
       setUser(null);
       setBoot(null);
+      setBootstrapError("Unable to load Pacearr. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -61,7 +64,7 @@ export default function App() {
     return (
       <div className="grid min-h-screen place-items-center p-6">
         <div className="grid justify-items-center gap-4 text-center">
-          <p>Unable to load Pacearr. Please try again.</p>
+          <p role="alert">{bootstrapError ?? "Unable to load Pacearr. Please try again."}</p>
           <button type="button" className={primaryButtonClass} onClick={() => { setLoading(true); void refresh(); }}>Retry</button>
         </div>
       </div>
@@ -156,7 +159,7 @@ function Login({ onLogin }: { onLogin: () => Promise<void> }) {
         </div>
         <section className="grid gap-5 rounded-2xl border border-outline-variant/30 bg-background-container p-6 shadow-2xl" aria-labelledby="login-title">
           <h2 id="login-title" className="font-headline m-0 text-center text-lg font-semibold">Sign in to continue</h2>
-          {error && <div className="rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
+          {error && <div role="alert" className="rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
           <button type="button" className="inline-flex min-h-[50px] w-full items-center justify-center gap-2.5 rounded-xl border-0 bg-primary-dim font-extrabold text-on-surface transition-[background-color,transform] hover:enabled:-translate-y-px hover:enabled:bg-primary [&_svg]:h-[23px] [&_svg]:w-[52px]" disabled={busy} onClick={() => void plexLogin()}>
             {busy ? <span>Waiting for Plex...</span> : <><span>Login with</span><PlexLogo /></>}
           </button>

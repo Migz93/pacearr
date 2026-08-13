@@ -649,7 +649,7 @@ function LogsTab() {
   return (
     <>
       {activeLog && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
           <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close log details" onClick={() => setActiveLog(null)} />
           <div ref={logDialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1}>
             <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log details</h2><button type="button" className={iconButtonClass} onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
@@ -777,7 +777,7 @@ function JobsTab() {
   return (
     <>
       {editingJob && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
           <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
             <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className={iconButtonClass} disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
             <Field label="New frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
@@ -914,7 +914,7 @@ function AboutTab() {
           ))}
         </div>}
       </SectionCard>
-      {changelogRelease && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
+      {changelogRelease && <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]" role="presentation" onMouseDown={() => setChangelogRelease(null)}>
         <div ref={changelogDialogRef} className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-center justify-between gap-3.5">
             <div><h2 id="changelog-title" className="font-headline text-lg font-semibold">{releaseTitle(changelogRelease)} changelog</h2></div>

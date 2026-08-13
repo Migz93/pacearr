@@ -54,7 +54,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
-      {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-black/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-overlay/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <aside
         id="mobile-sidebar"
         ref={sidebarRef}

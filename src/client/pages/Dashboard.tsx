@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HardDrive, Layers, ListVideo, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { apiGet } from "../lib/api";
@@ -15,12 +15,17 @@ const POSTER_COUNT = 12;
 export default function Dashboard() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   async function load() {
+    const requestId = ++requestSequence.current;
     try {
-      setData(await apiGet<DashboardResponse>("/api/dashboard"));
+      const response = await apiGet<DashboardResponse>("/api/dashboard");
+      if (requestId !== requestSequence.current) return;
+      setData(response);
       setError(null);
     } catch (caught) {
+      if (requestId !== requestSequence.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     }
   }
@@ -28,7 +33,10 @@ export default function Dashboard() {
   useEffect(() => {
     void load();
     const id = setInterval(() => void load(), 15000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      requestSequence.current++;
+    };
   }, []);
 
   // A failed first load must not loop in "Loading..." forever with no way out — matches
