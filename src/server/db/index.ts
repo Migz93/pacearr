@@ -694,7 +694,7 @@ export class PacearrDatabase {
       throw new Error("Tautulli user mapping conflict");
     }
     const mappedUser = this.db.prepare("SELECT id FROM users WHERE tautulli_user_id = ?").get(tautulliUserId) as { id: number } | undefined;
-    if (mappedUser && mappedUser.id !== userId) throw new Error("Tautulli user mapping conflict");
+    if (mappedUser && mappedUser.id !== userId) throw new Error("Tautulli identity already mapped");
     this.db.prepare("UPDATE users SET tautulli_user_id = ?, tautulli_username = ?, updated_at = ? WHERE id = ?").run(tautulliUserId, tautulliUsername, now(), userId);
     return this.getUser(userId)!;
   }

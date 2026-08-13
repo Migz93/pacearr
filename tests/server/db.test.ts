@@ -761,7 +761,7 @@ test("mapping rejects a Tautulli identity already assigned to another user", () 
       { plexUserId: "plex-bob-conflict", plexAccountId: "48", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null },
     ]);
     db.mapTautulliUser(alice.id, "tautulli-47", "Alice on Tautulli");
-    assert.throws(() => db.mapTautulliUser(bob.id, "tautulli-47", "Alice on Tautulli"), /Tautulli user mapping conflict/);
+    assert.throws(() => db.mapTautulliUser(bob.id, "tautulli-47", "Alice on Tautulli"), /Tautulli identity already mapped/);
     assert.equal(db.getUser(bob.id)?.tautulliUserId, null);
   } finally {
     cleanup();

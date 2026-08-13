@@ -42,6 +42,7 @@ export default function Users() {
   const editUser = useMemo(() => users.find((user) => user.id === editUserId) ?? null, [users, editUserId]);
 
   async function load() {
+    setLoading(true);
     try {
       const [userResponse, unmappedResponse] = await Promise.all([
         apiGet<{ users: UserListItem[] }>("/api/users"),
@@ -119,9 +120,9 @@ export default function Users() {
     return (
       <Page>
         <PageHeader title="Users">
-          <button type="button" className={secondaryButtonClass} disabled={discovering} onClick={() => void load()}>
-            <RefreshCw size={16} className={discovering ? "animate-spin" : ""} />
-            Retry
+          <button type="button" className={secondaryButtonClass} disabled={loading} onClick={() => void load()}>
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            {loading ? "Retrying..." : "Retry"}
           </button>
         </PageHeader>
         <ErrorBanner message={error} />
