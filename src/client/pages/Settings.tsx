@@ -745,9 +745,12 @@ function JobsTab() {
   function openEdit(job: JobInfo) {
     const preset = JOB_PRESETS[job.id];
     if (!preset) return;
-    const match = job.intervalDescription?.match(/Every (\d+)/i);
+    const match = job.intervalDescription?.match(/every\s+(\d+)\s+(minute|hour|day)/i);
     const parsed = match ? Number(match[1]) : null;
-    const current = parsed === null || !Number.isFinite(parsed) ? preset.values[0] : preset.unit === "hours" ? parsed * 60 : preset.unit === "days" ? parsed * 24 * 60 : parsed;
+    const unit = match?.[2]?.toLowerCase();
+    const current = parsed === null || !Number.isFinite(parsed)
+      ? preset.values[0]
+      : unit === "hour" ? parsed * 60 : unit === "day" ? parsed * 24 * 60 : parsed;
     setEditValue(String(current));
     setEditingJob(job);
   }
