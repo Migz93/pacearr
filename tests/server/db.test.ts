@@ -39,10 +39,12 @@ test("Tautulli resolver prefers an exact username match and refuses to guess bet
     // so — Plex Home profiles commonly share generic names. A bare OR query with .get()
     // would pick an arbitrary row on a tie, silently attributing one person's Tautulli
     // history to a different Pacearr user.
-    const [alice, bob] = db.upsertUsers([
+    db.upsertUsers([
       { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
       { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
     ]);
+    const alice = db.listUsers().find((user) => user.plexUserId === "plex-alice")!;
+    const bob = db.listUsers().find((user) => user.plexUserId === "plex-bob")!;
 
     // Exact username match wins even when it would also match another user's display name.
     const resolve = db.createTautulliUserResolver();
