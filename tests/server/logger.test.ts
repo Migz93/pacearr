@@ -52,6 +52,10 @@ test("close is idempotent", async () => {
   const logger = new Logger(dataDir);
   try {
     logger.info("Closing twice");
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
     await Promise.all([logger.close(), logger.close()]);
     await logger.close();
   } finally {

@@ -61,7 +61,10 @@ export class JobScheduler {
     const job = this.jobs.get(id);
     if (!job) return;
     if (patch.intervalMs !== undefined) job.intervalMs = patch.intervalMs;
-    if (patch.enabled !== undefined) job.enabled = patch.enabled;
+    if (patch.enabled !== undefined) {
+      job.enabled = patch.enabled;
+      if (!job.enabled) job.pendingManualRun = false;
+    }
     this.reschedule(job);
     this.logger?.info("Scheduled job updated", { id: job.id, intervalMs: job.intervalMs, enabled: job.enabled });
   }
@@ -161,7 +164,7 @@ export class JobScheduler {
       return false;
     } finally {
       job.activeRuns = Math.max(0, job.activeRuns - 1);
-      if (job.activeRuns === 0 && job.pendingManualRun) {
+      if (job.activeRuns === 0 && job.enabled && job.pendingManualRun) {
         job.pendingManualRun = false;
         this.logger?.info("Running queued manual job", { id: job.id });
         void this.execute(job, false);

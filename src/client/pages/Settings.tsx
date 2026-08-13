@@ -451,13 +451,16 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
-  const credentialsIncomplete = !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.sonarr?.apiKeyConfigured);
+  const credentials = { baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -471,7 +474,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/sonarr", form);
+      await apiPost("/api/settings/sonarr", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);
@@ -518,13 +521,16 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
-  const credentialsIncomplete = !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
+  const credentials = { ...form, baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -538,7 +544,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/tautulli", form);
+      await apiPost("/api/settings/tautulli", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);

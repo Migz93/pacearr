@@ -210,6 +210,30 @@ test("disabled jobs cannot be manually run or queued", async () => {
   assert.equal(runs, 0);
 });
 
+test("disabling a job cancels its queued manual follow-up", async () => {
+  const scheduler = new JobScheduler();
+  let runs = 0;
+  let releaseFirstRun!: () => void;
+  const firstRun = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+  scheduler.registerRecurringJob({
+    id: "recommendation-refresh",
+    intervalMs: 60_000,
+    task: async () => {
+      runs += 1;
+      if (runs === 1) await firstRun;
+    },
+  });
+
+  const running = scheduler.runNowAndWait("recommendation-refresh");
+  await waitFor(() => runs === 1);
+  assert.equal(scheduler.runNowOrQueue("recommendation-refresh"), true);
+  scheduler.updateJob("recommendation-refresh", { enabled: false });
+  releaseFirstRun();
+  assert.equal(await running, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runs, 1);
+});
+
 test("a scheduled collision keeps the next recurring run armed", async () => {
   const scheduler = new JobScheduler();
   const contexts: boolean[] = [];

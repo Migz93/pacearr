@@ -120,6 +120,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A dependent manual job queues one follow-up after an active run | A refreshed Sonarr library cannot leave recommendations stale when an older calculation is already in flight; repeated triggers still coalesce to one follow-up |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
 | Disabled jobs cannot be manually run or queued | Settings and internal callers cannot override a job the administrator disabled |
+| Disabling a job cancels a queued manual follow-up | A job disabled while its active run has a coalesced manual follow-up cannot start that follow-up after the active run finishes |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
@@ -135,6 +136,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getRecentLogs` only reflects the in-memory ring | Retained rotated files never leak into the ring-only read path |
 | `currentLogFilePath` points at the machine-readable transport's fixed symlink name | Settings → Logs reads the same file the machine-readable rotating transport always symlinks to |
+| `close()` is idempotent | Concurrent and subsequent shutdown calls share one completion path without ending winston twice |
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |

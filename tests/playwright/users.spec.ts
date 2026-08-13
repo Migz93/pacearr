@@ -41,7 +41,8 @@ test("PATCH-ing a user with no enabled field in the body leaves their enabled st
     const { user: after } = (await patched.json()) as { user: { enabled: boolean } };
     expect(after.enabled).toBe(user.enabled);
   } finally {
-    await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
+    const restored = await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
+    expect(restored.ok()).toBe(true);
   }
 });
 
