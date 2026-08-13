@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 const FOCUSABLE_SELECTOR = "a[href], button, textarea, input, select, [tabindex]";
 
@@ -10,13 +10,13 @@ type HiddenBackground = {
 
 const hiddenBackground = new Map<HTMLElement, HiddenBackground>();
 
-function hideBackground(container: HTMLElement): HTMLElement[] {
+function hideBackground(container: HTMLElement, interactionElements: ReadonlySet<HTMLElement>): HTMLElement[] {
   const hidden: HTMLElement[] = [];
   let branch: HTMLElement | null = container;
   while (branch?.parentElement) {
     const parentElement: HTMLElement = branch.parentElement;
     for (const sibling of Array.from(parentElement.children)) {
-      if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
+      if (sibling === branch || !(sibling instanceof HTMLElement) || interactionElements.has(sibling)) continue;
       const existing = hiddenBackground.get(sibling);
       if (existing) {
         existing.count++;
@@ -74,8 +74,10 @@ function ensureFocusable(container: HTMLElement | null) {
  * contains a native `autoFocus` field — the browser applies `autoFocus`
  * during commit, before this hook's effect runs, so `document.activeElement`
  * would otherwise already be inside the dialog by the time it's read here.
+ * Pass `interactionElementRefs` for controls outside the dialog container that
+ * are part of the modal interaction, such as the mobile drawer backdrop.
  */
-export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () => void, trigger?: HTMLElement | null) {
+export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () => void, trigger?: HTMLElement | null, interactionElementRefs: Array<RefObject<HTMLElement | null>> = []) {
   const containerRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
   const triggerRef = useRef(trigger);
@@ -89,7 +91,8 @@ export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () 
     const container = containerRef.current;
     const triggerElement = triggerRef.current !== undefined ? triggerRef.current : (document.activeElement as HTMLElement | null);
     ensureFocusable(container);
-    const background = container ? hideBackground(container) : [];
+    const interactionElements = new Set(interactionElementRefs.flatMap((ref) => ref.current ? [ref.current] : []));
+    const background = container ? hideBackground(container, interactionElements) : [];
 
     if (container && !container.contains(document.activeElement)) {
       (focusableElements(container)[0] ?? container).focus();

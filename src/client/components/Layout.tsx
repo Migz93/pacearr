@@ -18,6 +18,7 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
   const [accountOpen, setAccountOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
+  const drawerBackdropRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -50,11 +51,11 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
   // trapping Tab focus and announcing role="dialog" at a width where it isn't
   // presented as one.
   const drawerIsDialog = mobileOpen && belowMdBreakpoint;
-  const sidebarRef = useDialogA11y<HTMLElement>(drawerIsDialog, () => setMobileOpen(false));
+  const sidebarRef = useDialogA11y<HTMLElement>(drawerIsDialog, () => setMobileOpen(false), undefined, [drawerBackdropRef]);
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface">
-      {mobileOpen && <button type="button" className="fixed inset-0 z-30 bg-overlay/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <button ref={drawerBackdropRef} type="button" className="fixed inset-0 z-30 bg-overlay/50 md:hidden" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <aside
         id="mobile-sidebar"
         ref={sidebarRef}
