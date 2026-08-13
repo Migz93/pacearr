@@ -1104,17 +1104,21 @@ export class PacearrServices {
     const sonarr = this.getSonarr();
     const episodes = (await this.getCachedEpisodes(seriesId, episodeCache)).filter((episode) => episode.seasonNumber === seasonNumber);
     const updates = episodes.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
-    await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
-    await sonarr.updateEpisodesMonitoring(updates);
-    if (episodes.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
-      await sonarr.searchSeason(seriesId, seasonNumber);
+    try {
+      await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
+      await sonarr.updateEpisodesMonitoring(updates);
+      if (episodes.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
+        await sonarr.searchSeason(seriesId, seasonNumber);
+      }
+      const dryRun = this.isDryRun();
+      if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt);
+      await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, [...rolling.expandedSeasons, seasonNumber]);
+      this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
+      this.logger.info("Season expanded from watch activity", { seriesId, title: rolling.title, seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
+      return true;
+    } finally {
+      episodeCache?.delete(seriesId);
     }
-    const dryRun = this.isDryRun();
-    if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt);
-    await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, [...rolling.expandedSeasons, seasonNumber]);
-    this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
-    this.logger.info("Season expanded from watch activity", { seriesId, title: rolling.title, seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
-    return true;
   }
 
   /**
@@ -1226,8 +1230,12 @@ export class PacearrServices {
     if (candidates.length === 0) return false;
 
     const updates = candidates.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
-    if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
-    await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
+    try {
+      if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
+      await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
+    } finally {
+      if (updates.length > 0) episodeCache?.delete(input.sonarrSeriesId);
+    }
 
     const dryRun = this.isDryRun();
     if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, input.userId, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), input.watchedAt);

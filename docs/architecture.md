@@ -52,7 +52,7 @@ When changing the schema in the future:
 - Authentication is Plex-owner based.
 - The first successful Plex login becomes the stored owner account.
 - Session IDs are random bearer tokens but SQLite stores only their SHA-256 hash; upgrading hashes existing rows without invalidating active cookies.
-- Cookies are `HttpOnly`, `SameSite=Strict`, and add `Secure` for HTTPS requests. `trustProxy` must be enabled when TLS terminates at a reverse proxy; changing it takes effect immediately.
+- Cookies are `HttpOnly`, `SameSite=Strict`, and add `Secure` for HTTPS requests. `trustProxy` must be enabled when TLS terminates at a reverse proxy; it is read when the server starts, so changing it requires a restart.
 - OAuth popup login is available from the UI; manual token entry is retained as a fallback.
 - Setup flow is currently lightweight:
   1. sign in with Plex

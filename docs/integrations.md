@@ -93,6 +93,8 @@ The Sonarr settings are:
 - base URL
 - API key
 
+Use the final, canonical base URL for every configured integration. Pacearr sends credentials with integration requests and deliberately rejects redirects, so a URL that redirects (for example, from HTTP to HTTPS or to another base path) will fail instead of being followed.
+
 ### Endpoints Used
 
 | Purpose | Sonarr API |
