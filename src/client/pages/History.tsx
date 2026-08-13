@@ -3,7 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react"
 import { useSearchParams } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { badgeClass, formatRelativeTime } from "../lib/utils";
-import { SelectInput } from "../components/FormControls";
+import { iconButtonClass, SelectInput } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader } from "../components/Page";
 import { HISTORY_CATEGORIES, historyActionLabel, isDryRunAction, isHistoryCategory } from "../../shared/history";
 import type { HistoryEvent, HistoryPageResponse } from "../../shared/types";
@@ -142,9 +142,9 @@ export default function History() {
         <div className="mt-3.5 flex items-center justify-between gap-3 text-xs text-on-surface-variant max-[820px]:flex-col max-[820px]:items-stretch">
           <span>{(pageInfo.page - 1) * pageInfo.pageSize + 1}-{Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)} of {pageInfo.total}</span>
           <div className="flex items-center gap-2">
-            <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" aria-label="Previous page" disabled={page <= 1} onClick={() => setParam("page", String(page - 1))}><ChevronLeft size={14} /></button>
+            <button type="button" className={iconButtonClass} aria-label="Previous page" disabled={page <= 1} onClick={() => setParam("page", String(page - 1))}><ChevronLeft size={14} /></button>
             <span>Page {pageInfo.page} / {pageInfo.pages}</span>
-            <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" aria-label="Next page" disabled={page >= pageInfo.pages} onClick={() => setParam("page", String(page + 1))}><ChevronRight size={14} /></button>
+            <button type="button" className={iconButtonClass} aria-label="Next page" disabled={page >= pageInfo.pages} onClick={() => setParam("page", String(page + 1))}><ChevronRight size={14} /></button>
           </div>
         </div>
       )}
@@ -163,7 +163,7 @@ function HistoryRow({ event }: { event: HistoryEvent }) {
         <span className="grid min-w-0 gap-1">
           <span className="flex min-w-0 items-baseline gap-2.5">
             <strong className="overflow-hidden text-ellipsis whitespace-nowrap">{event.title}</strong>
-            <span className="shrink-0 text-[11px] font-extrabold uppercase text-primary">{historyActionLabel(event.action)}</span>
+            <span className="shrink-0 text-[11px] font-extrabold uppercase text-on-surface-variant">{historyActionLabel(event.action)}</span>
             {isDryRunAction(event.action) && <span className={`${badgeClass("warning")} shrink-0 self-center`}>Dry run</span>}
           </span>
           <span className="text-xs text-on-surface-variant">{compactDetails(details)}</span>

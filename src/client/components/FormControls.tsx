@@ -2,6 +2,13 @@ import { Children, cloneElement, isValidElement, useId, type InputHTMLAttributes
 import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/utils";
 
+export const primaryButtonClass = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary-dim";
+export const secondaryButtonClass = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface transition-colors hover:bg-background-bright disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background-container-high";
+export const compactPrimaryButtonClass = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface transition-colors hover:bg-primary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-primary-dim";
+export const compactSecondaryButtonClass = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface transition-colors hover:bg-background-bright disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background-container-high";
+export const dangerButtonClass = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-error transition-colors hover:bg-background-bright disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background-container-high";
+export const iconButtonClass = "inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface transition-colors hover:bg-background-bright disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background-container-high";
+
 export function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
     <section className="rounded-xl border border-outline-variant/30 bg-background-container p-5">
@@ -145,7 +152,7 @@ export function SaveBar({ saving, success, error, label, onSave, test, saveDisab
       <div className="flex flex-wrap items-center gap-2">
         {test && (
           <>
-            <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={test.testing || test.disabled} onClick={test.onTest}>
+            <button type="button" className={secondaryButtonClass} disabled={test.testing || test.disabled} onClick={test.onTest}>
               {test.testing ? "Testing..." : "Test connection"}
             </button>
             <span aria-live="polite">{test.result && <span className={`text-[13px] font-bold ${test.result.ok ? "text-success" : "text-error"}`}>{test.result.message}</span>}</span>
@@ -153,7 +160,7 @@ export function SaveBar({ saving, success, error, label, onSave, test, saveDisab
         )}
         <span aria-live="polite">{success && <span className="text-[13px] font-bold text-success">Saved</span>}{error && <span className="text-[13px] font-bold text-error">{error}</span>}</span>
       </div>
-      <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface transition-colors hover:bg-primary" disabled={saving || saveDisabled} aria-busy={saving} onClick={onSave}>
+      <button type="button" className={primaryButtonClass} disabled={saving || saveDisabled} aria-busy={saving} onClick={onSave}>
         {saving ? "Saving..." : label}
         {!saving && <ChevronRight size={15} />}
       </button>

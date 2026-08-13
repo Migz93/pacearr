@@ -23,13 +23,15 @@ export function titleCaseJob(id: string) {
 
 const BADGE_BASE = "inline-flex min-w-12 items-center justify-center gap-1 rounded-[5px] px-1.5 py-0.5 text-[10px] font-black uppercase";
 
-// Tint opacities differ per variant (18/16/15) to keep each variant's text
+// Tint opacities differ per variant (18/28/16/15) to keep each variant's text
 // contrast above WCAG AA across every surface a badge renders on — see the
 // status-badge rows in docs/colour-scheme.md.
-export function badgeClass(variant?: "success" | "warning" | "error"): string {
+export function badgeClass(variant?: "success" | "successStrong" | "warning" | "error"): string {
   switch (variant) {
     case "success":
       return `${BADGE_BASE} bg-success/18 text-success`;
+    case "successStrong":
+      return `${BADGE_BASE} bg-success/28 text-on-surface`;
     case "warning":
       return `${BADGE_BASE} bg-warning/16 text-warning`;
     case "error":

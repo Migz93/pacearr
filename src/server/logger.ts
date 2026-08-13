@@ -77,7 +77,14 @@ export class Logger {
         new winston.transports.Console({
           format: winston.format.combine(
             winston.format.colorize(),
-            winston.format.timestamp({ format: "HH:mm:ss" }),
+            // Logger.write() supplies the ISO timestamp shared with the ring and files.
+            // Format that same instant in the container's configured TZ for console use.
+            winston.format((info) => {
+              info.timestamp = typeof info.timestamp === "string"
+                ? new Date(info.timestamp).toLocaleTimeString("en-GB", { hour12: false })
+                : info.timestamp;
+              return info;
+            })(),
             winston.format.errors({ stack: true }),
             humanFormat
           ),

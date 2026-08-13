@@ -9,6 +9,7 @@ import type { RuntimeConfig } from "../../src/server/config.js";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import { runMigrations } from "../../src/server/db/migrations.js";
 import { buildIntegrationUrl } from "../../src/server/integrations/request.js";
+import { PlexIntegration } from "../../src/server/integrations/plex.js";
 import { SonarrIntegration } from "../../src/server/integrations/sonarr.js";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
@@ -62,23 +63,37 @@ test("migration 14 hashes an existing session while preserving its usable cookie
   }
 });
 
-test("Sonarr and Tautulli reject unsafe URLs and disable redirect following for credentialed requests", async () => {
+test("Plex, Sonarr, and Tautulli reject unsafe URLs and disable redirect following for credentialed requests", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; redirect: RequestRedirect | undefined; signal: AbortSignal | null | undefined }> = [];
   globalThis.fetch = (async (input, init) => {
     requests.push({ url: String(input), redirect: init?.redirect, signal: init?.signal });
     const url = new URL(String(input));
+    if (url.pathname.includes("identity")) return new Response("<MediaContainer machineIdentifier=\"server\" />", { status: 200 });
     if (url.pathname.includes("system/status")) return new Response(JSON.stringify({ version: "4" }), { status: 200 });
+    if (url.pathname === "/api/users") return new Response("<MediaContainer><User id=\"friend\" username=\"friend\" title=\"Friend\" /></MediaContainer>", { status: 200 });
+    if (url.pathname === "/users/account.json") return new Response(JSON.stringify({ user: { id: "owner", username: "owner" } }), { status: 200 });
+    if (url.pathname === "/api/v2/resources") return new Response(JSON.stringify([{ name: "Plex", clientIdentifier: "server", provides: "server", owned: true, connections: [{ uri: "https://plex.example", local: true }] }]), { status: 200 });
     return new Response(JSON.stringify({ response: { result: "success", data: { tautulli_version: "2" } } }), { status: 200 });
   }) as typeof fetch;
   try {
     const logger = silentLogger();
     assert.deepEqual(await new SonarrIntegration({ baseUrl: "file:///etc", apiKey: "secret" }, logger).testConnection(), { ok: false, message: "Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments." });
     assert.deepEqual(await new TautulliIntegration({ enabled: true, baseUrl: "https://user:pass@tautulli.example", apiKey: "secret" }, logger).testConnection(), { ok: false, message: "Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments." });
+    assert.deepEqual(await new PlexIntegration({ serverUrl: "file:///etc", machineIdentifier: "", token: "secret" }, logger).testConnection(), { ok: false, message: "Integration URL must be an HTTP(S) URL without credentials, query parameters, or fragments." });
 
-    await new SonarrIntegration({ baseUrl: "https://sonarr.example", apiKey: "secret" }, logger).testConnection();
-    await new TautulliIntegration({ enabled: true, baseUrl: "https://tautulli.example", apiKey: "secret" }, logger).testConnection();
-    assert.deepEqual(requests.map((request) => request.redirect), ["error", "error"]);
+    const plex = new PlexIntegration({ serverUrl: "https://plex.example", machineIdentifier: "", token: "secret" }, logger);
+    const plexResult = await plex.testConnection();
+    const sonarrResult = await new SonarrIntegration({ baseUrl: "https://sonarr.example", apiKey: "secret" }, logger).testConnection();
+    const tautulliResult = await new TautulliIntegration({ enabled: true, baseUrl: "https://tautulli.example", apiKey: "secret" }, logger).testConnection();
+    assert.equal(plexResult.ok, true);
+    assert.equal(sonarrResult.ok, true);
+    assert.equal(tautulliResult.ok, true);
+    assert.equal((await plex.getFriendsAndOwner({ plexId: "owner", username: "owner", displayName: "Owner", avatarUrl: null })).length, 2);
+    assert.equal((await PlexIntegration.fetchAccountByToken("secret")).plexId, "owner");
+    await PlexIntegration.pingToken("secret");
+    assert.deepEqual(await PlexIntegration.discoverServers("secret"), [{ name: "Plex", machineIdentifier: "server", connections: [{ uri: "https://plex.example", local: true }] }]);
+    assert.deepEqual(requests.map((request) => request.redirect), Array(7).fill("error"));
     assert.ok(requests.every((request) => request.signal instanceof AbortSignal));
   } finally {
     globalThis.fetch = originalFetch;

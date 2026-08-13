@@ -7,7 +7,7 @@ import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -65,11 +65,6 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
 }
 
 const PAGE_SIZE = 24;
-
-const primaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface";
-const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
-const dangerButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-error";
-const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
 
 function isShowsTab(value: string | null): value is ShowsTab {
   return TABS.some((tab) => tab.id === value);
@@ -255,8 +250,8 @@ function ShowsBrowser() {
   return (
     <Page>
       <PageHeader title="Shows">
-        <button type="button" className={primaryButton} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
-        <button type="button" className={secondaryButton} onClick={() => void refresh()} disabled={loading || refreshing}>
+        <button type="button" className={primaryButtonClass} onClick={(event) => { addTriggerRef.current = event.currentTarget; setAdding(true); }}><Plus size={16} /> Enroll show</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void refresh()} disabled={loading || refreshing}>
           <RefreshCw size={16} className={loading || refreshing ? "animate-spin" : ""} /> {refreshing ? "Refreshing..." : "Refresh"}
         </button>
       </PageHeader>
@@ -336,9 +331,9 @@ function ShowsBrowser() {
             Showing {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" className={compactSecondaryButton} disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === 1} onClick={() => setPage(safePage - 1)}>Previous</button>
             <span className="text-xs">Page {safePage} of {pageCount}</span>
-            <button type="button" className={compactSecondaryButton} disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+            <button type="button" className={compactSecondaryButtonClass} disabled={safePage === pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
           </div>
         </div>
       )}
@@ -362,16 +357,20 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
   const [loading, setLoading] = useState(false);
   const [addingId, setAddingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
     const term = query.trim();
-    if (term.length < 2) { setShows([]); return; }
+    setError(null);
+    if (term.length < 2) { setShows([]); setLoading(false); return; }
+    setShows([]);
+    setLoading(true);
     const timer = setTimeout(() => {
-      setLoading(true);
       apiGet<{ shows: ShowListItem[] }>(`/api/shows?query=${encodeURIComponent(term)}`)
-        .then((data) => setShows(data.shows.filter((show) => !show.enrolled)))
-        .catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)))
-        .finally(() => setLoading(false));
+        .then((data) => { if (requestId === requestIdRef.current) setShows(data.shows.filter((show) => !show.enrolled)); })
+        .catch((caught) => { if (requestId === requestIdRef.current) setError(caught instanceof Error ? caught.message : String(caught)); })
+        .finally(() => { if (requestId === requestIdRef.current) setLoading(false); });
     }, 250);
     return () => clearTimeout(timer);
   }, [query]);
@@ -394,10 +393,10 @@ function AddShowModal({ onClose, onAdded, trigger }: { onClose: () => void; onAd
   return <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
     <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close enroll show dialog" onClick={onClose} />
     <div ref={dialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="enroll-show-title" tabIndex={-1}>
-      <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 id="enroll-show-title" className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+      <div className="mb-4 flex items-center justify-between gap-3.5"><div><h2 id="enroll-show-title" className="font-headline mb-1 text-lg font-semibold">Enroll show</h2><p className="text-on-surface-variant">Search existing Sonarr series to enroll in Pacearr control.</p></div><button type="button" className={iconButtonClass} onClick={onClose} aria-label="Close"><X size={18} /></button></div>
       <div className="mb-[18px] flex h-10 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant"><Search size={17} /><input className="m-0 h-full border-0 bg-transparent p-0" aria-label="Search Sonarr shows" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Sonarr shows..." /></div>
       {error && <div className="mb-4 rounded-lg border border-error/35 bg-error/12 px-3.5 py-3 text-error">{error}</div>}
-      {query.trim().length < 2 ? <div className="p-6 text-center text-on-surface-variant">Enter at least two characters to search Sonarr.</div> : loading ? <div className="p-6 text-center text-on-surface-variant">Searching Sonarr...</div> : <div className="grid gap-2">{shows.map((show) => <div className="flex items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container-low p-3" key={show.sonarrSeriesId}><div><strong className="block">{show.title}</strong><span className="mt-1 block text-xs text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className="inline-flex min-h-8 items-center justify-center rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="p-6 text-center text-on-surface-variant">No available Sonarr shows match this search.</div>}</div>}
+      {query.trim().length < 2 ? <div className="p-6 text-center text-on-surface-variant">Enter at least two characters to search Sonarr.</div> : loading ? <div className="p-6 text-center text-on-surface-variant">Searching Sonarr...</div> : <div className="grid gap-2">{shows.map((show) => <div className="flex items-center justify-between gap-3 rounded-lg border border-outline-variant/30 bg-background-container-low p-3" key={show.sonarrSeriesId}><div><strong className="block">{show.title}</strong><span className="mt-1 block text-xs text-on-surface-variant">{show.year ?? "Unknown year"} · {show.seasonCount} seasons</span></div><button type="button" className={compactPrimaryButtonClass} disabled={addingId !== null} onClick={() => void add(show)}>{addingId === show.sonarrSeriesId ? "Adding..." : "Add"}</button></div>)}{shows.length === 0 && <div className="p-6 text-center text-on-surface-variant">No available Sonarr shows match this search.</div>}</div>}
     </div>
   </div>;
 }
@@ -407,7 +406,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   const location = useLocation();
   const returnPath = (location.state as { from?: string } | null)?.from ?? "/shows";
   const returnTabParam = (returnPath.includes("?") ? new URLSearchParams(returnPath.split("?")[1]).get("tab") : null) ?? "enrolled";
-  const returnLabel = TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
+  const returnLabel = returnPath === "/dashboard" ? "Dashboard" : TABS.find((tab) => tab.id === returnTabParam)?.label ?? "Shows";
   const [detail, setDetail] = useState<ShowDetailResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -459,7 +458,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   if (!detail) {
     return (
       <Page>
-        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
         {error ? <ErrorBanner message={error} className="mb-0 mt-4" /> : <PageLoading label="Loading show..." />}
       </Page>
     );
@@ -470,8 +469,8 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
   return (
     <Page>
       <div className="mb-[18px] flex justify-between gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
-        <button type="button" className={secondaryButton} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
-        <button type="button" className={secondaryButton} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => navigate(returnPath)}><ArrowLeft size={16} /> {returnLabel}</button>
+        <button type="button" className={secondaryButtonClass} onClick={() => void load()}><RefreshCw size={16} /> Refresh</button>
       </div>
       {error && <ErrorBanner message={error} />}
       <section className="mb-[22px] grid grid-cols-[220px_minmax(0,1fr)] items-end gap-6 max-[820px]:grid-cols-1">
@@ -502,7 +501,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               <>
                 <button
                   type="button"
-                  className={dangerButton}
+                  className={dangerButtonClass}
                   disabled={busy}
                   onClick={() => runAction(() => apiPost(`/api/rolling-shows/${show.rollingShowId}/reset`))}
                 >
@@ -510,7 +509,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
                 </button>
                 <button
                   type="button"
-                  className={dangerButton}
+                  className={dangerButtonClass}
                   disabled={busy}
                   onClick={() => runAction(() => apiDelete(`/api/rolling-shows/${show.rollingShowId}`))}
                 >
@@ -519,13 +518,13 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               </>
             ) : (
               <>
-                <button type="button" className={primaryButton} disabled={busy} onClick={() => void enroll()}>
+                <button type="button" className={primaryButtonClass} disabled={busy} onClick={() => void enroll()}>
                   Enroll show
                 </button>
                 {detail.recommendation && (detail.recommendation.eligible || detail.recommendation.ignored) && (
                   <button
                     type="button"
-                    className={secondaryButton}
+                    className={secondaryButtonClass}
                     disabled={busy}
                     onClick={() => runAction(() => detail.recommendation!.ignored
                       ? apiDelete(`/api/recommendations/${seriesId}/ignore`)

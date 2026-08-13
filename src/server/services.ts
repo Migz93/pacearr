@@ -300,12 +300,15 @@ export class PacearrServices {
   }
 
   mapTautulliUser(userId: number, tautulliUserId: string, tautulliUsername: string | null): { linkedEvents: number } {
-    this.db.mapTautulliUser(userId, tautulliUserId, tautulliUsername);
-    const linkedEvents = this.db.linkUnassignedTautulliWatchEvents(userId, tautulliUserId);
-    for (const progress of this.db.listLatestWatchProgressForUser(userId)) {
-      const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
-      if (rolling) this.db.upsertRollingUserProgress(rolling.id, userId, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
-    }
+    const linkedEvents = this.db.transaction(() => {
+      this.db.mapTautulliUser(userId, tautulliUserId, tautulliUsername);
+      const linked = this.db.linkUnassignedTautulliWatchEvents(userId, tautulliUserId);
+      for (const progress of this.db.listLatestWatchProgressForUser(userId)) {
+        const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
+        if (rolling) this.db.upsertRollingUserProgress(rolling.id, userId, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
+      }
+      return linked;
+    });
     this.logger.info("Mapped Tautulli user to Pacearr user", { userId, tautulliUserId, tautulliUsername, linkedEvents });
     return { linkedEvents };
   }
@@ -366,13 +369,14 @@ export class PacearrServices {
       return;
     }
     const fallbackBaselineExists = Boolean(this.db.getNewShowTriageFallbackBaselineAt());
+    const knownTriageIds = this.db.listKnownNewShowTriageIds();
     const candidates = series.filter((item) => {
       const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
-      if (Number.isFinite(addedAtMs)) return addedAtMs >= enabledAtMs && !this.db.hasKnownNewShowTriage(item.id);
+      if (Number.isFinite(addedAtMs)) return addedAtMs >= enabledAtMs && !knownTriageIds.has(item.id);
       // An older/non-standard Sonarr response that omits `added` cannot establish
       // whether an existing series predates the setting. Baseline that first response
       // instead; only IDs absent from a later poll count as new.
-      return fallbackBaselineExists && !this.db.hasKnownNewShowTriage(item.id);
+      return fallbackBaselineExists && !knownTriageIds.has(item.id);
     });
 
     if (!fallbackBaselineExists && !settings.dryRun) {
@@ -1412,8 +1416,9 @@ export class PacearrServices {
         const tautulliEvents = await new TautulliIntegration(tautulliSettings, this.logger).getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
+        const findTautulliUser = this.db.createTautulliUserResolver();
         for (const event of tautulliEvents) {
-          const user = this.db.findUserByTautulliIdentity(event.userId, event.username, event.friendlyName);
+          const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
           if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
           const series = await this.matchSeries(event, seriesIndex);

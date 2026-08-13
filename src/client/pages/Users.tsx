@@ -4,14 +4,11 @@ import { Link } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { formatRelativeTime } from "../lib/utils";
 import { Avatar } from "../components/Avatar";
-import { ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, iconButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type { UnmappedTautulliUser, UserListItem, UserShowActivity } from "../../shared/types";
 
-const secondaryButton = "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface";
-const compactPrimaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface";
-const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
 
 function tautulliDisplayName(user: UnmappedTautulliUser): string {
   return user.username?.trim() || user.friendlyName?.trim() || "Unknown Tautulli user";
@@ -130,7 +127,7 @@ export default function Users() {
   return (
     <Page>
       <PageHeader title="Users">
-        <button type="button" className={secondaryButton} disabled={discovering} onClick={() => void discover()}>
+        <button type="button" className={secondaryButtonClass} disabled={discovering} onClick={() => void discover()}>
           <RefreshCw size={16} className={discovering ? "animate-spin" : ""} />
           {discovering ? "Refreshing..." : "Refresh"}
         </button>
@@ -139,8 +136,8 @@ export default function Users() {
 
       {selectedIds.length > 0 && (
         <div className="mb-[18px] flex flex-wrap items-center gap-2">
-          <button type="button" className={compactPrimaryButton} onClick={() => void bulkSetEnabled(true)}>Enable selected</button>
-          <button type="button" className={compactSecondaryButton} onClick={() => void bulkSetEnabled(false)}>Disable selected</button>
+          <button type="button" className={compactPrimaryButtonClass} onClick={() => void bulkSetEnabled(true)}>Enable selected</button>
+          <button type="button" className={compactSecondaryButtonClass} onClick={() => void bulkSetEnabled(false)}>Disable selected</button>
         </div>
       )}
 
@@ -350,8 +347,8 @@ function UserEditDialog({ user, onClose, onSaved }: {
         </label>
       </div>
       <div className="mt-5 flex justify-end gap-2">
-        <button type="button" className={compactSecondaryButton} disabled={saving} onClick={requestClose}>Cancel</button>
-        <button type="button" className={compactPrimaryButton} disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
+        <button type="button" className={compactSecondaryButtonClass} disabled={saving} onClick={requestClose}>Cancel</button>
+        <button type="button" className={compactPrimaryButtonClass} disabled={saving} onClick={() => void save()}>{saving ? "Saving..." : "Save"}</button>
       </div>
     </DialogShell>
   );
@@ -379,7 +376,7 @@ function DialogShell({ titleId, title, subtitle, user, maxWidth, dialogRef, onCl
               {subtitle && <p className="text-xs text-on-surface-variant">{subtitle}</p>}
             </div>
           </div>
-          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={onClose} aria-label="Close"><X size={18} /></button>
+          <button type="button" className={iconButtonClass} onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
         {children}
       </div>

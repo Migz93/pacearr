@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
-import { badgeClass, formatRelativeTime } from "../lib/utils";
-import { Field, NumberField, SaveBar, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { badgeClass, cn, formatRelativeTime } from "../lib/utils";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, Field, iconButtonClass, NumberField, primaryButtonClass, SaveBar, secondaryButtonClass, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -43,6 +43,7 @@ const JOB_PRESETS: Record<string, { unit: "minutes" | "hours" | "days"; values: 
   "rolling-reconcile": { unit: "hours", values: [60, 180, 360, 720, 1440] },
   "sonarr-library-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
   "recommendation-refresh": { unit: "hours", values: [60, 180, 360, 720, 1440] },
+  "new-show-triage": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
 };
 
 export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) {
@@ -137,8 +138,12 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
-      if (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1 || !Number.isInteger(triageThreshold) || triageThreshold < 1) {
-        setError("Early prefetch and new-show triage values must be positive whole numbers.");
+      if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
+        setError("Early prefetch values must be positive whole numbers.");
+        return;
+      }
+      if (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1)) {
+        setError("New-show triage episode limit must be a positive whole number.");
         return;
       }
       // The server clamps every one of these to a safe value regardless (see
@@ -174,10 +179,9 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         recommendationMinimumSavingsGb: form.recommendationMinimumSavingsGb,
         trustProxy: form.trustProxy,
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
-        earlyPrefetchTriggerEpisodesRemaining: trigger,
-        earlyPrefetchEpisodeCount: count,
+        ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
         newShowTriageEnabled: form.newShowTriageEnabled,
-        newShowTriageEpisodeThreshold: triageThreshold,
+        ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold } : {}),
       });
       setSuccess(true);
       await onSave();
@@ -409,7 +413,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
             <option value="">Press the button to load available servers</option>
             {groupedServers.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
           </SelectInput>
-          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
+          <button type="button" className={iconButtonClass} disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
             <RefreshCw size={15} className={loadingServers ? "animate-spin" : ""} />
           </button>
         </div>
@@ -626,14 +630,14 @@ function LogsTab() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <button type="button" tabIndex={-1} className="absolute inset-0 cursor-default border-0 bg-transparent p-0" aria-label="Close log details" onClick={() => setActiveLog(null)} />
           <div ref={logDialogRef} className="relative z-10 max-h-[82vh] w-full max-w-[680px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="log-details-title" tabIndex={-1}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log details</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="log-details-title" className="font-headline text-lg font-semibold">Log details</h2><button type="button" className={iconButtonClass} onClick={() => setActiveLog(null)} aria-label="Close"><X size={18} /></button></div>
             <div className="grid gap-2.5">
               <InfoRow label="Timestamp"><code className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{activeLog.timestamp}</code></InfoRow>
               <InfoRow label="Level"><span className={LEVEL_BADGE[activeLog.level]}>{activeLog.level}</span></InfoRow>
               <InfoRow label="Message"><span>{activeLog.message}</span></InfoRow>
               {activeLog.meta !== undefined && <InfoRow label="Meta"><pre className="rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface">{JSON.stringify(activeLog.meta, null, 2)}</pre></InfoRow>}
             </div>
-            <div className="mt-4 flex justify-end"><button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
+            <div className="mt-4 flex justify-end"><button type="button" className={secondaryButtonClass} onClick={() => copyLog(activeLog)}><ClipboardCopy size={14} /> {copied ? "Copied!" : "Copy"}</button></div>
           </div>
         </div>
       )}
@@ -651,10 +655,10 @@ function LogsTab() {
             <option value={50}>50 / page</option>
             <option value={100}>100 / page</option>
           </SelectInput>
-          <button type="button" className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 px-3.5 text-on-surface ${autoRefresh ? "bg-primary-dim" : "bg-background-container-high"}`} onClick={() => setAutoRefresh((value) => !value)}>
+          <button type="button" className={cn(secondaryButtonClass, autoRefresh && "bg-primary-dim")} onClick={() => setAutoRefresh((value) => !value)}>
             {autoRefresh ? <Pause size={14} /> : <Play size={14} />} {autoRefresh ? "Pause" : "Resume"}
           </button>
-          <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>
+          <button type="button" className={iconButtonClass} onClick={() => void load()} aria-label="Refresh logs"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></button>
         </div>
         <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
           {loading && !data ? <div className="p-6 text-center text-on-surface-variant">Loading logs...</div> : results.length === 0 ? <div className="p-6 text-center text-on-surface-variant">No log entries match the current filter.</div> : results.map((entry, index) => (
@@ -673,9 +677,9 @@ function LogsTab() {
           <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant max-[820px]:flex-col max-[820px]:items-stretch">
             <span>{(pageInfo.page - 1) * pageInfo.pageSize + 1}-{Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)} of {pageInfo.total}</span>
             <div className="flex items-center gap-2">
-              <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page <= 1} onClick={() => setPage((value) => value - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
+              <button type="button" className={iconButtonClass} disabled={page <= 1} onClick={() => setPage((value) => value - 1)} aria-label="Previous page"><ChevronLeft size={14} /></button>
               <span>Page {page} / {pageInfo.pages}</span>
-              <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
+              <button type="button" className={iconButtonClass} disabled={page >= pageInfo.pages} onClick={() => setPage((value) => value + 1)} aria-label="Next page"><ChevronRight size={14} /></button>
             </div>
           </div>
         )}
@@ -749,15 +753,15 @@ function JobsTab() {
       {editingJob && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-[18px]">
           <div ref={jobDialogRef} className="w-full max-w-[430px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="edit-schedule-title" tabIndex={-1}>
-            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="edit-schedule-title" className="font-headline text-lg font-semibold">Edit schedule</h2><button type="button" className={iconButtonClass} disabled={saving} onClick={requestCloseJobDialog} aria-label="Close"><X size={18} /></button></div>
             <Field label="New frequency" hint={`Current: ${editingJob.intervalDescription ?? "Manual"}`}>
               <SelectInput value={editValue} onChange={setEditValue}>
                 {(JOB_PRESETS[editingJob.id]?.values ?? []).map((value) => <option key={value} value={String(value)}>{formatPresetLabel(value, JOB_PRESETS[editingJob.id]?.unit ?? "minutes")}</option>)}
               </SelectInput>
             </Field>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-3.5 text-on-surface" disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
-              <button type="button" className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-3.5 text-on-surface" disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
+              <button type="button" className={secondaryButtonClass} disabled={saving} onClick={requestCloseJobDialog}>Cancel</button>
+              <button type="button" className={primaryButtonClass} disabled={saving} onClick={() => void saveSchedule()}>{saving ? "Saving..." : "Save"}</button>
             </div>
           </div>
         </div>
@@ -774,8 +778,8 @@ function JobsTab() {
                   <span>{job.nextRunAt ? formatFutureTime(job.nextRunAt) : job.nextRunLabel ?? "-"}</span>
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    {JOB_PRESETS[job.id] && <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface" onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button type="button" className="inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-transparent bg-primary-dim px-2.5 text-xs text-on-surface" disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
+                    {JOB_PRESETS[job.id] && <button type="button" className={compactSecondaryButtonClass} onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
+                    <button type="button" className={compactPrimaryButtonClass} disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
                   </div>
                 </div>
               );
@@ -843,14 +847,13 @@ function AboutTab() {
   }, []);
 
   const codeClass = "rounded-md bg-background-container-high px-1.5 py-0.5 text-[13px] whitespace-pre-wrap break-words text-on-surface";
-  const compactSecondaryButton = "inline-flex min-h-8 items-center justify-center gap-2 rounded-lg border border-outline-variant/30 bg-background-container-high px-2.5 text-xs text-on-surface";
   const changelogDialogRef = useDialogA11y<HTMLDivElement>(changelogRelease !== null, () => setChangelogRelease(null));
 
   return (
     <div className="grid gap-4">
       <SectionCard title="About Pacearr">
         <div className="grid gap-2.5">
-          <InfoRow label="Version"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
+          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
           <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
           {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
@@ -861,7 +864,7 @@ function AboutTab() {
       </SectionCard>
       <SectionCard title="Getting support">
         <div className="grid gap-2.5">
-          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-primary hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
+          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
           <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
@@ -875,12 +878,12 @@ function AboutTab() {
               <div className="grid min-w-0 gap-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-sm">{releaseTitle(release)}</strong>
-                  {index === 0 && <span className="shrink-0 rounded-full bg-success/18 px-1.75 py-0.5 text-[10px] font-bold uppercase text-success">Latest</span>}
-                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className="shrink-0 rounded-full bg-success/28 px-1.75 py-0.5 text-[10px] font-bold uppercase text-on-surface">Current</span>}
+                  {index === 0 && <span className={`${badgeClass("success")} shrink-0`}>Latest</span>}
+                  {info?.buildChannel === "stable" && isCurrentRelease(release, info.version) && <span className={`${badgeClass("successStrong")} shrink-0`}>Current</span>}
                 </div>
                 {release.published_at && <small className="text-xs text-on-surface-variant">{new Date(release.published_at).toLocaleDateString()}</small>}
               </div>
-              <button type="button" className={compactSecondaryButton} onClick={() => setChangelogRelease(release)}>View changelog</button>
+              <button type="button" className={compactSecondaryButtonClass} onClick={() => setChangelogRelease(release)}>View changelog</button>
             </div>
           ))}
         </div>}
@@ -889,11 +892,11 @@ function AboutTab() {
         <div ref={changelogDialogRef} className="grid w-full max-w-[680px] gap-4 overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="changelog-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-center justify-between gap-3.5">
             <div><h2 id="changelog-title" className="font-headline text-lg font-semibold">{releaseTitle(changelogRelease)} changelog</h2></div>
-            <button type="button" className="inline-flex size-10 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
+            <button type="button" className={iconButtonClass} onClick={() => setChangelogRelease(null)} aria-label="Close changelog"><X size={18} /></button>
           </div>
           {changelogRelease.body ? <pre className="m-0 max-h-[52vh] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-outline-variant/30 bg-background p-3 font-mono text-[13px] leading-relaxed text-on-surface">{changelogRelease.body}</pre> : <p className="text-on-surface-variant">No changelog is available for this release.</p>}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <a className={compactSecondaryButton} href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
+            <a className={compactSecondaryButtonClass} href={changelogRelease.html_url.startsWith(GITHUB_REPOSITORY_URL) ? changelogRelease.html_url : GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">View on GitHub</a>
           </div>
         </div>
       </div>}

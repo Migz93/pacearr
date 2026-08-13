@@ -101,13 +101,14 @@ Pacearr uses Sonarr v3 API endpoints to:
 - trigger `SeriesSearch` for eligible new arrivals
 - delete episode files during cleanup/reset when enabled
 
-Sonarr and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their API-key requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
+Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their credentialed requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
 
 ### Automatic new-show triage
 
-When enabled, the `new-show-triage` job polls Sonarr every five minutes and
-acts only on series added after its activation boundary. It searches smaller
-arrivals in full and enrolls larger arrivals onto the pilot baseline. Completed
+When enabled, the `new-show-triage` job polls Sonarr on a configurable interval
+(default every five minutes) and acts only on series added after its activation
+boundary. It searches smaller arrivals in full and enrolls larger arrivals onto
+the pilot baseline. Completed
 decisions and partial automatic enrollments are persisted independently of the
 replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
 never alter a manual enrollment.

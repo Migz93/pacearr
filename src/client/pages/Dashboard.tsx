@@ -72,7 +72,7 @@ export default function Dashboard() {
         <section>
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="font-headline text-base font-semibold">Recently active shows</h2>
-            <Link to="/shows" className="text-[13px] font-bold text-primary hover:underline">View all</Link>
+            <Link to="/shows" className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline">View all</Link>
           </div>
           {shows.length > 0 ? (
             <div className="grid grid-cols-6 gap-3 max-[520px]:grid-cols-3 min-[521px]:max-[1000px]:grid-cols-4">
@@ -95,7 +95,7 @@ function Stat({ icon, label, value, to }: { icon: ReactNode; label: string; valu
       to={to}
       className="grid content-center justify-items-center gap-0.5 rounded-xl border border-outline-variant/30 bg-background-container px-3 py-2.5 text-center text-on-surface no-underline hover:bg-background-container-high"
     >
-      <span className="flex items-center gap-1.5 text-primary">
+      <span className="flex items-center gap-1.5 text-on-surface">
         {icon}
         <strong className="font-headline text-lg leading-none text-on-surface">{value}</strong>
       </span>
@@ -112,7 +112,7 @@ function RecentActivity({ events }: { events: HistoryEvent[] }) {
     >
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs font-bold uppercase tracking-wide text-on-surface-variant">Recent activity</span>
-        <span className="text-xs text-primary opacity-0 transition-opacity group-hover:opacity-100">View all →</span>
+        <span className="text-xs text-on-surface-variant opacity-0 transition-opacity group-hover:text-on-surface group-hover:opacity-100">View all →</span>
       </div>
       {events.length > 0 ? (
         <div className="grid gap-1.5">
