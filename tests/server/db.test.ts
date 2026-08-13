@@ -836,6 +836,31 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
   }
 });
 
+test("migration 17 retains one duplicate Tautulli identity before adding its unique index", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 16);
+    const stamp = "2026-08-12T09:00:00.000Z";
+    const insert = raw.prepare(`
+      INSERT INTO users (plex_user_id, plex_account_id, tautulli_user_id, username, display_name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("plex-first", "1", "tautulli-42", "first", "First", 1, stamp, stamp);
+    insert.run("plex-second", "2", "tautulli-42", "second", "Second", 1, stamp, stamp);
+
+    runMigrations(raw, undefined, 17);
+    const users = raw.prepare("SELECT plex_user_id, tautulli_user_id FROM users ORDER BY id").all() as Array<{ plex_user_id: string; tautulli_user_id: string | null }>;
+    assert.deepEqual(users, [
+      { plex_user_id: "plex-first", tautulli_user_id: "tautulli-42" },
+      { plex_user_id: "plex-second", tautulli_user_id: null },
+    ]);
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {

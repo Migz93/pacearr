@@ -97,6 +97,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | The cached Tautulli resolver preserves stable-ID and ambiguity safeguards | Full-history reconciliation uses its in-memory resolver without changing the stable-ID priority or the refusal to guess on ambiguous names |
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
+| Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
