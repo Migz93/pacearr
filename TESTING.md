@@ -242,6 +242,7 @@ Read-only. Safe to run against a live instance.
 |---|---|
 | All settings tabs are visible | General, Plex, Sonarr, Tautulli, Logs, Jobs, and About render |
 | Clicking settings tabs updates the URL | Each tab writes its expected `?tab=` query parameter |
+| Opening a one-hour job schedule preserves its 60-minute preset | The Jobs editor reads its rendered “Every 1 hour” description as 60 minutes, so saving without a change cannot turn the schedule into every minute |
 
 ### `tests/playwright/shows.spec.ts` — Shows navigation and filters
 

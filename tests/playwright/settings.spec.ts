@@ -15,3 +15,22 @@ test("clicking settings tabs updates the URL", async ({ page }) => {
     await expect(page).toHaveURL(new RegExp(`/settings\\?tab=${tab.toLowerCase()}$`));
   }
 });
+
+test("opening a one-hour job schedule preserves its 60-minute preset", async ({ page }) => {
+  const settings = await page.request.get("/api/settings");
+  expect(settings.ok()).toBeTruthy();
+  const { app } = (await settings.json()) as { app: { historyImportIntervalHours: number } };
+
+  try {
+    const updated = await page.request.patch("/api/settings/app", { data: { historyImportIntervalHours: 1 } });
+    expect(updated.ok()).toBeTruthy();
+
+    await openPage(page, "/settings?tab=jobs", "Settings");
+    const historyImport = page.getByText("History import", { exact: true }).locator("xpath=../..");
+    await historyImport.getByRole("button", { name: "Edit" }).click();
+    await expect(page.getByRole("combobox", { name: "New frequency" })).toHaveValue("60");
+  } finally {
+    const restored = await page.request.patch("/api/settings/app", { data: { historyImportIntervalHours: app.historyImportIntervalHours } });
+    expect.soft(restored.ok()).toBeTruthy();
+  }
+});
