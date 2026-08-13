@@ -6,12 +6,20 @@ const authFile = "tests/playwright/.auth/storageState.json";
 const baseURL = process.env.BASE_URL?.trim() || "http://localhost:9302";
 type StorageState = { cookies: Array<{ name: string; value: string; domain?: string; secure?: boolean }> };
 
+function validateBaseUrl(value: string): URL {
+  const url = new URL(value);
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  if (url.protocol !== "https:" && !loopback) throw new Error("BASE_URL must use HTTPS unless it targets a loopback host.");
+  return url;
+}
+
 setup("authenticate", async ({ request }) => {
+  const baseUrl = validateBaseUrl(baseURL);
   const savedState = readStorageState();
   if (savedState) {
-    const currentHost = new URL(baseURL).hostname;
-    const currentSecure = new URL(baseURL).protocol === "https:";
-    const savedCookie = savedState.cookies[0];
+    const currentHost = baseUrl.hostname;
+    const currentSecure = baseUrl.protocol === "https:";
+    const savedCookie = savedState.cookies.find((cookie) => cookie.name === "pacearr_session");
     if (savedCookie?.domain === currentHost && savedCookie.secure === currentSecure) {
       const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader(savedState) } });
       const session = await response.json() as { authenticated: boolean };
@@ -37,7 +45,7 @@ setup("authenticate", async ({ request }) => {
   }
 
   fs.mkdirSync(path.dirname(authFile), { recursive: true });
-  const url = new URL(baseURL);
+  const url = baseUrl;
   const storageState = JSON.stringify({
     cookies: [{
       name: "pacearr_session",

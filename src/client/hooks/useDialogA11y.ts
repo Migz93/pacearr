@@ -61,6 +61,11 @@ export function useDialogA11y<T extends HTMLElement>(open: boolean, onClose: () 
       }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
+      if (container && !container.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();

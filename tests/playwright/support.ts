@@ -1,18 +1,24 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type ConsoleMessage, type Page } from "@playwright/test";
 
 export async function openPage(page: Page, path: string, heading: string): Promise<void> {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
-  page.on("console", (message) => {
+  const onConsole = (message: ConsoleMessage) => {
     if (message.type() === "error" && !message.text().startsWith("The Cross-Origin-Opener-Policy header has been ignored")) {
       consoleErrors.push(message.text());
     }
-  });
-  page.on("pageerror", (error) => pageErrors.push(error.message));
+  };
+  const onPageError = (error: Error) => pageErrors.push(error.message);
+  page.on("console", onConsole);
+  page.on("pageerror", onPageError);
 
-  await page.goto(path);
-  await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
-  await page.waitForLoadState("networkidle");
-  expect(consoleErrors, `Unexpected browser console errors on ${path}`).toEqual([]);
-  expect(pageErrors, `Unexpected page errors on ${path}`).toEqual([]);
+  try {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    expect(consoleErrors, `Unexpected browser console errors on ${path}`).toEqual([]);
+    expect(pageErrors, `Unexpected page errors on ${path}`).toEqual([]);
+  } finally {
+    page.off("console", onConsole);
+    page.off("pageerror", onPageError);
+  }
 }

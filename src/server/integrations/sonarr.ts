@@ -35,7 +35,7 @@ export class SonarrIntegration {
     return url ? this.buildImageUrl(url) : null;
   }
 
-  private async request<T>(pathname: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(pathname: string, options: RequestInit = {}, timeoutMs?: number): Promise<T> {
     const method = (options.method ?? "GET").toUpperCase();
     // This is the final safety boundary. Even if a future caller forgets to use
     // skipMutation(), dry-run mode must never send a write request to Sonarr.
@@ -51,7 +51,7 @@ export class SonarrIntegration {
         "Content-Type": "application/json",
         ...(options.headers ?? {}),
       },
-    });
+    }, timeoutMs);
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       this.logger.warn("Sonarr request failed", { method, pathname, status: response.status, statusText: response.statusText });
@@ -76,7 +76,7 @@ export class SonarrIntegration {
   }
 
   async getSeries(): Promise<SonarrSeries[]> {
-    return this.request<SonarrSeries[]>("series");
+    return this.request<SonarrSeries[]>("series", {}, 60_000);
   }
 
   async getSeriesById(seriesId: number): Promise<SonarrSeries> {

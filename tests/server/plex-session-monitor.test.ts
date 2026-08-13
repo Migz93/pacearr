@@ -198,6 +198,15 @@ test("scheduler identifies whether a job run is scheduled", async () => {
   scheduler.updateJob("session-check", { enabled: false });
 });
 
+test("disabled jobs cannot be manually run or queued", async () => {
+  const scheduler = new JobScheduler();
+  scheduler.registerRecurringJob({ id: "session-check", intervalMs: 60_000, task: async () => {} });
+  scheduler.updateJob("session-check", { enabled: false });
+  assert.equal(scheduler.runNow("session-check"), false);
+  assert.equal(scheduler.runNowOrQueue("session-check"), false);
+  assert.equal(await scheduler.runNowAndWait("session-check"), null);
+});
+
 test("a scheduled collision keeps the next recurring run armed", async () => {
   const scheduler = new JobScheduler();
   const contexts: boolean[] = [];

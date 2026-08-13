@@ -188,7 +188,10 @@ export class PacearrServices {
     if (!cache) return this.getSonarr().getEpisodes(seriesId);
     const cached = cache.get(seriesId);
     if (cached) return cached;
-    const episodes = this.getSonarr().getEpisodes(seriesId);
+    const episodes = this.getSonarr().getEpisodes(seriesId).catch((error) => {
+      cache.delete(seriesId);
+      throw error;
+    });
     cache.set(seriesId, episodes);
     return episodes;
   }
@@ -380,6 +383,7 @@ export class PacearrServices {
     });
 
     if (!fallbackBaselineExists && !settings.dryRun) {
+      this.db.transaction(() => {
       for (const item of series) {
         const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
         if (!Number.isFinite(addedAtMs) || addedAtMs < enabledAtMs) {
@@ -387,6 +391,7 @@ export class PacearrServices {
         }
       }
       this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
+      });
     }
 
     const errors: string[] = [];
@@ -457,7 +462,8 @@ export class PacearrServices {
       }
     }
     if (errors.length > 0) {
-      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors });
+      const errorLimit = 25;
+      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors: errors.slice(0, errorLimit), ...(errors.length > errorLimit ? { omittedErrors: errors.length - errorLimit } : {}) });
       this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
     }
   }

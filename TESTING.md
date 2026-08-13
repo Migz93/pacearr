@@ -118,6 +118,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A session-check trigger is coalesced while that job is running | Live notifications, schedules, and manual actions cannot cause overlapping session checks |
 | A dependent manual job queues one follow-up after an active run | A refreshed Sonarr library cannot leave recommendations stale when an older calculation is already in flight; repeated triggers still coalesce to one follow-up |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
+| Disabled jobs cannot be manually run or queued | Settings and internal callers cannot override a job the administrator disabled |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds

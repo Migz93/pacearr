@@ -26,8 +26,8 @@ export function buildIntegrationUrl(baseUrl: string, pathname: string): URL {
  * API keys are attached to these requests. Refusing redirects prevents a configured
  * integration from forwarding that credential to a different origin.
  */
-export function fetchIntegration(url: URL, options: RequestInit = {}): Promise<Response> {
-  const timeout = AbortSignal.timeout(15_000);
+export function fetchIntegration(url: URL, options: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+  const timeout = AbortSignal.timeout(timeoutMs);
   return fetch(url, {
     ...options,
     signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,

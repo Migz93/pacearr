@@ -135,7 +135,10 @@ export class ImageCacheService {
   private findExistingImage(kind: "avatar" | "poster", cacheKey: string, options: { forceDiskCheck?: boolean } = {}): string | null {
     for (const extension of Object.values(CONTENT_TYPE_EXTENSIONS)) {
       const fileName = `${kind}-${cacheKey}.${extension}`;
-      if (this.knownFiles.has(fileName)) return `/images/${fileName}`;
+      if (this.knownFiles.has(fileName)) {
+        if (fs.existsSync(path.join(this.cacheDir, fileName))) return `/images/${fileName}`;
+        this.knownFiles.delete(fileName);
+      }
       if (options.forceDiskCheck && fs.existsSync(path.join(this.cacheDir, fileName))) {
         this.knownFiles.add(fileName);
         return `/images/${fileName}`;

@@ -36,7 +36,7 @@ Persistent data is stored in `/config`, which should be bind-mounted from `/opt/
 
 Pacearr uses SQLite `PRAGMA user_version` for schema migrations.
 
-- Versioned migrations live in `src/server/db/migrations.ts`, each with a comment explaining what it does and why. That comment is the source of truth for a given migration's purpose — it lives next to the schema change itself, so it can't drift out of sync the way a running prose list in this doc would. This doc does not narrate individual migrations.
+- Versioned migrations live in `src/server/db/migrations.ts`.
 - `runMigrations(db)` runs on startup, applies any migration whose version is higher than the current `user_version`, and advances `user_version` after each successful migration.
 - Each migration runs inside a transaction, so a failure should leave the database unchanged.
 
@@ -101,7 +101,7 @@ Pacearr uses Sonarr v3 API endpoints to:
 - trigger `SeriesSearch` for eligible new arrivals
 - delete episode files during cleanup/reset when enabled
 
-Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their credentialed requests reject redirects and time out after 15 seconds, so a misconfigured or compromised endpoint cannot forward a credential or stall scheduled work indefinitely.
+Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs without query strings or fragments. Their credentialed requests reject redirects and time out after 15 seconds, preventing client-side redirects from forwarding credentials to a different origin and bounding stalled scheduled work. The configured endpoint itself remains trusted by the administrator.
 
 ### Automatic new-show triage
 

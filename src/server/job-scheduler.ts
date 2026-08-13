@@ -68,7 +68,7 @@ export class JobScheduler {
 
   runNow(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return false;
+    if (!job || !job.enabled) return false;
     if (job.activeRuns > 0) {
       this.logger?.debug("Skipped overlapping manual job run", { id, activeRuns: job.activeRuns });
       return false;
@@ -85,7 +85,7 @@ export class JobScheduler {
    */
   runNowOrQueue(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return false;
+    if (!job || !job.enabled) return false;
     if (job.activeRuns === 0) return this.runNow(id);
     if (job.pendingManualRun) return false;
     job.pendingManualRun = true;
@@ -95,7 +95,7 @@ export class JobScheduler {
 
   async runNowAndWait(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return null;
+    if (!job || !job.enabled) return null;
     return this.execute(job, false);
   }
 

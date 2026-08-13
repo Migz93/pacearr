@@ -520,7 +520,7 @@ export class PacearrDatabase {
     };
   }
 
-  upsertUsers(users: Array<Omit<UserRecord, "id" | "enabled" | "lastSeenAt"> & { enabled?: boolean }>): UserRecord[] {
+  upsertUsers(users: Array<Omit<UserRecord, "id" | "enabled" | "lastSeenAt" | "tautulliUsername"> & { enabled?: boolean }>): UserRecord[] {
     const stamp = now();
     const stmt = this.db.prepare(`
       INSERT INTO users (plex_user_id, plex_account_id, tautulli_user_id, username, display_name, avatar_url, enabled, last_seen_at, created_at, updated_at)

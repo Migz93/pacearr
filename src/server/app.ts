@@ -50,7 +50,18 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
 function readTodaysLogEntries(logger: Logger): LogEntry[] {
   let raw: string;
   try {
-    raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+    const filePath = logger.currentLogFilePath;
+    const size = fs.statSync(filePath).size;
+    const tailSize = Math.min(size, 1_000_000);
+    const descriptor = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(tailSize);
+      fs.readSync(descriptor, buffer, 0, tailSize, size - tailSize);
+      raw = buffer.toString("utf8");
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    if (tailSize < size) raw = raw.slice(raw.indexOf("\n") + 1);
   } catch {
     return [];
   }

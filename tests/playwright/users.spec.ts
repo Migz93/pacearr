@@ -57,10 +57,13 @@ test("PATCH-ing a user with a non-boolean enabled value is rejected, not coerced
   expect(users.length).toBeGreaterThan(0);
   const user = users[0]!;
 
-  const patched = await page.request.patch(`/api/users/${user.id}`, { data: { enabled: "not-a-boolean" } });
-  expect(patched.status()).toBe(400);
-
-  const after = await page.request.get("/api/users");
-  const { users: usersAfter } = (await after.json()) as { users: Array<{ id: number; enabled: boolean }> };
-  expect(usersAfter.find((u) => u.id === user.id)?.enabled).toBe(user.enabled);
+  try {
+    const patched = await page.request.patch(`/api/users/${user.id}`, { data: { enabled: "not-a-boolean" } });
+    expect(patched.status()).toBe(400);
+    const after = await page.request.get("/api/users");
+    const { users: usersAfter } = (await after.json()) as { users: Array<{ id: number; enabled: boolean }> };
+    expect(usersAfter.find((u) => u.id === user.id)?.enabled).toBe(user.enabled);
+  } finally {
+    await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
+  }
 });
