@@ -144,6 +144,12 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Logging a root metadata value with no JSON representation (a function or Symbol) does not throw and omits metadata | `JSON.stringify` returns `undefined` for these at the root, so `sanitizeMeta` must recognize that instead of handing `undefined` to `JSON.parse`, which throws |
 | The human-readable log retains falsy scalar metadata (`0`, `false`, `""`, `null`) instead of treating it as absent | `humanFormat` checks whether meta is present, not whether it's truthy, so a real but falsy scalar isn't silently dropped from `pacearr.log` |
 
+### `tests/server/image-cache.test.ts` — Image-cache integrity
+
+| Test | What it checks |
+|---|---|
+| A deleted cached image is fetched again | The in-memory file index is invalidated when the on-disk image disappeared, allowing a replacement fetch instead of returning a broken URL |
+
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
 | Test | What it checks |
