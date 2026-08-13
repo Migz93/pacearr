@@ -150,6 +150,12 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | A deleted cached image is fetched again | The in-memory file index is invalidated when the on-disk image disappeared, allowing a replacement fetch instead of returning a broken URL |
 
+### `tests/server/app-settings.test.ts` — App-settings transitions
+
+| Test | What it checks |
+|---|---|
+| New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
+
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
 | Test | What it checks |
