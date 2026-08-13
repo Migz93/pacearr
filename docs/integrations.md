@@ -117,7 +117,8 @@ The show detail view combines Sonarr's current library state with Pacearr's norm
 
 ### Automatic new-show triage
 
-When enabled, Pacearr polls Sonarr every five minutes. It ignores series that
+When enabled, Pacearr polls Sonarr every five minutes by default; the interval
+is configurable in Settings → Jobs. It ignores series that
 were already present when the setting was enabled, then searches smaller new
 series in full and enrolls series over the configured total-episode limit onto
 the pilot baseline. Successful live decisions are persisted so a restart does

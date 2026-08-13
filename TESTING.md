@@ -97,6 +97,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | The cached Tautulli resolver preserves stable-ID and ambiguity safeguards | Full-history reconciliation uses its in-memory resolver without changing the stable-ID priority or the refusal to guess on ambiguous names |
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
+| Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -118,6 +119,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A session-check trigger is coalesced while that job is running | Live notifications, schedules, and manual actions cannot cause overlapping session checks |
 | A dependent manual job queues one follow-up after an active run | A refreshed Sonarr library cannot leave recommendations stale when an older calculation is already in flight; repeated triggers still coalesce to one follow-up |
 | A job identifies a manual trigger | The session fallback can skip only scheduled polls while retaining Settings and SSE-triggered checks |
+| Disabled jobs cannot be manually run or queued | Settings and internal callers cannot override a job the administrator disabled |
+| Disabling a job cancels a queued manual follow-up | A job disabled while its active run has a coalesced manual follow-up cannot start that follow-up after the active run finishes |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
@@ -133,6 +136,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getRecentLogs` only reflects the in-memory ring | Retained rotated files never leak into the ring-only read path |
 | `currentLogFilePath` points at the machine-readable transport's fixed symlink name | Settings → Logs reads the same file the machine-readable rotating transport always symlinks to |
+| `close()` is idempotent | Concurrent and subsequent shutdown calls share one completion path without ending winston twice |
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
@@ -142,6 +146,18 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Logging the same object referenced twice preserves both, rather than marking the repeat as circular | `sanitizeMeta` tracks ancestry, not "every object ever seen", so two sibling properties referencing the same object aren't mistaken for a cycle |
 | Logging a root metadata value with no JSON representation (a function or Symbol) does not throw and omits metadata | `JSON.stringify` returns `undefined` for these at the root, so `sanitizeMeta` must recognize that instead of handing `undefined` to `JSON.parse`, which throws |
 | The human-readable log retains falsy scalar metadata (`0`, `false`, `""`, `null`) instead of treating it as absent | `humanFormat` checks whether meta is present, not whether it's truthy, so a real but falsy scalar isn't silently dropped from `pacearr.log` |
+
+### `tests/server/image-cache.test.ts` — Image-cache integrity
+
+| Test | What it checks |
+|---|---|
+| A deleted cached image is fetched again | The in-memory file index is invalidated when the on-disk image disappeared, allowing a replacement fetch instead of returning a broken URL |
+
+### `tests/server/app-settings.test.ts` — App-settings transitions
+
+| Test | What it checks |
+|---|---|
+| New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 

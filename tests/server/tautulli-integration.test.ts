@@ -27,11 +27,12 @@ test("getHistory maps Tautulli's username and user fields independently, not col
       },
     },
   }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
-  const logger = { info: () => {}, warn: () => {} } as unknown as Logger;
-  const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, logger);
-
   try {
-    const [record] = await tautulli.getHistory();
+    const logger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
+    const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, logger);
+    const history = await tautulli.getHistory();
+    assert.equal(history.length, 1);
+    const record = history[0]!;
     assert.equal(record.username, "dave_plex");
     assert.equal(record.friendlyName, "Big Chief Dave");
   } finally {

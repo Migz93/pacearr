@@ -139,6 +139,11 @@ export class PlexOAuth {
         throw caught;
       }
       if (!response.ok) {
+        if (response.status === 429 || response.status >= 500) {
+          clientLogger.warn("Plex OAuth PIN polling returned a transient error; retrying", { status: response.status });
+          await wait(1000);
+          continue;
+        }
         clientLogger.warn("Plex OAuth PIN polling failed", { status: response.status, statusText: response.statusText });
         throw new Error(`Failed to poll Plex PIN: ${response.status}`);
       }

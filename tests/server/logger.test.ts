@@ -47,6 +47,22 @@ test("currentLogFilePath points at the machine-readable transport's fixed symlin
   }
 });
 
+test("close is idempotent", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const logger = new Logger(dataDir);
+  try {
+    logger.info("Closing twice");
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
+    await Promise.all([logger.close(), logger.close()]);
+    await logger.close();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 function entry(overrides: Partial<LogEntry> = {}): LogEntry {
   return { timestamp: "2026-08-04T10:00:00.000Z", level: "info", message: "Message", ...overrides };
 }
@@ -195,7 +211,7 @@ test("logging circular or BigInt metadata does not throw, in the ring, the persi
 
     assert.doesNotThrow(() => readRecentLogEntries(logger));
 
-    await waitForFileContent(logger.currentLogFilePath);
+    await waitForFileContent(logger.currentLogFilePath, 2000, (content) => content.trim().split("\n").length >= 2);
     const lines = fs.readFileSync(logger.currentLogFilePath, "utf8").trim().split("\n");
     assert.deepEqual(JSON.parse(lines[0]!).meta, { a: 1, self: "[Circular]" });
     assert.deepEqual(JSON.parse(lines[1]!).meta, { rowId: "123" });

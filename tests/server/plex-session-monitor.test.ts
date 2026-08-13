@@ -26,9 +26,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 
 test("Plex SSE playback notifications trigger a session check without Plex", async () => {
   const streams: import("node:http").ServerResponse[] = [];
+  const received: Array<{ url?: string; token?: string | string[] }> = [];
   const server = createServer((req, res) => {
-    assert.equal(req.url, "/:/eventsource/notifications");
-    assert.equal(req.headers["x-plex-token"], "test-token");
+    received.push({ url: req.url, token: req.headers["x-plex-token"] });
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     res.flushHeaders();
     streams.push(res);
@@ -43,6 +43,7 @@ test("Plex SSE playback notifications trigger a session check without Plex", asy
   try {
     monitor.start();
     await waitFor(() => monitor.getStatus().mode === "live");
+    assert.deepEqual(received, [{ url: "/:/eventsource/notifications", token: "test-token" }]);
     streams[0]?.write(`event: playing\ndata: ${JSON.stringify({ PlaySessionStateNotification: { state: "playing" } })}\n\n`);
     await waitFor(() => triggers === 1);
     streams[0]?.write(`data: ${JSON.stringify({ NotificationContainer: { PlaySessionStateNotification: [{ state: "playing" }] } })}\n\n`);
@@ -196,6 +197,41 @@ test("scheduler identifies whether a job run is scheduled", async () => {
   assert.equal(await scheduler.runNowAndWait("session-check"), true);
   assert.equal(scheduled, false);
   scheduler.updateJob("session-check", { enabled: false });
+});
+
+test("disabled jobs cannot be manually run or queued", async () => {
+  const scheduler = new JobScheduler();
+  let runs = 0;
+  scheduler.registerRecurringJob({ id: "session-check", intervalMs: 60_000, task: async () => { runs += 1; } });
+  scheduler.updateJob("session-check", { enabled: false });
+  assert.equal(scheduler.runNow("session-check"), false);
+  assert.equal(scheduler.runNowOrQueue("session-check"), false);
+  assert.equal(await scheduler.runNowAndWait("session-check"), null);
+  assert.equal(runs, 0);
+});
+
+test("disabling a job cancels its queued manual follow-up", async () => {
+  const scheduler = new JobScheduler();
+  let runs = 0;
+  let releaseFirstRun!: () => void;
+  const firstRun = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+  scheduler.registerRecurringJob({
+    id: "recommendation-refresh",
+    intervalMs: 60_000,
+    task: async () => {
+      runs += 1;
+      if (runs === 1) await firstRun;
+    },
+  });
+
+  const running = scheduler.runNowAndWait("recommendation-refresh");
+  await waitFor(() => runs === 1);
+  assert.equal(scheduler.runNowOrQueue("recommendation-refresh"), true);
+  scheduler.updateJob("recommendation-refresh", { enabled: false });
+  releaseFirstRun();
+  assert.equal(await running, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runs, 1);
 });
 
 test("a scheduled collision keeps the next recurring run armed", async () => {

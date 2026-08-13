@@ -30,10 +30,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   try {
     response = await fetch(path, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
+      headers: new Headers({ "Content-Type": "application/json", ...Object.fromEntries(new Headers(options.headers)) }),
     });
   } catch (caught) {
     if (recordApiFailure(failureKey)) {

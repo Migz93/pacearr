@@ -14,6 +14,12 @@ test("schedule interval parsing keeps invalid settings safe and rejects invalid 
   assert.equal(normaliseScheduleIntervalHours("Infinity", 24), 24);
   assert.equal(normaliseScheduleIntervalDays("Infinity", 30), 30);
   assert.equal(parseScheduleIntervalMinutes("Infinity"), null);
+  for (const value of [Number.NaN, 0, -1]) {
+    assert.equal(normaliseScheduleIntervalMinutes(value, 15), Number.isNaN(value) ? 15 : 1);
+    assert.equal(normaliseScheduleIntervalHours(value, 24), Number.isNaN(value) ? 24 : 1);
+    assert.equal(normaliseScheduleIntervalDays(value, 30), Number.isNaN(value) ? 30 : 1);
+    assert.equal(parseScheduleIntervalMinutes(value), null);
+  }
 });
 
 test("job schedule intervals must align with the job's configured unit", () => {

@@ -39,10 +39,12 @@ test("Tautulli resolver prefers an exact username match and refuses to guess bet
     // so — Plex Home profiles commonly share generic names. A bare OR query with .get()
     // would pick an arbitrary row on a tie, silently attributing one person's Tautulli
     // history to a different Pacearr user.
-    const [alice, bob] = db.upsertUsers([
+    db.upsertUsers([
       { plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice_h", displayName: "Kid", avatarUrl: null },
       { plexUserId: "plex-bob", plexAccountId: "2", tautulliUserId: null, username: "bob_h", displayName: "Kid", avatarUrl: null },
     ]);
+    const alice = db.listUsers().find((user) => user.plexUserId === "plex-alice")!;
+    const bob = db.listUsers().find((user) => user.plexUserId === "plex-bob")!;
 
     // Exact username match wins even when it would also match another user's display name.
     const resolve = db.createTautulliUserResolver();
@@ -809,6 +811,7 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
   const raw = new Database(path.join(dir, "pacearr.db"));
   try {
+    // Version 18 is the pre-backfill state; version 19 performs the username backfill.
     runMigrations(raw, undefined, 18);
     const stamp = "2026-08-12T09:00:00.000Z";
     raw.prepare(`
@@ -827,6 +830,36 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
 
     runMigrations(raw);
     assert.equal((raw.prepare("SELECT tautulli_username FROM users WHERE id = 1").get() as { tautulli_username: string | null }).tautulli_username, "Managed Kid");
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("migration 17 retains one duplicate Tautulli identity before adding its unique index", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 16);
+    const stamp = "2026-08-12T09:00:00.000Z";
+    const insert = raw.prepare(`
+      INSERT INTO users (plex_user_id, plex_account_id, tautulli_user_id, username, display_name, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("plex-first", "1", "tautulli-42", "first", "First", 1, stamp, stamp);
+    insert.run("plex-second", "2", "tautulli-42", "second", "Second", 1, stamp, stamp);
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, user_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli", "duplicate-user-history", 2, "The Expanse", 1, 1, stamp, "{}", stamp);
+
+    runMigrations(raw, undefined, 17);
+    const users = raw.prepare("SELECT plex_user_id, tautulli_user_id FROM users ORDER BY id").all() as Array<{ plex_user_id: string; tautulli_user_id: string | null }>;
+    assert.deepEqual(users, [
+      { plex_user_id: "plex-first", tautulli_user_id: "tautulli-42" },
+      { plex_user_id: "plex-second", tautulli_user_id: null },
+    ]);
+    assert.equal((raw.prepare("SELECT user_id FROM watch_events WHERE source_event_id = ?").get("duplicate-user-history") as { user_id: number }).user_id, 2);
   } finally {
     raw.close();
     rmSync(dir, { recursive: true, force: true });

@@ -306,10 +306,11 @@ function ShowsBrowser() {
       {loading ? (
         <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
-        <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]">
-          {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
-          {filtered.length === 0 && <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div>}
-        </div>
+        filtered.length === 0 ? <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div> : (
+          <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]">
+            {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
+          </div>
+        )
       ) : (
         <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container">
           {isRecommendationTab ? (
@@ -605,7 +606,7 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
   const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
+      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>
@@ -657,8 +658,9 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
               <div className="flex flex-wrap items-center gap-1.5">
                 <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
-                {prefetchedByEpisode.has(`${episode.seasonNumber}:${episode.episodeNumber}`) && (() => {
-                  const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`)!;
+                {(() => {
+                  const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`);
+                  if (!prefetch) return null;
                   return <span className={badgeClass("warning")} title={`Triggered by ${prefetch.displayName} on ${formatDate(prefetch.triggeredAt)}`}>Prefetched · {prefetch.displayName}</span>;
                 })()}
               </div>

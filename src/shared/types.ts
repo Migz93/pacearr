@@ -151,7 +151,7 @@ export interface UserRecord {
   plexAccountId: string | null;
   tautulliUserId: string | null;
   /** The Tautulli username shown and editable in Pacearr's user settings. */
-  tautulliUsername?: string | null;
+  tautulliUsername: string | null;
   username: string;
   displayName: string;
   avatarUrl: string | null;

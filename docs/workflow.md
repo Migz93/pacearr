@@ -4,9 +4,9 @@
 
 The mechanics of getting work onto GitHub and out as a release.
 
-`AGENTS.md` holds the parts that apply to *every* task — the branch check, the
-review gate, and the branch rules. This file holds the parts you only need at a
-specific moment, so read it when you reach that moment rather than up front.
+Read the repository's relevant `AGENTS.md` before beginning work. It holds the
+universal branch, review-gate, and workflow rules; this file holds the
+moment-specific mechanics to read when the task calls for them.
 
 | Section | When you need it |
 |---|---|

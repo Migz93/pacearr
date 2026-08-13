@@ -50,7 +50,25 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
 function readTodaysLogEntries(logger: Logger): LogEntry[] {
   let raw: string;
   try {
-    raw = fs.readFileSync(logger.currentLogFilePath, "utf8");
+    const filePath = logger.currentLogFilePath;
+    const descriptor = fs.openSync(filePath, "r");
+    try {
+      const size = fs.fstatSync(descriptor).size;
+      const tailSize = Math.min(size, 1_000_000);
+      const offset = size - tailSize;
+      const buffer = Buffer.alloc(tailSize);
+      const bytesRead = fs.readSync(descriptor, buffer, 0, tailSize, offset);
+      raw = buffer.subarray(0, bytesRead).toString("utf8");
+      // If the tail begins in the middle of a line, discard that partial entry. A
+      // tail beginning immediately after a newline already starts at a full entry.
+      if (tailSize < size && offset > 0) {
+        const precedingByte = Buffer.alloc(1);
+        fs.readSync(descriptor, precedingByte, 0, 1, offset - 1);
+        if (precedingByte[0] !== 0x0a) raw = raw.slice(raw.indexOf("\n") + 1);
+      }
+    } finally {
+      fs.closeSync(descriptor);
+    }
   } catch {
     return [];
   }

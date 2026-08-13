@@ -64,6 +64,7 @@ const humanFormat = winston.format.printf(({ level, message, timestamp, meta }) 
 
 export class Logger {
   private readonly ring: LogEntry[] = [];
+  private closePromise: Promise<void> | null = null;
   private readonly logger: winston.Logger;
   private readonly logDir: string;
 
@@ -161,10 +162,13 @@ export class Logger {
    * rather than assume close() alone is sufficient.
    */
   close(): Promise<void> {
-    return new Promise((resolve) => {
+    if (this.closePromise) return this.closePromise;
+    if (this.logger.writableFinished) return Promise.resolve();
+    this.closePromise = new Promise((resolve) => {
       this.logger.on("finish", () => resolve());
       this.logger.end();
     });
+    return this.closePromise;
   }
 
   /**

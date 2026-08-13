@@ -188,7 +188,10 @@ export class PacearrServices {
     if (!cache) return this.getSonarr().getEpisodes(seriesId);
     const cached = cache.get(seriesId);
     if (cached) return cached;
-    const episodes = this.getSonarr().getEpisodes(seriesId);
+    const episodes = this.getSonarr().getEpisodes(seriesId).catch((error) => {
+      cache.delete(seriesId);
+      throw error;
+    });
     cache.set(seriesId, episodes);
     return episodes;
   }
@@ -380,6 +383,7 @@ export class PacearrServices {
     });
 
     if (!fallbackBaselineExists && !settings.dryRun) {
+      this.db.transaction(() => {
       for (const item of series) {
         const addedAtMs = item.added ? Date.parse(item.added) : Number.NaN;
         if (!Number.isFinite(addedAtMs) || addedAtMs < enabledAtMs) {
@@ -387,6 +391,7 @@ export class PacearrServices {
         }
       }
       this.db.setNewShowTriageFallbackBaselineAt(new Date().toISOString());
+      });
     }
 
     const errors: string[] = [];
@@ -457,7 +462,8 @@ export class PacearrServices {
       }
     }
     if (errors.length > 0) {
-      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors });
+      const errorLimit = 25;
+      this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors: errors.slice(0, errorLimit), ...(errors.length > errorLimit ? { omittedErrors: errors.length - errorLimit } : {}) });
       this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
     }
   }
@@ -1199,12 +1205,12 @@ export class PacearrServices {
     });
   }
 
-  private async prefetchNextSeason(input: NormalizedWatchEventInput, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
+  private async prefetchNextSeason(input: NormalizedWatchEventInput & { sonarrSeriesId: number; userId: number }, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
     const settings = this.db.getAppSettings();
     if (!settings.earlyPrefetchEnabled || input.seasonNumber <= 0 || input.episodeNumber <= 0) return false;
 
     const sonarr = this.getSonarr();
-    const episodes = (await this.getCachedEpisodes(input.sonarrSeriesId!, episodeCache)).filter(isRealSeasonEpisode);
+    const episodes = (await this.getCachedEpisodes(input.sonarrSeriesId, episodeCache)).filter(isRealSeasonEpisode);
     const selection = selectEarlyPrefetchEpisodes(episodes, input.seasonNumber, input.episodeNumber, settings.earlyPrefetchTriggerEpisodesRemaining, settings.earlyPrefetchEpisodeCount);
     const { episodesRemaining, nextSeasonNumber } = selection;
     if (nextSeasonNumber === null) return false;
@@ -1224,7 +1230,7 @@ export class PacearrServices {
     await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
 
     const dryRun = this.isDryRun();
-    if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, input.userId!, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), input.watchedAt);
+    if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, input.userId, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), input.watchedAt);
     this.db.addHistory("info", dryRun ? "dry_run.sonarr.early_prefetch" : "sonarr.early_prefetch", rolling.title, {
       source: input.source,
       userId: input.userId,
@@ -1271,7 +1277,11 @@ export class PacearrServices {
       if (input.episodeNumber === 1 && input.seasonNumber > 0) {
         return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache), progressUpdated: true };
       }
-      return { inserted: true, changed: await this.prefetchNextSeason(input, rolling.id, episodeCache), progressUpdated: true };
+      return {
+        inserted: true,
+        changed: await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache),
+        progressUpdated: true,
+      };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 

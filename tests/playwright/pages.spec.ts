@@ -33,9 +33,12 @@ test("sidebar navigation links are present", async ({ page }) => {
 
 test("unauthenticated requests redirect to login", async ({ browser, baseURL }) => {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
-  const page = await context.newPage();
-  await page.goto(`${baseURL}/dashboard`);
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
-  await context.close();
+  try {
+    const page = await context.newPage();
+    await page.goto(`${baseURL}/dashboard`);
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
+  } finally {
+    await context.close();
+  }
 });

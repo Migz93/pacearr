@@ -312,7 +312,23 @@ const migrations: Migration[] = [
     // every user until an administrator explicitly maps the identity.
     version: 17,
     up(db) {
-      db.exec("CREATE UNIQUE INDEX idx_users_tautulli_user_id ON users(tautulli_user_id) WHERE tautulli_user_id IS NOT NULL;");
+      // This migration has not reached a tagged release. Preserve the earliest user ID
+      // for each identity so an imported duplicate cannot block the uniqueness invariant.
+      // Do not move watch events or rolling progress between the duplicate Plex users:
+      // the bad mapping gives no evidence that either user's historical activity belongs
+      // to the other. Clearing only the later stable-ID mapping preserves that history
+      // and lets an administrator correct the ambiguous identity deliberately.
+      db.exec(`
+        UPDATE users
+        SET tautulli_user_id = NULL
+        WHERE tautulli_user_id IS NOT NULL
+          AND id NOT IN (
+            SELECT MIN(id) FROM users
+            WHERE tautulli_user_id IS NOT NULL
+            GROUP BY tautulli_user_id
+          );
+        CREATE UNIQUE INDEX idx_users_tautulli_user_id ON users(tautulli_user_id) WHERE tautulli_user_id IS NOT NULL;
+      `);
     },
   },
   {

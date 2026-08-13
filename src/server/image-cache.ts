@@ -17,7 +17,8 @@ export class ImageCacheService {
   private readonly cacheDir: string;
   // Refreshing a full library's posters checks this cache for every show. Reading the
   // directory listing once up front and tracking writes in memory avoids up to 4
-  // synchronous fs.existsSync calls (one per known extension) per lookup.
+  // synchronous disk checks (one per known extension) per lookup. Known files are
+  // still verified asynchronously before use so external deletion self-heals.
   private readonly knownFiles: Set<string>;
 
   constructor(dataDir: string, private readonly logger: Logger) {
@@ -69,7 +70,7 @@ export class ImageCacheService {
     }
 
     const cacheKey = crypto.createHash("sha256").update(input.cacheParts.join(":")).digest("hex").slice(0, 24);
-    const existing = this.findExistingImage(input.kind, cacheKey);
+    const existing = await this.findExistingImage(input.kind, cacheKey);
     if (existing) return existing;
 
     const controller = new AbortController();
@@ -132,15 +133,27 @@ export class ImageCacheService {
     }
   }
 
-  private findExistingImage(kind: "avatar" | "poster", cacheKey: string, options: { forceDiskCheck?: boolean } = {}): string | null {
+  private async findExistingImage(kind: "avatar" | "poster", cacheKey: string, options: { forceDiskCheck?: boolean } = {}): Promise<string | null> {
     for (const extension of Object.values(CONTENT_TYPE_EXTENSIONS)) {
       const fileName = `${kind}-${cacheKey}.${extension}`;
-      if (this.knownFiles.has(fileName)) return `/images/${fileName}`;
-      if (options.forceDiskCheck && fs.existsSync(path.join(this.cacheDir, fileName))) {
+      if (this.knownFiles.has(fileName)) {
+        if (await this.fileExists(fileName)) return `/images/${fileName}`;
+        this.knownFiles.delete(fileName);
+      }
+      if (options.forceDiskCheck && await this.fileExists(fileName)) {
         this.knownFiles.add(fileName);
         return `/images/${fileName}`;
       }
     }
     return null;
+  }
+
+  private async fileExists(fileName: string): Promise<boolean> {
+    try {
+      await fs.promises.access(path.join(this.cacheDir, fileName));
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

@@ -451,12 +451,16 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.sonarr?.apiKeyConfigured);
+  const credentials = { baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/sonarr/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -470,7 +474,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/sonarr", form);
+      await apiPost("/api/settings/sonarr", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);
@@ -502,8 +506,8 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
         error={error}
         label="Save Sonarr"
         onSave={() => void save()}
-        saveDisabled={!form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured)}
-        test={{ testing, disabled: !form.baseUrl || (!form.apiKey && !settings.sonarr?.apiKeyConfigured), result: testResult, onTest: () => void testConnection() }}
+        saveDisabled={credentialsIncomplete}
+        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
       />
     </SectionCard>
   );
@@ -517,12 +521,16 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [apiKeyTouched, setApiKeyTouched] = useState(false);
+  const baseUrl = form.baseUrl.trim();
+  const apiKey = form.apiKey.trim();
+  const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
+  const credentials = { ...form, baseUrl, apiKey };
 
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", form);
+      const result = await apiPost<{ ok: boolean; message?: string }>("/api/settings/tautulli/test", credentials);
       setTestResult({ ok: result.ok, message: result.message ?? "Test Succeeded" });
     } catch (caught) {
       setTestResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
@@ -536,7 +544,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
     setSuccess(false);
     setError(null);
     try {
-      await apiPost("/api/settings/tautulli", form);
+      await apiPost("/api/settings/tautulli", credentials);
       setSuccess(true);
       setForm((current) => ({ ...current, apiKey: "" }));
       setApiKeyTouched(false);
@@ -569,8 +577,8 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
         error={error}
         label="Save Tautulli"
         onSave={() => void save()}
-        saveDisabled={form.enabled && (!form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured))}
-        test={{ testing, disabled: !form.baseUrl || (!form.apiKey && !settings.tautulli.apiKeyConfigured), result: testResult, onTest: () => void testConnection() }}
+        saveDisabled={form.enabled && credentialsIncomplete}
+        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
       />
     </SectionCard>
   );
@@ -779,7 +787,7 @@ function JobsTab() {
                   <span>{active ? "Running now" : job.lastRunAt ? `${formatRelativeTime(job.lastRunAt)}${job.lastRunStatus ? ` · ${job.lastRunStatus}` : ""}` : "-"}</span>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {JOB_PRESETS[job.id] && <button type="button" className={compactSecondaryButtonClass} onClick={() => openEdit(job)}><Pencil size={13} /> Edit</button>}
-                    <button type="button" className={compactPrimaryButtonClass} disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>
+                    {job.enabled && <button type="button" className={compactPrimaryButtonClass} disabled={active} onClick={() => void runJob(job.id)}><Play size={13} /> {active ? "Running..." : "Run now"}</button>}
                   </div>
                 </div>
               );

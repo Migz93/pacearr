@@ -61,14 +61,17 @@ export class JobScheduler {
     const job = this.jobs.get(id);
     if (!job) return;
     if (patch.intervalMs !== undefined) job.intervalMs = patch.intervalMs;
-    if (patch.enabled !== undefined) job.enabled = patch.enabled;
+    if (patch.enabled !== undefined) {
+      job.enabled = patch.enabled;
+      if (!job.enabled) job.pendingManualRun = false;
+    }
     this.reschedule(job);
     this.logger?.info("Scheduled job updated", { id: job.id, intervalMs: job.intervalMs, enabled: job.enabled });
   }
 
   runNow(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return false;
+    if (!job || !job.enabled) return false;
     if (job.activeRuns > 0) {
       this.logger?.debug("Skipped overlapping manual job run", { id, activeRuns: job.activeRuns });
       return false;
@@ -85,7 +88,7 @@ export class JobScheduler {
    */
   runNowOrQueue(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return false;
+    if (!job || !job.enabled) return false;
     if (job.activeRuns === 0) return this.runNow(id);
     if (job.pendingManualRun) return false;
     job.pendingManualRun = true;
@@ -95,7 +98,7 @@ export class JobScheduler {
 
   async runNowAndWait(id: string) {
     const job = this.jobs.get(id);
-    if (!job) return null;
+    if (!job || !job.enabled) return null;
     return this.execute(job, false);
   }
 
@@ -153,13 +156,15 @@ export class JobScheduler {
       this.logger?.info("Scheduled job complete", { id: job.id, scheduled });
       return true;
     } catch (error) {
+      // Jobs retry at their administrator-configured interval. A separate exponential
+      // backoff would obscure that schedule and can be adjusted explicitly in Settings.
       job.lastRunStatus = "error";
       this.savePersistedState?.(job.id, { lastRunAt: job.lastRunAt, lastRunStatus: job.lastRunStatus });
       this.logger?.error("Job failed", { id: job.id, error: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
       job.activeRuns = Math.max(0, job.activeRuns - 1);
-      if (job.activeRuns === 0 && job.pendingManualRun) {
+      if (job.activeRuns === 0 && job.enabled && job.pendingManualRun) {
         job.pendingManualRun = false;
         this.logger?.info("Running queued manual job", { id: job.id });
         void this.execute(job, false);
