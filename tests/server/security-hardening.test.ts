@@ -94,6 +94,15 @@ test("Plex, Sonarr, and Tautulli reject unsafe URLs and disable redirect followi
     await PlexIntegration.pingToken("secret");
     assert.deepEqual(await PlexIntegration.discoverServers("secret"), [{ name: "Plex", machineIdentifier: "server", connections: [{ uri: "https://plex.example", local: true }] }]);
     assert.ok(requests.length >= 7, `expected at least 7 credentialed requests, saw ${requests.length}`);
+    assert.deepEqual(new Set(requests.map((request) => new URL(request.url).host + new URL(request.url).pathname)), new Set([
+      "plex.example/identity",
+      "sonarr.example/api/v3/system/status",
+      "tautulli.example/api/v2",
+      "plex.tv/api/users",
+      "plex.tv/users/account.json",
+      "plex.tv/api/v2/ping",
+      "plex.tv/api/v2/resources",
+    ]));
     assert.ok(requests.every((request) => request.redirect === "error"));
     assert.ok(requests.every((request) => request.signal instanceof AbortSignal));
   } finally {

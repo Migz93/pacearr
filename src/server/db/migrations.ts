@@ -314,6 +314,10 @@ const migrations: Migration[] = [
     up(db) {
       // This migration has not reached a tagged release. Preserve the earliest user ID
       // for each identity so an imported duplicate cannot block the uniqueness invariant.
+      // Do not move watch events or rolling progress between the duplicate Plex users:
+      // the bad mapping gives no evidence that either user's historical activity belongs
+      // to the other. Clearing only the later stable-ID mapping preserves that history
+      // and lets an administrator correct the ambiguous identity deliberately.
       db.exec(`
         UPDATE users
         SET tautulli_user_id = NULL

@@ -848,6 +848,10 @@ test("migration 17 retains one duplicate Tautulli identity before adding its uni
     `);
     insert.run("plex-first", "1", "tautulli-42", "first", "First", 1, stamp, stamp);
     insert.run("plex-second", "2", "tautulli-42", "second", "Second", 1, stamp, stamp);
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, user_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli", "duplicate-user-history", 2, "The Expanse", 1, 1, stamp, "{}", stamp);
 
     runMigrations(raw, undefined, 17);
     const users = raw.prepare("SELECT plex_user_id, tautulli_user_id FROM users ORDER BY id").all() as Array<{ plex_user_id: string; tautulli_user_id: string | null }>;
@@ -855,6 +859,7 @@ test("migration 17 retains one duplicate Tautulli identity before adding its uni
       { plex_user_id: "plex-first", tautulli_user_id: "tautulli-42" },
       { plex_user_id: "plex-second", tautulli_user_id: null },
     ]);
+    assert.equal((raw.prepare("SELECT user_id FROM watch_events WHERE source_event_id = ?").get("duplicate-user-history") as { user_id: number }).user_id, 2);
   } finally {
     raw.close();
     rmSync(dir, { recursive: true, force: true });

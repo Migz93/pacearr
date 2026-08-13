@@ -8,8 +8,8 @@ type StorageState = { cookies: Array<{ name: string; value: string; domain?: str
 
 function validateBaseUrl(value: string): URL {
   const url = new URL(value);
-  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (url.protocol !== "https:" && !loopback) throw new Error("BASE_URL must use HTTPS unless it targets a loopback host.");
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error("BASE_URL must use HTTPS unless it targets a loopback host over HTTP.");
   return url;
 }
 
