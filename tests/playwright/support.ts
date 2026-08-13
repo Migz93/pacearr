@@ -15,6 +15,8 @@ export async function openPage(page: Page, path: string, heading: string): Promi
   try {
     await page.goto(path);
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    // Do not wait for networkidle here: page polling and Plex SSE can keep the browser
+    // busy indefinitely. The route-specific heading is the deterministic readiness gate.
     expect(consoleErrors, `Unexpected browser console errors on ${path}`).toEqual([]);
     expect(pageErrors, `Unexpected page errors on ${path}`).toEqual([]);
   } finally {
