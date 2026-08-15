@@ -307,7 +307,7 @@ function ShowsBrowser() {
         <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
         filtered.length === 0 ? <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div> : (
-          <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]">
+          <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))] max-[480px]:[grid-template-columns:repeat(auto-fill,minmax(130px,1fr))]">
             {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
           </div>
         )

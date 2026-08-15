@@ -151,13 +151,13 @@ export default function Users() {
       <UserGrid title="Enabled" users={enabledUsers} emptyLabel="No other enabled users" selectedIds={selectedIds} onToggleSelected={toggleSelected} onOpenShows={setShowsUserId} onEdit={setEditUserId} />
 
       <div className="mb-6">
-        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={disabledOpen} onClick={() => setDisabledOpen((open) => !open)}>
+        <button type="button" className="-m-2 inline-flex items-center gap-1.5 border-0 bg-transparent p-2 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={disabledOpen} onClick={() => setDisabledOpen((open) => !open)}>
           {disabledOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Disabled ({disabledUsers.length})
         </button>
         {disabledOpen && (
           disabledUsers.length > 0 ? (
-            <div className="mt-3 grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
+            <div className="mt-3 grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 max-[480px]:grid-cols-1 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
               {disabledUsers.map((user) => (
                 <UserCard
                   key={user.id}
@@ -176,7 +176,7 @@ export default function Users() {
       </div>
 
       <div className="mb-6">
-        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={unmappedOpen} onClick={() => setUnmappedOpen((open) => !open)}>
+        <button type="button" className="-m-2 inline-flex items-center gap-1.5 border-0 bg-transparent p-2 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={unmappedOpen} onClick={() => setUnmappedOpen((open) => !open)}>
           {unmappedOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Unmapped Tautulli users ({unmappedTautulliUsers.length})
         </button>
@@ -230,7 +230,7 @@ function UserGrid({ title, users, emptyLabel, selectedIds, onToggleSelected, onO
     <section className="mb-6">
       <h2 className="mb-3 text-xs font-extrabold uppercase text-on-surface-variant">{title} ({users.length})</h2>
       {users.length > 0 ? (
-        <div className="grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
+        <div className="grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 max-[480px]:grid-cols-1 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
           {users.map((user) => (
             <UserCard
               key={user.id}

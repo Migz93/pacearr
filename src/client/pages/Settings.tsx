@@ -890,7 +890,7 @@ function AboutTab() {
       </SectionCard>
       <SectionCard title="Getting support">
         <div className="grid gap-2.5">
-          <InfoRow label="GitHub"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
+          <InfoRow label="GitHub"><a className="break-all text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">github.com/Migz93/pacearr</a></InfoRow>
           <InfoRow label="Health check"><code className={codeClass}>/api/health</code></InfoRow>
         </div>
       </SectionCard>
