@@ -11,41 +11,19 @@ non-obvious CSS traps found during the #87 mobile audit.
 |---|---|---|
 | `md` (768px, Tailwind default) | `Layout.tsx` | Sidebar switches between the permanent desktop rail and the off-canvas mobile drawer |
 | `max-[820px]` | Most page headers/controls (`Shows.tsx`, `Users.tsx`, `Settings.tsx`, `Dashboard.tsx`) | Control rows and multi-column grids stack to a single column or reduced column count for tablet-and-below |
-| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone (see gotchas below) |
+| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone |
 
 Every authenticated route renders inside `Page` (`components/Page.tsx`), which
-sets `mx-auto max-w-7xl p-6` — that's 48px of horizontal padding on every
-route at every width, so "available content width" for reasoning about a
-breakpoint is always `viewport width − 48px`.
+sets `mx-auto max-w-7xl p-6`. Available content width for breakpoint math is
+`min(viewport width, 1280px) − 48px` — viewport-driven below `max-w-7xl`
+(1280px), capped at `1232px` above it.
 
-## Two Gotchas Found By The #87 Audit
+## Gotchas Found By The #87 Audit
 
-**A `flex-1` container without `min-w-0` grows to fit its widest unwrappable
-descendant, not the viewport.** `Layout.tsx`'s content column
-(`min-w-0 flex-1 md:ml-64`) sits in a flex row next to the (position-fixed,
-out-of-flow) sidebar. Without `min-w-0`, a flex item's automatic minimum width
-is its content's min-content size — so a deeply nested `overflow-x-auto` pill
-tab bar with `whitespace-nowrap` labels, or a long unbroken link, forced the
-*entire page* wider than the viewport instead of scrolling or wrapping
-internally. This showed up as real horizontal page scroll on the Shows page
-(tab bar) and Settings → About (the GitHub URL). Any new top-level flex/grid
-container should carry `min-w-0` (or `min-h-0` in a column layout) unless it's
-deliberately meant to grow with its content.
-
-**`auto-fill`/`minmax()` grids have a pixel-fixed column floor that can
-silently collapse to one column on a phone.** The Shows poster grid
-(`[grid-template-columns:repeat(auto-fill,minmax(158px,1fr))]`) fits 2 columns
-down to tablet width, but a 375px phone only has 327px of content width after
-`Page`'s padding — one 5px short of fitting two 158px tracks plus the gap. The
-grid didn't overflow (it's a valid grid track), it just silently rendered as a
-single tall column instead of two, multiplying page height. This was masked
-for a long time by the `min-w-0` bug above artificially widening the page.
-Don't assume a valid grid track means the layout is right — for any
-`auto-fill` grid, work out what column count the component actually needs at
-phone width (some card content genuinely needs to stay wide and should
-legitimately drop to one column), then add a `max-[480px]:` override tuned to
-that count. Verify the result directly via `getBoundingClientRect()` on the
-grid's children in a script, not by trusting a screenshot.
+| Gotcha | Symptom | Fix |
+|---|---|---|
+| A `flex-1` container without `min-w-0` sizes to its widest unwrappable descendant, not the viewport. A flex item's automatic minimum width is its content's min-content size; a nested `overflow-x-auto` bar with `whitespace-nowrap` labels (or a long unbroken link) forces the whole page wider than the viewport instead of scrolling/wrapping internally. | Real horizontal page scroll on the Shows tab bar and Settings → About's GitHub URL. | `min-w-0` on `Layout.tsx`'s content column (`min-w-0 flex-1 md:ml-64`). Give any new top-level flex/grid container `min-w-0` (or `min-h-0` in a column layout) unless it's deliberately meant to grow with its content. |
+| `auto-fill`/`minmax()` grids have a pixel-fixed column floor. A valid grid track can still silently collapse to fewer columns than intended once the real (post-fix) content width is available — no overflow, just a much taller page. | Shows poster grid (`minmax(158px,1fr)`) held 2 columns down to tablet width but dropped to 1 on a 375px phone (327px content width, 5px short of two 158px tracks + gap), tripling page height. Was masked by the `min-w-0` bug above artificially widening the page. | Work out the column count the component needs at phone width (some card content genuinely needs to stay wide and should legitimately be one column), then add a `max-[480px]:` override tuned to that count. Verify with `getBoundingClientRect()` on the grid's children in a script — not a screenshot. |
 
 ## How To Verify A Mobile Layout Against A Real Instance
 
@@ -55,32 +33,31 @@ exercise authenticated routes. Verification needs a rebuilt container (see
 session:
 
 1. Rebuild and recreate the `pacearr` container from the current workspace.
-2. Get a fresh `pacearr_session` cookie value (see `TESTING.md`'s Playwright
-   setup) and put it in `tests/playwright/.auth/storageState.json`, matching
-   the `domain` the running instance is actually reached at — a cookie saved
-   for one host is not sent when Chromium is pointed at a different host/IP
-   for the same instance (e.g. a Docker bridge gateway IP vs. the LAN IP the
-   cookie's `domain` was set to). A cookie that looks "expired" from
-   `ERR_CONNECTION_REFUSED`-free but always-login-page responses is usually
-   this, not a real expiry.
+2. Get a fresh `pacearr_session` cookie (see `TESTING.md`'s Playwright setup)
+   into `tests/playwright/.auth/storageState.json`, matching the `domain` the
+   instance is actually reached at — a cookie saved for one host isn't sent
+   when Chromium hits a different host/IP for the same instance (e.g. a
+   Docker bridge gateway IP vs. the LAN IP the cookie's `domain` was set to).
+   An always-login-page response with no connection error usually means this,
+   not a real expiry.
 3. Drive Playwright at phone viewport sizes (375×667 and 390×844 cover the
-   common range) against each authenticated route. For every route, check
+   common range) against each authenticated route. Check
    `document.documentElement.scrollWidth` vs. `clientWidth` for page-level
-   horizontal overflow, and scan interactive elements for a
-   `getBoundingClientRect()` under 24×24px (ignore visually-hidden inputs
-   behind a styled label/peer, and inner `<input>`/`<select>` elements whose
-   *containing* control is already tall enough — the container is the real
-   touch target).
+   horizontal overflow, and `getBoundingClientRect()` on interactive elements
+   for anything under 24×24px (ignore visually-hidden inputs behind a styled
+   label/peer, and inner `<input>`/`<select>` elements whose *containing*
+   control is already tall enough).
 4. For dialogs (`position: fixed` overlays), verify with a viewport-only
-   screenshot, not `fullPage: true`. Playwright's full-page screenshots resize
-   the capture to the full document height, which renders fixed-position
-   elements pinned to their initial position instead of centered in the
-   visible viewport — a screenshot-tool artifact, not a real rendering bug.
+   screenshot, not `fullPage: true` — Playwright's full-page mode resizes the
+   capture to full document height, which renders fixed elements pinned to
+   their initial position instead of centered in the visible viewport (a
+   screenshot-tool artifact, not a real rendering bug).
 
 ## Deferred Follow-Ups
 
-A few smaller mobile polish items were found during the #87 audit but not
-fixed there, because they affect desktop layout too (not mobile-specific
-regressions) and need a deliberate design pass rather than a same-PR fix —
-see the tracking issue linked from #87 for details (viewer-card checkbox
-touch target, tab-bar scroll affordance, About page version-link height).
+Tracked in #102, not fixed in #87 because they affect desktop layout too
+(not mobile-specific regressions) and need a deliberate design pass:
+
+- Viewer-card checkbox touch target (18×18px)
+- Shows tab-bar scroll affordance
+- Settings → About version-link height
