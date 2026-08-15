@@ -14,9 +14,13 @@ non-obvious CSS traps found during the #87 mobile audit.
 | `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone |
 
 Every authenticated route renders inside `Page` (`components/Page.tsx`), which
-sets `mx-auto max-w-7xl p-6`. Available content width for breakpoint math is
-`min(viewport width, 1280px) − 48px` — viewport-driven below `max-w-7xl`
-(1280px), capped at `1232px` above it.
+sets `mx-auto max-w-7xl p-6`, inside `Layout.tsx`'s content column
+(`min-w-0 flex-1 md:ml-64`). Available content width for breakpoint math:
+
+| Viewport | Available content width |
+|---|---|
+| `< 768px` (below `md`, sidebar off-canvas) | `viewport width − 48px` |
+| `≥ 768px` (sidebar's fixed 256px reserved via `md:ml-64`) | `min(viewport width − 256px, 1280px) − 48px` |
 
 ## Gotchas Found By The #87 Audit
 
