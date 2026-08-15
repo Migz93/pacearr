@@ -307,6 +307,9 @@ function ShowsBrowser() {
         <PageLoading label="Loading shows..." />
       ) : view === "poster" ? (
         filtered.length === 0 ? <div className="p-6 text-center text-on-surface-variant">{emptyMessage()}</div> : (
+          // 130px floor below 480px: the 158px desktop/tablet floor leaves a 375px
+          // phone (327px content width) 5px short of fitting 2 columns, so it
+          // silently collapses to 1 and triples page height. See docs/mobile-review.md.
           <div className="grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(158px,1fr))] max-[480px]:[grid-template-columns:repeat(auto-fill,minmax(130px,1fr))]">
             {visibleItems.map((item) => <ShowCard item={item} returnTo={currentTabUrl} key={item.data.sonarrSeriesId} />)}
           </div>

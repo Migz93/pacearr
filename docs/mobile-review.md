@@ -24,10 +24,13 @@ sets `mx-auto max-w-7xl p-6`, inside `Layout.tsx`'s content column
 
 ## Gotchas Found By The #87 Audit
 
-| Gotcha | Symptom | Fix |
-|---|---|---|
-| A `flex-1` container without `min-w-0` sizes to its widest unwrappable descendant, not the viewport. A flex item's automatic minimum width is its content's min-content size; a nested `overflow-x-auto` bar with `whitespace-nowrap` labels (or a long unbroken link) forces the whole page wider than the viewport instead of scrolling/wrapping internally. | Real horizontal page scroll on the Shows tab bar and Settings → About's GitHub URL. | `min-w-0` on `Layout.tsx`'s content column (`min-w-0 flex-1 md:ml-64`). Give any new top-level flex/grid container `min-w-0` (or `min-h-0` in a column layout) unless it's deliberately meant to grow with its content. |
-| `auto-fill`/`minmax()` grids have a pixel-fixed column floor. A valid grid track can still silently collapse to fewer columns than intended once the real (post-fix) content width is available — no overflow, just a much taller page. | Shows poster grid (`minmax(158px,1fr)`) held 2 columns down to tablet width but dropped to 1 on a 375px phone (327px content width, 5px short of two 158px tracks + gap), tripling page height. Was masked by the `min-w-0` bug above artificially widening the page. | Work out the column count the component needs at phone width (some card content genuinely needs to stay wide and should legitimately be one column), then add a `max-[480px]:` override tuned to that count. Verify with `getBoundingClientRect()` on the grid's children in a script — not a screenshot. |
+Root cause and impact for each is documented as a code comment at the fix
+site, linked below — this table is just the operational rule.
+
+| Gotcha | Rule |
+|---|---|
+| `flex-1` container without `min-w-0` sizes to its widest unwrappable descendant, not the viewport. See the comment above [`Layout.tsx`'s content column](../src/client/components/Layout.tsx). | Give any top-level flex/grid container `min-w-0` (or `min-h-0` in a column layout) unless it's deliberately meant to grow with its content. |
+| `auto-fill`/`minmax()` grid column floor can silently collapse to fewer columns than intended at phone width, with no overflow — just a much taller page. See the comment above the [Shows poster grid](../src/client/pages/Shows.tsx). | Work out the column count the component needs at phone width (some card content genuinely needs to stay wide and should legitimately be one column), then add a `max-[480px]:` override tuned to that count. Verify with `getBoundingClientRect()` on the grid's children in a script — not a screenshot. |
 
 ## How To Verify A Mobile Layout Against A Real Instance
 

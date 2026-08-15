@@ -107,6 +107,10 @@ export default function Layout({ user, onLogout, children }: { user: SessionUser
         </div>
         <VersionFooter onNavigate={() => setMobileOpen(false)} />
       </aside>
+      {/* min-w-0: without it, a flex item's automatic min width is its content's
+          min-content size — an unshrinkable descendant (e.g. a whitespace-nowrap
+          tab bar) would force this whole column, and the page, wider than the
+          viewport instead of scrolling internally. See docs/mobile-review.md. */}
       <div className="min-w-0 flex-1 md:ml-64">
         <div className="flex items-center gap-3 border-b border-outline-variant/30 bg-background-container-low px-4 py-3 md:hidden">
           <button type="button" className="rounded-lg p-1.5 text-on-surface-variant hover:bg-background-container-high hover:text-on-surface" onClick={() => setMobileOpen((open) => !open)} aria-label="Toggle navigation" aria-expanded={mobileOpen} aria-controls="mobile-sidebar">
