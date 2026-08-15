@@ -40,11 +40,12 @@ down to tablet width, but a 375px phone only has 327px of content width after
 grid didn't overflow (it's a valid grid track), it just silently rendered as a
 single tall column instead of two, multiplying page height. This was masked
 for a long time by the `min-w-0` bug above artificially widening the page.
-Give any `auto-fill` grid a `max-[480px]:` override tuned to keep at least 2
-columns on a phone, and verify column count directly — via
-`getBoundingClientRect()` on the grid's children in a script, not by trusting
-a screenshot — rather than assuming a valid grid track means the layout is
-right.
+Don't assume a valid grid track means the layout is right — for any
+`auto-fill` grid, work out what column count the component actually needs at
+phone width (some card content genuinely needs to stay wide and should
+legitimately drop to one column), then add a `max-[480px]:` override tuned to
+that count. Verify the result directly via `getBoundingClientRect()` on the
+grid's children in a script, not by trusting a screenshot.
 
 ## How To Verify A Mobile Layout Against A Real Instance
 
