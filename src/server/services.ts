@@ -47,11 +47,11 @@ function prefetchedEpisodeIdsForEpisodes(episodes: SonarrEpisode[], records: Arr
 type EpisodeCache = Map<number, Promise<SonarrEpisode[]>>;
 
 type SeriesMatchIndex = {
-  byTvdbId: Map<number, SonarrSeries>;
-  byImdbId: Map<string, SonarrSeries>;
+  byTvdbId: Map<number, SonarrSeries | null>;
+  byImdbId: Map<string, SonarrSeries | null>;
 };
 
-type ResolutionThrottle = { nextLookupAt: number };
+type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
 const SOURCE_IDENTITY_LOOKUP_INTERVAL_MS = 1_000;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -1104,11 +1104,17 @@ export class PacearrServices {
    * per run turns that into O(events + library) instead of O(events * library).
    */
   private buildSeriesMatchIndex(series: SonarrSeries[]): SeriesMatchIndex {
-    const byTvdbId = new Map<number, SonarrSeries>();
-    const byImdbId = new Map<string, SonarrSeries>();
+    const byTvdbId = new Map<number, SonarrSeries | null>();
+    const byImdbId = new Map<string, SonarrSeries | null>();
     for (const candidate of series) {
-      if (candidate.tvdbId && !byTvdbId.has(candidate.tvdbId)) byTvdbId.set(candidate.tvdbId, candidate);
-      if (candidate.imdbId && !byImdbId.has(candidate.imdbId)) byImdbId.set(candidate.imdbId, candidate);
+      if (candidate.tvdbId) {
+        const existing = byTvdbId.get(candidate.tvdbId);
+        byTvdbId.set(candidate.tvdbId, existing === undefined ? candidate : existing?.id === candidate.id ? existing : null);
+      }
+      if (candidate.imdbId) {
+        const existing = byImdbId.get(candidate.imdbId);
+        byImdbId.set(candidate.imdbId, existing === undefined ? candidate : existing?.id === candidate.id ? existing : null);
+      }
     }
     return { byTvdbId, byImdbId };
   }
@@ -1116,6 +1122,7 @@ export class PacearrServices {
   private matchExternalIds(ids: { tvdbId: number | null; imdbId: string | null }, index: SeriesMatchIndex): SonarrSeries | null {
     const tvdb = ids.tvdbId ? index.byTvdbId.get(ids.tvdbId) : undefined;
     const imdb = ids.imdbId ? index.byImdbId.get(ids.imdbId) : undefined;
+    if (tvdb === null || imdb === null) return null;
     // Two supplied IDs must agree. Never let a stale provider ID select a different series.
     if (tvdb && imdb && tvdb.id !== imdb.id) return null;
     return tvdb ?? imdb ?? null;
@@ -1127,19 +1134,25 @@ export class PacearrServices {
   ) {
     const cached = this.db.getSourceIdentity(source, identityKey);
     if (cached && (cached.status !== "resolved" || Date.now() - new Date(cached.updatedAt).getTime() < RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS)) return cached;
-    const throttle = this.sourceIdentityThrottles.get(source) ?? { nextLookupAt: 0 };
+    const throttle = this.sourceIdentityThrottles.get(source) ?? { nextLookupAt: 0, pending: Promise.resolve() };
     this.sourceIdentityThrottles.set(source, throttle);
-    const waitMs = Math.max(0, throttle.nextLookupAt - Date.now());
-    if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-    throttle.nextLookupAt = Date.now() + SOURCE_IDENTITY_LOOKUP_INTERVAL_MS;
-    try {
-      const result = await lookup();
-      this.db.saveSourceIdentity(source, identityKey, result);
-      return result;
-    } catch (error) {
-      this.logger.warn("Source identity lookup failed", { source, identityKey, error: error instanceof Error ? error.message : String(error) });
-      return null;
-    }
+    const resolution = throttle.pending.then(async () => {
+      const refreshed = this.db.getSourceIdentity(source, identityKey);
+      if (refreshed && (refreshed.status !== "resolved" || Date.now() - new Date(refreshed.updatedAt).getTime() < RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS)) return refreshed;
+      const waitMs = Math.max(0, throttle.nextLookupAt - Date.now());
+      if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      throttle.nextLookupAt = Date.now() + SOURCE_IDENTITY_LOOKUP_INTERVAL_MS;
+      try {
+        const result = await lookup();
+        this.db.saveSourceIdentity(source, identityKey, result);
+        return result;
+      } catch (error) {
+        this.logger.warn("Source identity lookup failed", { source, identityKey, error: error instanceof Error ? error.message : String(error) });
+        return null;
+      }
+    });
+    throttle.pending = resolution.then(() => undefined, () => undefined);
+    return resolution;
   }
 
   private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, allowTitleLookup = true): Promise<SonarrSeries | null> {
@@ -1152,7 +1165,7 @@ export class PacearrServices {
         return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
       };
     } else if (allowTitleLookup && event.librarySectionId) {
-      identityKey = `title:${event.librarySectionId}:${normalizeTitle(event.showTitle)}`;
+      identityKey = `title:${JSON.stringify([event.librarySectionId, event.showTitle])}`;
       lookup = () => plex.findShowGuidsByTitle(event.librarySectionId!, event.showTitle);
     }
     if (!identityKey || !lookup) return null;
