@@ -187,6 +187,32 @@ test("history import rejects a non-unique Sonarr external ID", async () => {
   }
 });
 
+test("history import rechecks a stale missing source identity", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.saveSourceIdentity("tautulli", "rating:118306", { status: "missing", tvdbId: null, imdbId: null });
+  (db as unknown as { db: { prepare: (sql: string) => { run: (...values: unknown[]) => void } } }).db
+    .prepare("UPDATE source_identity_cache SET updated_at = ? WHERE source = ? AND identity_key = ?")
+    .run(new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString(), "tautulli", "rating:118306");
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const restoreFetch = installFetchStub({
+    series: [series],
+    tautulliHistory: [{ reference_id: "stale-missing", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" }],
+    tautulliMetadata: { guids: ["tvdb://208111"] },
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 1);
+    assert.equal(db.getSourceIdentity("tautulli", "rating:118306")?.status, "resolved");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("history import batches events outside the activity window while still applying rolling logic to recent ones", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });

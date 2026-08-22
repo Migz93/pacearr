@@ -54,6 +54,7 @@ type SeriesMatchIndex = {
 type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
 const SOURCE_IDENTITY_LOOKUP_INTERVAL_MS = 1_000;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 export function selectEarlyPrefetchEpisodes(
   episodes: SonarrEpisode[],
@@ -1128,17 +1129,22 @@ export class PacearrServices {
     return tvdb ?? imdb ?? null;
   }
 
+  private isFreshSourceIdentity(entry: { status: "resolved" | "missing" | "ambiguous"; updatedAt: string }): boolean {
+    const ttlMs = entry.status === "resolved" ? RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS : UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS;
+    return Date.now() - new Date(entry.updatedAt).getTime() < ttlMs;
+  }
+
   private async resolveIdentity(
     source: "plex" | "tautulli", identityKey: string,
     lookup: () => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>,
   ) {
     const cached = this.db.getSourceIdentity(source, identityKey);
-    if (cached && (cached.status !== "resolved" || Date.now() - new Date(cached.updatedAt).getTime() < RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS)) return cached;
+    if (cached && this.isFreshSourceIdentity(cached)) return cached;
     const throttle = this.sourceIdentityThrottles.get(source) ?? { nextLookupAt: 0, pending: Promise.resolve() };
     this.sourceIdentityThrottles.set(source, throttle);
     const resolution = throttle.pending.then(async () => {
       const refreshed = this.db.getSourceIdentity(source, identityKey);
-      if (refreshed && (refreshed.status !== "resolved" || Date.now() - new Date(refreshed.updatedAt).getTime() < RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS)) return refreshed;
+      if (refreshed && this.isFreshSourceIdentity(refreshed)) return refreshed;
       const waitMs = Math.max(0, throttle.nextLookupAt - Date.now());
       if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
       throttle.nextLookupAt = Date.now() + SOURCE_IDENTITY_LOOKUP_INTERVAL_MS;
