@@ -37,7 +37,7 @@ function jsonResponse(body: unknown) {
 }
 
 function sourceIdentityScope(secret: string, ...connectionValues: string[]) {
-  return crypto.createHmac("sha256", secret).update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
+  return crypto.scryptSync(JSON.stringify(connectionValues), secret, 16).toString("hex");
 }
 
 function emptyPlexHistoryXml() {
