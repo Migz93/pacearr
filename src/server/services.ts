@@ -400,7 +400,8 @@ export class PacearrServices {
     }
 
     const errors: string[] = [];
-    const importHistory = Boolean(this.db.getPlexSettings()?.serverUrl);
+    const repairHistoryAfterTriage = Boolean(this.db.getPlexSettings()?.serverUrl);
+    const automaticallyEnrolledSeriesIds = new Set<number>();
     for (const item of candidates) {
       const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
       const decision = episodeCount > settings.newShowTriageEpisodeThreshold ? "enroll" : "search";
@@ -425,7 +426,7 @@ export class PacearrServices {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
             if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
-              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory });
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
               this.db.completeNewShowTriageEnrollment(item.id);
             } else {
               // A rolling row that Pacearr did not mark pending belongs to a manual
@@ -438,10 +439,10 @@ export class PacearrServices {
             // beginEnrollment creates the rolling-show row synchronously after its
             // series read. Mark only that established row as automatic before the
             // subsequent Sonarr mutations can partially fail.
-            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory });
+            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
             try {
               this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
               this.db.completeNewShowTriageEnrollment(item.id);
             } catch (error) {
               // completeEnrollment releases in its finally block; this also releases
@@ -458,6 +459,7 @@ export class PacearrServices {
             continue;
           }
         }
+        if (decision === "enroll") automaticallyEnrolledSeriesIds.add(item.id);
         this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
         this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
@@ -465,6 +467,21 @@ export class PacearrServices {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`${item.title}: ${message}`);
         this.logger.error("New Sonarr series triage failed", { seriesId: item.id, title: item.title, decision, error: message });
+      }
+    }
+    if (repairHistoryAfterTriage && automaticallyEnrolledSeriesIds.size > 0) {
+      try {
+        await this.reconcileFullHistory();
+        for (const seriesId of automaticallyEnrolledSeriesIds) {
+          const rolling = this.db.getRollingShowBySeriesId(seriesId);
+          if (!rolling) continue;
+          this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
+          await this.applyActiveViewerPlan(seriesId, "auto-triage-history");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`history repair: ${message}`);
+        this.logger.error("New Sonarr show triage history repair failed", { enrolledShows: automaticallyEnrolledSeriesIds.size, error: message });
       }
     }
     if (errors.length > 0) {

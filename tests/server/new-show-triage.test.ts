@@ -33,6 +33,9 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
     const url = new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
     state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
+      return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { headers: { "content-type": "application/xml" } });
+    }
     if (url.pathname === "/api/v3/series") {
       state.onSeriesFetch?.();
       return jsonResponse(state.series);
@@ -107,6 +110,28 @@ test("new-show triage enrolls a series over the episode limit instead of running
     assert.equal(db.listKnownNewShowTriageIds().has(3), true);
     assert.equal(state.series[0]?.monitored, true);
     assert.equal(state.series[0]?.monitorNewItems, "none");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage coalesces automatic enrollment history repair into one full source read", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state = {
+    requests,
+    series: [series(31, "New large one", 81, "2026-08-11T12:00:01.000Z"), series(32, "New large two", 81, "2026-08-11T12:00:02.000Z")],
+  };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.ok(db.getRollingShowBySeriesId(31));
+    assert.ok(db.getRollingShowBySeriesId(32));
+    assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
   } finally {
     restoreFetch();
     cleanup();
