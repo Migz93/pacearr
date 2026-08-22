@@ -27,10 +27,10 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; episodesBySeries?: Record<number, SonarrEpisode[]>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
+    const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
     state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
@@ -54,7 +54,8 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
       }
       return jsonResponse(current ?? {});
     }
-    if (url.pathname === "/api/v3/episode") return jsonResponse([] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episode") return jsonResponse(state.episodesBySeries?.[Number(url.searchParams.get("seriesId"))] ?? [] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episode/monitor") return jsonResponse({});
     if (url.pathname === "/api/v3/command") {
       const command = typeof init?.body === "string" ? JSON.parse(init.body) as { seriesId?: number } : {};
       if (command.seriesId && state.failingSearchSeriesIds?.has(command.seriesId)) return new Response("temporary Sonarr error", { status: 503 });
@@ -123,6 +124,10 @@ test("new-show triage coalesces automatic enrollment history repair into one ful
   const state = {
     requests,
     series: [series(31, "New large one", 81, "2026-08-11T12:00:01.000Z"), series(32, "New large two", 81, "2026-08-11T12:00:02.000Z")],
+    episodesBySeries: {
+      31: [{ id: 3101, seriesId: 31, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
+      32: [{ id: 3201, seriesId: 32, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
+    },
   };
   const restoreFetch = installSonarrFetchStub(state);
   try {
@@ -132,6 +137,7 @@ test("new-show triage coalesces automatic enrollment history repair into one ful
     assert.ok(db.getRollingShowBySeriesId(31));
     assert.ok(db.getRollingShowBySeriesId(32));
     assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command" && request.body?.includes("EpisodeSearch")).length, 2);
   } finally {
     restoreFetch();
     cleanup();

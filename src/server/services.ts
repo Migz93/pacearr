@@ -475,8 +475,21 @@ export class PacearrServices {
         for (const seriesId of automaticallyEnrolledSeriesIds) {
           const rolling = this.db.getRollingShowBySeriesId(seriesId);
           if (!rolling) continue;
-          this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
-          await this.applyActiveViewerPlan(seriesId, "auto-triage-history");
+          const operation = this.acquireSeriesOperation(seriesId);
+          if (operation === null) {
+            this.logger.info("Skipped automatic history repair while another show operation is running", { rollingShowId: rolling.id, seriesId, title: rolling.title });
+            continue;
+          }
+          try {
+            this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
+            await this.applyActiveViewerPlan(seriesId, "auto-triage-history", false);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            errors.push(`${rolling.title} history repair: ${message}`);
+            this.logger.error("New Sonarr show triage history repair failed for show", { rollingShowId: rolling.id, seriesId, title: rolling.title, error: message });
+          } finally {
+            this.releaseSeriesOperation(seriesId, operation);
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -967,9 +980,9 @@ export class PacearrServices {
     return { retainedSeasons: [...retained].sort((a, b) => a - b), eligibleForCleanup };
   }
 
-  private async applyActiveViewerPlan(seriesId: number, reason: string): Promise<number> {
+  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true): Promise<number> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : []);
+    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots);
   }
 
   private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
