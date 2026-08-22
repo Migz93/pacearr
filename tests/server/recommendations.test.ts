@@ -272,6 +272,38 @@ test("a full history reconciliation repairs a previously orphaned Tautulli event
   }
 });
 
+test("a full history reconciliation refreshes rolling progress after repairing an orphaned Plex series link", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
+  const [viewer] = db.upsertUsers([{ plexUserId: "plex-viewer", plexAccountId: "1", tautulliUserId: null, username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const series: SonarrSeries = { id: 962, title: "Plex Repair Test", tvdbId: 9620, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: true }] };
+  const rolling = db.upsertRollingShow(series);
+  db.insertWatchEvent({
+    source: "plex-history", sourceEventId: "plex-orphan-1", userId: viewer!.id, plexAccountId: "1", username: "viewer",
+    sonarrSeriesId: null, showTitle: "Plex Repair Test", seasonNumber: 2, episodeNumber: 3,
+    watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: {},
+  });
+  const viewedAt = Math.floor(new Date("2026-04-02T10:00:00.000Z").getTime() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series],
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" historyKey="plex-orphan-1" grandparentTitle="Plex Repair Test" parentIndex="2" index="3" viewedAt="${viewedAt}" grandparentRatingKey="plex-repair-show" accountID="1" user="viewer"/></MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://9620" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.reconcileFullHistory();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.listProgressForShow(rolling.id).map((item) => ({ userId: item.userId, season: item.lastWatchedSeason, episode: item.lastWatchedEpisode })), [
+      { userId: viewer!.id, season: 2, episode: 3 },
+    ]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("manual Tautulli mapping refreshes rolling progress from relinked history", () => {
   const { db, services, cleanup } = createHarness();
   try {

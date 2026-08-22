@@ -86,6 +86,7 @@ export type SourceIdentityCacheEntry = {
   status: "resolved" | "missing" | "ambiguous";
   tvdbId: number | null;
   imdbId: string | null;
+  updatedAt: string;
 };
 
 function plexArtworkFromRow(row: any): PlexArtworkRecord {
@@ -279,13 +280,13 @@ export class PacearrDatabase {
 
   getSourceIdentity(source: "plex" | "tautulli", identityKey: string): SourceIdentityCacheEntry | null {
     const row = this.db.prepare(`
-      SELECT status, tvdb_id AS tvdbId, imdb_id AS imdbId
+      SELECT status, tvdb_id AS tvdbId, imdb_id AS imdbId, updated_at AS updatedAt
       FROM source_identity_cache WHERE source = ? AND identity_key = ?
     `).get(source, identityKey) as SourceIdentityCacheEntry | undefined;
     return row ?? null;
   }
 
-  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: SourceIdentityCacheEntry): void {
+  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: Omit<SourceIdentityCacheEntry, "updatedAt">): void {
     const stamp = now();
     this.db.prepare(`
       INSERT INTO source_identity_cache (source, identity_key, status, tvdb_id, imdb_id, created_at, updated_at)
