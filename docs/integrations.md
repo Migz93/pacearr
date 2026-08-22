@@ -76,13 +76,9 @@ Only `episode` sessions are processed. Live sessions use the same normalization 
 
 ### Matching
 
-Pacearr tries to match Plex/Tautulli events to enrolled Sonarr shows in this order:
+Pacearr associates history with Sonarr only through verified TVDB or IMDb IDs. For Plex history, it first resolves a supplied show rating key through Plex metadata. Sparse Plex history without that key may perform a bounded library-title lookup only to find a Plex candidate; its metadata IDs must still uniquely agree with Sonarr before the event is linked. The 15-minute live-session job never performs the title lookup.
 
-1. TVDB id, when Plex show metadata can provide it
-2. IMDB id, when Plex show metadata can provide it
-3. normalised show title fallback
-
-This means Plex events with a show rating key may trigger an extra Plex metadata fetch to read GUIDs.
+Plex identity results are persisted by Plex rating key (or, for sparse history, library section and title), so repeated events do not repeat metadata requests. Missing and ambiguous results remain unmatched.
 
 ## Sonarr
 
@@ -149,6 +145,8 @@ cmd=get_history
 ```
 
 Tautulli events are normalised into the same `watch_events` table as Plex events.
+
+For content matching, Pacearr resolves Tautulli's `grandparent_rating_key` through `cmd=get_metadata` and uses the returned TVDB/IMDb GUIDs. Tautulli identity results are cached separately from Plex results; one source never supplies matching evidence for the other.
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 

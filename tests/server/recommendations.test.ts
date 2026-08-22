@@ -49,7 +49,9 @@ function installFetchStub(routes: {
   episodeFilesBySeries?: Record<number, SonarrEpisodeFile[]>;
   episodeFileErrorsBySeries?: Record<number, string>;
   plexHistoryXml?: string;
+  plexMetadataXml?: string;
   tautulliHistory?: unknown[];
+  tautulliMetadata?: unknown;
   requests?: Array<{ method: string; pathname: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -61,8 +63,14 @@ function installFetchStub(routes: {
         ? new Response(routes.plexHistoryXml, { status: 200, headers: { "content-type": "application/xml" } })
         : emptyPlexHistoryXml();
     }
+    if (url.hostname === "plex" && url.pathname.startsWith("/library/metadata/")) {
+      return new Response(routes.plexMetadataXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
     if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
+    }
+    if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_metadata") {
+      return jsonResponse({ response: { result: "success", data: routes.tautulliMetadata ?? {} } });
     }
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
     const byIdMatch = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
@@ -86,7 +94,7 @@ function installFetchStub(routes: {
   return () => { globalThis.fetch = originalFetch; };
 }
 
-test("watch events for non-enrolled shows are matched against the full Sonarr library during history import", async () => {
+test("stored watch events are not associated by title alone during history import", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   const theWire: SonarrSeries = { id: 700, title: "The Wire", year: 2002, seasons: [] };
@@ -110,7 +118,7 @@ test("watch events for non-enrolled shows are matched against the full Sonarr li
 
     await services.importHistory();
 
-    assert.equal(db.listUnmatchedWatchEvents().length, 0);
+    assert.equal(db.listUnmatchedWatchEvents().length, 1);
   } finally {
     restoreFetch();
     cleanup();
@@ -134,6 +142,27 @@ test("history import reuses the cached Sonarr library instead of fetching it aga
   }
 });
 
+test("Tautulli history resolves through its own rating-key metadata, not its title", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const [viewer] = db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, imdbId: "tt1800864", seasons: [] };
+  const restoreFetch = installFetchStub({
+    series: [series],
+    tautulliHistory: [{ reference_id: "tautulli-gold", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" }],
+    tautulliMetadata: { guids: ["imdb://tt1800864", "tvdb://208111"] },
+  });
+  try {
+    await services.importHistory();
+    assert.deepEqual(db.listLatestUserProgressForSeries(5810).map((item) => item.userId), [viewer!.id]);
+    assert.equal(db.getSourceIdentity("tautulli", "rating:118306")?.status, "resolved");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("history import batches events outside the activity window while still applying rolling logic to recent ones", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
@@ -144,6 +173,7 @@ test("history import batches events outside the activity window while still appl
   const series: SonarrSeries = {
     id: 950,
     title: "Rolling Test",
+    tvdbId: 9500,
     monitored: true,
     monitorNewItems: "none",
     seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }],
@@ -158,8 +188,8 @@ test("history import batches events outside the activity window while still appl
   const oldUnix = Math.floor((Date.now() - 60 * 24 * 60 * 60 * 1000) / 1000);
   const plexHistoryXml = `<?xml version="1.0"?>
     <MediaContainer size="2">
-      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="1" index="1" viewedAt="${recentUnix}" historyKey="hk-recent" ratingKey="rk-recent" accountID="1" user="batchuser"/>
-      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="2" index="1" viewedAt="${oldUnix}" historyKey="hk-old" ratingKey="rk-old" accountID="1" user="batchuser"/>
+      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="1" index="1" viewedAt="${recentUnix}" historyKey="hk-recent" ratingKey="rk-recent" grandparentRatingKey="grk" accountID="1" user="batchuser"/>
+      <Video type="episode" grandparentTitle="Rolling Test" parentIndex="2" index="1" viewedAt="${oldUnix}" historyKey="hk-old" ratingKey="rk-old" grandparentRatingKey="grk" accountID="1" user="batchuser"/>
     </MediaContainer>`;
   const restoreFetch = installFetchStub({
     series: [series],
@@ -167,6 +197,7 @@ test("history import batches events outside the activity window while still appl
     episodesBySeries: { 950: episodes },
     episodeFilesBySeries: { 950: [] },
     plexHistoryXml,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://9500" /></Directory></MediaContainer>',
   });
   try {
     const result = await services.importHistory();

@@ -30,6 +30,7 @@ export interface PlexEpisodeActivity {
   ratingKey: string | null;
   grandparentRatingKey: string | null;
   grandparentGuid?: string | null;
+  librarySectionId: string | null;
   raw: unknown;
 }
 
@@ -51,6 +52,8 @@ export interface PlexShowArtworkItem {
   thumb: string;
   seasons: PlexSeasonArtworkItem[];
 }
+
+export type ExternalIdLookup = { status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null };
 
 function first<T>(value: T | T[] | undefined): T | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -91,6 +94,7 @@ function normalizeHistoryVideo(video: any): PlexEpisodeActivity | null {
     watchedAt,
     ratingKey: v.ratingKey ? String(v.ratingKey) : null,
     grandparentRatingKey: v.grandparentRatingKey ? String(v.grandparentRatingKey) : v.grandparentKey ? String(v.grandparentKey).split("/").pop() ?? null : null,
+    librarySectionId: v.librarySectionID ? String(v.librarySectionID) : null,
     raw: v,
   };
 }
@@ -112,6 +116,7 @@ function normalizeSessionVideo(video: any): PlexEpisodeActivity | null {
     watchedAt: new Date().toISOString(),
     ratingKey: v.ratingKey ? String(v.ratingKey) : null,
     grandparentRatingKey: v.grandparentRatingKey ? String(v.grandparentRatingKey) : null,
+    librarySectionId: v.librarySectionID ? String(v.librarySectionID) : null,
     raw: { ...v, user },
   };
 }
@@ -225,7 +230,9 @@ export class PlexIntegration {
 
   async getShowGuids(ratingKey: string): Promise<{ tvdbId: number | null; imdbId: string | null }> {
     const data = await this.requestServerXml(`/library/metadata/${encodeURIComponent(ratingKey)}`);
-    const item = first(data?.MediaContainer?.Metadata);
+    // Plex returns Directory for a show and Metadata for an episode depending on
+    // server/version; both carry the external Guid children.
+    const item = first(data?.MediaContainer?.Metadata ?? data?.MediaContainer?.Directory);
     const guids = toArray(item?.Guid).map((guid) => String(attr(guid).id ?? ""));
     const directGuid = attr(item).guid ? [String(attr(item).guid)] : [];
     const all = [...directGuid, ...guids];
@@ -238,6 +245,21 @@ export class PlexIntegration {
       if (!imdbId && imdbMatch) imdbId = imdbMatch[1] ?? imdbMatch[2];
     }
     return { tvdbId, imdbId };
+  }
+
+  /**
+   * Sparse Plex history has no media key. Title is used only to discover a Plex
+   * library item; callers must still verify the returned external IDs against Sonarr.
+   */
+  async findShowGuidsByTitle(librarySectionId: string, title: string): Promise<ExternalIdLookup> {
+    const data = await this.requestServerXml(`/library/sections/${encodeURIComponent(librarySectionId)}/all?type=2&title=${encodeURIComponent(title)}`);
+    const candidates = toArray(data?.MediaContainer?.Directory)
+      .map((item) => attr(item))
+      .filter((item) => item.type === "show" && item.ratingKey);
+    if (candidates.length === 0) return { status: "missing", tvdbId: null, imdbId: null };
+    if (candidates.length !== 1) return { status: "ambiguous", tvdbId: null, imdbId: null };
+    const ids = await this.getShowGuids(String(candidates[0]!.ratingKey));
+    return ids.tvdbId || ids.imdbId ? { status: "resolved", ...ids } : { status: "missing", ...ids };
   }
 
   /** Finds a show only by immutable external IDs. Artwork changes must never use a title match. */

@@ -82,6 +82,12 @@ export interface NormalizedWatchEventInput {
   rawPayload: unknown;
 }
 
+export type SourceIdentityCacheEntry = {
+  status: "resolved" | "missing" | "ambiguous";
+  tvdbId: number | null;
+  imdbId: string | null;
+};
+
 function plexArtworkFromRow(row: any): PlexArtworkRecord {
   return {
     id: row.id,
@@ -269,6 +275,24 @@ export class PacearrDatabase {
       VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, JSON.stringify(value), now());
+  }
+
+  getSourceIdentity(source: "plex" | "tautulli", identityKey: string): SourceIdentityCacheEntry | null {
+    const row = this.db.prepare(`
+      SELECT status, tvdb_id AS tvdbId, imdb_id AS imdbId
+      FROM source_identity_cache WHERE source = ? AND identity_key = ?
+    `).get(source, identityKey) as SourceIdentityCacheEntry | undefined;
+    return row ?? null;
+  }
+
+  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: SourceIdentityCacheEntry): void {
+    const stamp = now();
+    this.db.prepare(`
+      INSERT INTO source_identity_cache (source, identity_key, status, tvdb_id, imdb_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source, identity_key) DO UPDATE SET
+        status = excluded.status, tvdb_id = excluded.tvdb_id, imdb_id = excluded.imdb_id, updated_at = excluded.updated_at
+    `).run(source, identityKey, entry.status, entry.tvdbId, entry.imdbId, stamp, stamp);
   }
 
   getSessionSecret(): string {
@@ -604,6 +628,13 @@ export class PacearrDatabase {
       SET user_id = ?
       WHERE source = 'tautulli' AND source_event_id = ? AND user_id IS NULL
     `).run(userId, sourceEventId).changes > 0;
+  }
+
+  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceEventId: string, seriesId: number): boolean {
+    return this.db.prepare(`
+      UPDATE watch_events SET sonarr_series_id = ?
+      WHERE source = ? AND source_event_id = ? AND sonarr_series_id IS NULL
+    `).run(seriesId, source, sourceEventId).changes > 0;
   }
 
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {

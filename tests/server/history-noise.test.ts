@@ -40,13 +40,16 @@ function createHarness() {
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function installFetchStub(sessionsXml: string, options: { seriesJson?: string; seriesByIdJson?: Record<number, string>; episodesBySeriesJson?: Record<number, string> } = {}) {
-  const { seriesJson = "[]", seriesByIdJson = {}, episodesBySeriesJson = {} } = options;
+function installFetchStub(sessionsXml: string, options: { seriesJson?: string; seriesByIdJson?: Record<number, string>; episodesBySeriesJson?: Record<number, string>; plexMetadataXml?: string } = {}) {
+  const { seriesJson = "[]", seriesByIdJson = {}, episodesBySeriesJson = {}, plexMetadataXml = '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>' } = options;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.hostname === "plex" && url.pathname === "/status/sessions") {
       return new Response(sessionsXml, { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    if (url.hostname === "plex" && url.pathname.startsWith("/library/metadata/")) {
+      return new Response(plexMetadataXml, { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.pathname === "/api/v3/series") {
       return new Response(seriesJson, { status: 200, headers: { "content-type": "application/json" } });
@@ -108,8 +111,8 @@ test("a session check that only advances a viewer's progress, without expanding 
         <User id="42" title="gina" />
       </Video>
     </MediaContainer>`;
-    const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
-    restoreFetch = installFetchStub(sessionsXml, { seriesJson });
+    const seriesJson = JSON.stringify([{ id: 30, title: "The Wire", tvdbId: 81189 }]);
+    restoreFetch = installFetchStub(sessionsXml, { seriesJson, plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://81189" /></Directory></MediaContainer>' });
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
     const history = db.listHistory(10);
