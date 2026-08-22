@@ -51,8 +51,8 @@ type SeriesMatchIndex = {
   byImdbId: Map<string, SonarrSeries>;
 };
 
-type ResolutionBudget = { remaining: number };
-const MAX_NEW_SOURCE_IDENTITIES_PER_IMPORT = 25;
+type ResolutionThrottle = { nextLookupAt: number };
+const SOURCE_IDENTITY_LOOKUP_INTERVAL_MS = 1_000;
 
 export function selectEarlyPrefetchEpisodes(
   episodes: SonarrEpisode[],
@@ -1120,13 +1120,14 @@ export class PacearrServices {
   }
 
   private async resolveIdentity(
-    source: "plex" | "tautulli", identityKey: string, budget: ResolutionBudget,
+    source: "plex" | "tautulli", identityKey: string, throttle: ResolutionThrottle,
     lookup: () => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>,
   ) {
     const cached = this.db.getSourceIdentity(source, identityKey);
     if (cached) return cached;
-    if (budget.remaining <= 0) return null;
-    budget.remaining--;
+    const waitMs = Math.max(0, throttle.nextLookupAt - Date.now());
+    if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    throttle.nextLookupAt = Date.now() + SOURCE_IDENTITY_LOOKUP_INTERVAL_MS;
     try {
       const result = await lookup();
       this.db.saveSourceIdentity(source, identityKey, result);
@@ -1137,7 +1138,7 @@ export class PacearrServices {
     }
   }
 
-  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, budget: ResolutionBudget, allowTitleLookup = true): Promise<SonarrSeries | null> {
+  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, throttle: ResolutionThrottle, allowTitleLookup = true): Promise<SonarrSeries | null> {
     let identityKey: string | null = null;
     let lookup: (() => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>) | null = null;
     if (event.grandparentRatingKey) {
@@ -1151,13 +1152,13 @@ export class PacearrServices {
       lookup = () => plex.findShowGuidsByTitle(event.librarySectionId!, event.showTitle);
     }
     if (!identityKey || !lookup) return null;
-    const resolved = await this.resolveIdentity("plex", identityKey, budget, lookup);
+    const resolved = await this.resolveIdentity("plex", identityKey, throttle, lookup);
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, budget: ResolutionBudget): Promise<SonarrSeries | null> {
+  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, throttle: ResolutionThrottle): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
-    const resolved = await this.resolveIdentity("tautulli", `rating:${event.grandparentRatingKey}`, budget, async () => {
+    const resolved = await this.resolveIdentity("tautulli", `rating:${event.grandparentRatingKey}`, throttle, async () => {
       const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
       return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
     });
@@ -1381,8 +1382,8 @@ export class PacearrServices {
     const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
     changed += this.reconcileAllUnmatchedWatchEvents(seriesIndex);
     const plex = this.getPlex();
-    const plexResolutionBudget: ResolutionBudget = { remaining: MAX_NEW_SOURCE_IDENTITIES_PER_IMPORT };
-    const tautulliResolutionBudget: ResolutionBudget = { remaining: MAX_NEW_SOURCE_IDENTITIES_PER_IMPORT };
+    const plexResolutionThrottle: ResolutionThrottle = { nextLookupAt: 0 };
+    const tautulliResolutionThrottle: ResolutionThrottle = { nextLookupAt: 0 };
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
@@ -1394,7 +1395,7 @@ export class PacearrServices {
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
-        const series = await this.matchPlexSeries(event, seriesIndex, plex, plexResolutionBudget);
+        const series = await this.matchPlexSeries(event, seriesIndex, plex, plexResolutionThrottle);
         prepared.push({
           input: {
             source: "plex-history",
@@ -1448,7 +1449,7 @@ export class PacearrServices {
           const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
           if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
-          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, tautulliResolutionBudget);
+          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, tautulliResolutionThrottle);
           prepared.push({
             input: {
               source: "tautulli",
@@ -1561,11 +1562,11 @@ export class PacearrServices {
     // a show that's genuinely untracked by Sonarr then costs exactly one fetch per run,
     // same as before this cache was introduced, never more.
     const matched: Array<{ event: PlexEpisodeActivity; series: SonarrSeries | null }> = [];
-    const sessionResolutionBudget: ResolutionBudget = { remaining: MAX_NEW_SOURCE_IDENTITIES_PER_IMPORT };
-    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, sessionResolutionBudget, false) });
+    const sessionResolutionThrottle: ResolutionThrottle = { nextLookupAt: 0 };
+    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, sessionResolutionThrottle, false) });
     if (matched.some((item) => !item.series)) {
       seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
-      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, sessionResolutionBudget, false);
+      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, sessionResolutionThrottle, false);
     }
 
     let changed = 0;
