@@ -55,6 +55,7 @@ function installFetchStub(routes: {
   episodeFileErrorsBySeries?: Record<number, string>;
   plexHistoryXml?: string;
   plexMetadataXml?: string;
+  plexTitleSearchXml?: string;
   tautulliHistory?: unknown[];
   tautulliMetadata?: unknown;
   tautulliMetadataError?: boolean;
@@ -71,6 +72,9 @@ function installFetchStub(routes: {
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/metadata/")) {
       return new Response(routes.plexMetadataXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/sections/") && url.pathname.endsWith("/all")) {
+      return new Response(routes.plexTitleSearchXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
@@ -295,6 +299,57 @@ test("history import rechecks a reused Plex rating key after its connection chan
     assert.equal(requests.filter((request) => request.pathname === "/library/metadata/118306").length, 1);
   } finally {
     secondFetch();
+    cleanup();
+  }
+});
+
+test("sparse Plex history resolves through candidate metadata, not its title", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: null, username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const history = '<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Gold Rush: Alaska" parentIndex="16" index="23" viewedAt="1784220000" historyKey="sparse-title" ratingKey="episode" librarySectionID="5" accountID="1" user="viewer"/></MediaContainer>';
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series],
+    plexHistoryXml: history,
+    plexTitleSearchXml: '<?xml version="1.0"?><MediaContainer><Directory type="show" ratingKey="118306" title="Gold Rush: Alaska" /></MediaContainer>',
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://208111" /></Directory></MediaContainer>',
+    requests,
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(requests.some((request) => request.pathname === "/library/sections/5/all"), true);
+    assert.equal(requests.some((request) => request.pathname === "/library/metadata/118306"), true);
+    assert.equal(result.matched, 1);
+    assert.equal(db.listUnmatchedWatchEvents().length, 0);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("sparse Plex history leaves ambiguous title-search candidates unmatched", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const history = '<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Gold Rush: Alaska" parentIndex="16" index="23" viewedAt="1784220000" historyKey="ambiguous-title" ratingKey="episode" librarySectionID="5" accountID="1" user="viewer"/></MediaContainer>';
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series],
+    plexHistoryXml: history,
+    plexTitleSearchXml: '<?xml version="1.0"?><MediaContainer><Directory type="show" ratingKey="118306" title="Gold Rush: Alaska" /><Directory type="show" ratingKey="118307" title="Gold Rush: Alaska" /></MediaContainer>',
+    requests,
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 0);
+    assert.equal(db.listUnmatchedWatchEvents().length, 1);
+    assert.equal(requests.some((request) => request.pathname.startsWith("/library/metadata/")), false);
+  } finally {
+    restoreFetch();
     cleanup();
   }
 });
