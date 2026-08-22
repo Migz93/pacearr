@@ -36,8 +36,8 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function sourceIdentityScope(...connectionValues: string[]) {
-  return crypto.createHash("sha256").update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
+function sourceIdentityScope(secret: string, ...connectionValues: string[]) {
+  return crypto.createHmac("sha256", secret).update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
 }
 
 function emptyPlexHistoryXml() {
@@ -167,7 +167,7 @@ test("Tautulli history resolves through its own rating-key metadata, not its tit
   try {
     await services.importHistory();
     assert.deepEqual(db.listLatestUserProgressForSeries(5810).map((item) => item.userId), [viewer!.id]);
-    assert.equal(db.getSourceIdentity("tautulli", `${sourceIdentityScope("http://tautulli:8181", "secret")}:rating:118306`)?.status, "resolved");
+    assert.equal(db.getSourceIdentity("tautulli", `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`)?.status, "resolved");
   } finally {
     restoreFetch();
     cleanup();
@@ -203,7 +203,7 @@ test("history import rechecks a stale missing source identity", async () => {
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
   db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
-  db.saveSourceIdentity("tautulli", `${sourceIdentityScope("http://tautulli:8181", "secret")}:rating:118306`, { status: "missing", tvdbId: null, imdbId: null }, new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString());
+  db.saveSourceIdentity("tautulli", `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`, { status: "missing", tvdbId: null, imdbId: null }, new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString());
   const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
   const restoreFetch = installFetchStub({
     series: [series],
@@ -214,7 +214,7 @@ test("history import rechecks a stale missing source identity", async () => {
     const result = await services.importHistory();
 
     assert.equal(result.matched, 1);
-    assert.equal(db.getSourceIdentity("tautulli", `${sourceIdentityScope("http://tautulli:8181", "secret")}:rating:118306`)?.status, "resolved");
+    assert.equal(db.getSourceIdentity("tautulli", `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`)?.status, "resolved");
   } finally {
     restoreFetch();
     cleanup();

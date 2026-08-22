@@ -257,7 +257,7 @@ export class PacearrServices {
 
   private sourceIdentityScope(...connectionValues: string[]): string {
     // Cache keys must not survive an integration change, but must never persist a token.
-    return crypto.createHash("sha256").update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
+    return crypto.createHmac("sha256", this.db.getSessionSecret()).update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
   }
 
   async discoverPlexUsers() {
