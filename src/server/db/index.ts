@@ -286,14 +286,14 @@ export class PacearrDatabase {
     return row ?? null;
   }
 
-  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: Omit<SourceIdentityCacheEntry, "updatedAt">): void {
-    const stamp = now();
+  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: Omit<SourceIdentityCacheEntry, "updatedAt">, updatedAt = now()): void {
+    const createdAt = now();
     this.db.prepare(`
       INSERT INTO source_identity_cache (source, identity_key, status, tvdb_id, imdb_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source, identity_key) DO UPDATE SET
         status = excluded.status, tvdb_id = excluded.tvdb_id, imdb_id = excluded.imdb_id, updated_at = excluded.updated_at
-    `).run(source, identityKey, entry.status, entry.tvdbId, entry.imdbId, stamp, stamp);
+    `).run(source, identityKey, entry.status, entry.tvdbId, entry.imdbId, createdAt, updatedAt);
   }
 
   getSessionSecret(): string {

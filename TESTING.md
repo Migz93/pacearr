@@ -178,7 +178,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
-| Automatic enrollment history repair is coalesced | A batch of large new shows causes one full Plex/Tautulli history read after triage, rather than one whole-history read per enrolled series or duplicate pilot searches |
+| Automatic enrollment history repair is coalesced | A batch of large new shows causes one full Plex history read after triage, rather than one whole-history read per enrolled series or duplicate pilot searches |
 | A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
 | Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
 | Dry-run does not persist a fallback baseline | An undated dry-run response cannot suppress that series if Sonarr later supplies a post-activation `added` time in live mode |
@@ -214,6 +214,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
 | History import rejects a non-unique Sonarr external ID | A duplicate TVDB/IMDb value in Sonarr leaves the event unmatched rather than selecting whichever series appeared first |
 | History import rechecks a stale missing source identity | A cached missing Plex/Tautulli identity is revalidated after one day, allowing later metadata repairs to link the event |
+| History import stops repeated failed source identity lookups | Three consecutive Plex or Tautulli metadata failures stop further uncached lookups from that source for the current job, so a full reconciliation continues with unmatched events instead of pacing one failed request per event |
 | Recommendation refresh is cache-only | The calculation job waits for a populated library cache rather than issuing another whole-library Sonarr request |
 | A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
 | A full history reconciliation refreshes rolling progress after repairing an orphaned Plex series link | A previously unmatched Plex event can be linked by verified metadata during a full reconciliation; its viewer progress must be refreshed immediately rather than waiting for the rolling-reconcile schedule |

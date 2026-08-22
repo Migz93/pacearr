@@ -52,7 +52,9 @@ type SeriesMatchIndex = {
 };
 
 type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
+type SourceIdentityFailures = Map<"plex" | "tautulli", number>;
 const SOURCE_IDENTITY_LOOKUP_INTERVAL_MS = 1_000;
+const SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT = 3;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
@@ -1156,23 +1158,32 @@ export class PacearrServices {
   private async resolveIdentity(
     source: "plex" | "tautulli", identityKey: string,
     lookup: () => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>,
+    failures: SourceIdentityFailures,
   ) {
     const cached = this.db.getSourceIdentity(source, identityKey);
     if (cached && this.isFreshSourceIdentity(cached)) return cached;
+    if ((failures.get(source) ?? 0) >= SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT) return null;
     const throttle = this.sourceIdentityThrottles.get(source) ?? { nextLookupAt: 0, pending: Promise.resolve() };
     this.sourceIdentityThrottles.set(source, throttle);
     const resolution = throttle.pending.then(async () => {
       const refreshed = this.db.getSourceIdentity(source, identityKey);
       if (refreshed && this.isFreshSourceIdentity(refreshed)) return refreshed;
+      if ((failures.get(source) ?? 0) >= SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT) return null;
       const waitMs = Math.max(0, throttle.nextLookupAt - Date.now());
       if (waitMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
       throttle.nextLookupAt = Date.now() + SOURCE_IDENTITY_LOOKUP_INTERVAL_MS;
       try {
         const result = await lookup();
         this.db.saveSourceIdentity(source, identityKey, result);
+        failures.delete(source);
         return result;
       } catch (error) {
+        const failureCount = (failures.get(source) ?? 0) + 1;
+        failures.set(source, failureCount);
         this.logger.warn("Source identity lookup failed", { source, identityKey, error: error instanceof Error ? error.message : String(error) });
+        if (failureCount === SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT) {
+          this.logger.warn("Stopped source identity lookups for this job after repeated failures", { source, failureCount });
+        }
         return null;
       }
     });
@@ -1180,7 +1191,7 @@ export class PacearrServices {
     return resolution;
   }
 
-  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, allowTitleLookup = true): Promise<SonarrSeries | null> {
+  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, failures: SourceIdentityFailures, allowTitleLookup = true): Promise<SonarrSeries | null> {
     let identityKey: string | null = null;
     let lookup: (() => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>) | null = null;
     if (event.grandparentRatingKey) {
@@ -1194,16 +1205,16 @@ export class PacearrServices {
       lookup = () => plex.findShowGuidsByTitle(event.librarySectionId!, event.showTitle);
     }
     if (!identityKey || !lookup) return null;
-    const resolved = await this.resolveIdentity("plex", identityKey, lookup);
+    const resolved = await this.resolveIdentity("plex", identityKey, lookup, failures);
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration): Promise<SonarrSeries | null> {
+  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
     const resolved = await this.resolveIdentity("tautulli", `rating:${event.grandparentRatingKey}`, async () => {
       const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
       return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
-    });
+    }, failures);
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
@@ -1445,13 +1456,14 @@ export class PacearrServices {
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const episodeCache: EpisodeCache = new Map();
+    const identityFailures: SourceIdentityFailures = new Map();
 
     try {
       const plexEvents = await plex.getPlaybackHistory(full ? undefined : syncState.plex.backfillComplete ? withOverlap(syncState.plex.cursor) : undefined);
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
-        const series = await this.matchPlexSeries(event, seriesIndex, plex);
+        const series = await this.matchPlexSeries(event, seriesIndex, plex, identityFailures);
         prepared.push({
           input: {
             source: "plex-history",
@@ -1507,7 +1519,7 @@ export class PacearrServices {
           const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
           if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
-          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli);
+          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, identityFailures);
           prepared.push({
             input: {
               source: "tautulli",
@@ -1608,6 +1620,7 @@ export class PacearrServices {
     const plex = this.getPlex();
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
+    const identityFailures: SourceIdentityFailures = new Map();
 
     // Match every active session against the cached library first. The cache can be up
     // to ~6h stale, so a show added to Sonarr and watched within that window would
@@ -1616,10 +1629,10 @@ export class PacearrServices {
     // a show that's genuinely untracked by Sonarr then costs exactly one fetch per run,
     // same as before this cache was introduced, never more.
     const matched: Array<{ event: PlexEpisodeActivity; series: SonarrSeries | null }> = [];
-    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, false) });
+    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, identityFailures, false) });
     if (matched.some((item) => !item.series)) {
       seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
-      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, false);
+      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, identityFailures, false);
     }
 
     let changed = 0;

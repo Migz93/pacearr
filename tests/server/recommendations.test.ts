@@ -52,12 +52,13 @@ function installFetchStub(routes: {
   plexMetadataXml?: string;
   tautulliHistory?: unknown[];
   tautulliMetadata?: unknown;
-  requests?: Array<{ method: string; pathname: string; body?: string }>;
+  tautulliMetadataError?: boolean;
+  requests?: Array<{ method: string; pathname: string; search?: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
-    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
+    routes.requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, search: url.search, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
       return routes.plexHistoryXml
         ? new Response(routes.plexHistoryXml, { status: 200, headers: { "content-type": "application/xml" } })
@@ -70,6 +71,7 @@ function installFetchStub(routes: {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
     }
     if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_metadata") {
+      if (routes.tautulliMetadataError) return new Response(JSON.stringify({ response: { result: "error", message: "unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
       return jsonResponse({ response: { result: "success", data: routes.tautulliMetadata ?? {} } });
     }
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
@@ -192,10 +194,7 @@ test("history import rechecks a stale missing source identity", async () => {
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
   db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
-  db.saveSourceIdentity("tautulli", "rating:118306", { status: "missing", tvdbId: null, imdbId: null });
-  (db as unknown as { db: { prepare: (sql: string) => { run: (...values: unknown[]) => void } } }).db
-    .prepare("UPDATE source_identity_cache SET updated_at = ? WHERE source = ? AND identity_key = ?")
-    .run(new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString(), "tautulli", "rating:118306");
+  db.saveSourceIdentity("tautulli", "rating:118306", { status: "missing", tvdbId: null, imdbId: null }, new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString());
   const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
   const restoreFetch = installFetchStub({
     series: [series],
@@ -207,6 +206,38 @@ test("history import rechecks a stale missing source identity", async () => {
 
     assert.equal(result.matched, 1);
     assert.equal(db.getSourceIdentity("tautulli", "rating:118306")?.status, "resolved");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("history import stops source identity lookups after repeated metadata failures", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    requests,
+    tautulliMetadataError: true,
+    tautulliHistory: ["1", "2", "3", "4", "5"].map((grandparent_rating_key) => ({
+      reference_id: `failure-${grandparent_rating_key}`,
+      user_id: 7,
+      username: "viewer",
+      user: "Viewer",
+      grandparent_title: "Unavailable Show",
+      parent_media_index: 1,
+      media_index: 1,
+      date: 1784220000,
+      rating_key: `episode-${grandparent_rating_key}`,
+      grandparent_rating_key,
+    })),
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.unmatched, 5);
+    assert.equal(requests.filter((request) => request.search?.includes("cmd=get_metadata")).length, 3);
   } finally {
     restoreFetch();
     cleanup();

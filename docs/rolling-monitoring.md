@@ -19,7 +19,7 @@ Enrollment starts from an existing Sonarr series. Pacearr does not search for or
 When a show is enrolled:
 
 1. Pacearr creates or updates a `rolling_shows` row keyed by Sonarr series id.
-2. If history import is enabled, Pacearr performs a full verified Plex/Tautulli history read so older previously-unmatched events can be repaired before it identifies seasons retained by active viewers. Automatic new-show triage coalesces this into one read after its enrollment batch.
+2. If history import is enabled, Pacearr performs a full verified Plex/Tautulli history read so older previously unmatched events can be repaired before it identifies seasons retained by active viewers. Automatic new-show triage coalesces this into one read after its enrollment batch.
 3. If baseline application is enabled, Pacearr applies the all-season-pilot baseline only to seasons without active viewers. Retained seasons remain fully monitored.
 
 The current UI enroll action sends both `applyBaseline: true` and `importHistory: true`.

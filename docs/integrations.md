@@ -76,9 +76,9 @@ Only `episode` sessions are processed. Live sessions use the same normalization 
 
 ### Matching
 
-Pacearr associates history with Sonarr only through verified TVDB or IMDb IDs. For Plex history, it first resolves a supplied show rating key through Plex metadata. Sparse Plex history without that key may perform a library-title lookup only to find a Plex candidate; its metadata IDs must still uniquely agree with Sonarr before the event is linked. The 15-minute live-session job never performs the title lookup.
+Pacearr associates history with Sonarr only through verified TVDB or IMDb IDs. For Plex history, it first resolves a supplied show rating key through Plex metadata. Sparse Plex history without that key may perform a library-title lookup only to find a Plex candidate; its metadata IDs must still uniquely agree with Sonarr before the event is linked. The live-session job never performs the title lookup.
 
-Plex identity results are persisted by Plex rating key (or, for sparse history, library section and title), so repeated events do not repeat metadata requests. Resolved identities are revalidated after seven days, preventing a reused local-library key from becoming a permanent association; missing and ambiguous identities are rechecked after one day, so later Plex metadata repairs can link them. During a history import, new Plex identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate.
+Plex identity results are persisted by Plex rating key (or, for sparse history, library section and title), so repeated events do not repeat metadata requests. Resolved identities are revalidated after seven days, preventing a reused local-library key from becoming a permanent association; missing and ambiguous identities are rechecked after one day, so later Plex metadata repairs can link them. During a history import, new Plex identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate. After three consecutive Plex metadata failures in one job, further uncached Plex identities are left unmatched until the next job.
 
 ## Sonarr
 
@@ -146,7 +146,7 @@ cmd=get_history
 
 Tautulli events are normalised into the same `watch_events` table as Plex events.
 
-For content matching, Pacearr resolves Tautulli's `grandparent_rating_key` through `cmd=get_metadata` and uses the returned TVDB/IMDb GUIDs. Tautulli identity results are cached separately from Plex results; one source never supplies matching evidence for the other. Resolved identities are revalidated after seven days; missing and ambiguous identities are rechecked after one day. During a history import, new Tautulli identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate.
+For content matching, Pacearr resolves Tautulli's `grandparent_rating_key` through `cmd=get_metadata` and uses the returned TVDB/IMDb GUIDs. Tautulli identity results are cached separately from Plex results; one source never supplies matching evidence for the other. Resolved identities are revalidated after seven days; missing and ambiguous identities are rechecked after one day. During a history import, new Tautulli identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate. After three consecutive Tautulli metadata failures in one job, further uncached Tautulli identities are left unmatched until the next job.
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 
