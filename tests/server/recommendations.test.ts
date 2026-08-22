@@ -274,6 +274,31 @@ test("history import rechecks a reused Tautulli rating key after its connection 
   }
 });
 
+test("history import rechecks a reused Plex rating key after its connection changes", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const history = `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Gold Rush: Alaska" parentIndex="16" index="23" viewedAt="1784220000" historyKey="reused-rating-key" ratingKey="episode" grandparentRatingKey="118306" accountID="1" user="viewer"/></MediaContainer>`;
+  const metadata = '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://208111" /></Directory></MediaContainer>';
+  db.savePlexSettings({ serverUrl: "http://plex-one:32400", machineIdentifier: "plex-one", token: "first-token" });
+  const firstFetch = installFetchStub({ series: [series], plexHistoryXml: history, plexMetadataXml: metadata });
+  try {
+    await services.importHistory();
+  } finally {
+    firstFetch();
+  }
+  db.savePlexSettings({ serverUrl: "http://plex-two:32400", machineIdentifier: "plex-two", token: "second-token" });
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const secondFetch = installFetchStub({ series: [series], plexHistoryXml: history, plexMetadataXml: metadata, requests });
+  try {
+    await services.reconcileFullHistory();
+
+    assert.equal(requests.filter((request) => request.pathname === "/library/metadata/118306").length, 1);
+  } finally {
+    secondFetch();
+    cleanup();
+  }
+});
+
 test("history import batches events outside the activity window while still applying rolling logic to recent ones", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
