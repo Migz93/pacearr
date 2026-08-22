@@ -18,6 +18,7 @@ import type {
   UserShowActivity,
   UnmappedTautulliUser,
 } from "../shared/types.js";
+import crypto from "node:crypto";
 import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
@@ -252,6 +253,11 @@ export class PacearrServices {
     const settings = this.db.getPlexSettings();
     if (!settings) throw new Error("Plex is not configured.");
     return new PlexIntegration(settings, this.logger);
+  }
+
+  private sourceIdentityScope(...connectionValues: string[]): string {
+    // Cache keys must not survive an integration change, but must never persist a token.
+    return crypto.createHash("sha256").update(JSON.stringify(connectionValues)).digest("hex").slice(0, 24);
   }
 
   async discoverPlexUsers() {
@@ -1191,17 +1197,17 @@ export class PacearrServices {
     return resolution;
   }
 
-  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, failures: SourceIdentityFailures, allowTitleLookup = true): Promise<SonarrSeries | null> {
+  private async matchPlexSeries(event: PlexEpisodeActivity, index: SeriesMatchIndex, plex: PlexIntegration, identityScope: string, failures: SourceIdentityFailures, allowTitleLookup = true): Promise<SonarrSeries | null> {
     let identityKey: string | null = null;
     let lookup: (() => Promise<{ status: "resolved" | "missing" | "ambiguous"; tvdbId: number | null; imdbId: string | null }>) | null = null;
     if (event.grandparentRatingKey) {
-      identityKey = `rating:${event.grandparentRatingKey}`;
+      identityKey = `${identityScope}:rating:${event.grandparentRatingKey}`;
       lookup = async () => {
         const ids = await plex.getShowGuids(event.grandparentRatingKey!);
         return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
       };
     } else if (allowTitleLookup && event.librarySectionId) {
-      identityKey = `title:${JSON.stringify([event.librarySectionId, event.showTitle])}`;
+      identityKey = `${identityScope}:title:${JSON.stringify([event.librarySectionId, event.showTitle])}`;
       lookup = () => plex.findShowGuidsByTitle(event.librarySectionId!, event.showTitle);
     }
     if (!identityKey || !lookup) return null;
@@ -1209,9 +1215,9 @@ export class PacearrServices {
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
+  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
-    const resolved = await this.resolveIdentity("tautulli", `rating:${event.grandparentRatingKey}`, async () => {
+    const resolved = await this.resolveIdentity("tautulli", `${identityScope}:rating:${event.grandparentRatingKey}`, async () => {
       const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
       return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
     }, failures);
@@ -1450,7 +1456,10 @@ export class PacearrServices {
     // incoming history against yet.
     const sonarrSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries();
     const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
-    const plex = this.getPlex();
+    const plexSettings = this.db.getPlexSettings();
+    if (!plexSettings) throw new Error("Plex is not configured.");
+    const plex = new PlexIntegration(plexSettings, this.logger);
+    const plexIdentityScope = this.sourceIdentityScope(plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
@@ -1463,7 +1472,7 @@ export class PacearrServices {
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
-        const series = await this.matchPlexSeries(event, seriesIndex, plex, identityFailures);
+        const series = await this.matchPlexSeries(event, seriesIndex, plex, plexIdentityScope, identityFailures);
         prepared.push({
           input: {
             source: "plex-history",
@@ -1511,6 +1520,7 @@ export class PacearrServices {
     if (tautulliSettings.enabled && tautulliSettings.baseUrl && tautulliSettings.apiKey) {
       try {
         const tautulli = new TautulliIntegration(tautulliSettings, this.logger);
+        const tautulliIdentityScope = this.sourceIdentityScope(tautulliSettings.baseUrl, tautulliSettings.apiKey);
         const tautulliEvents = await tautulli.getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
@@ -1519,7 +1529,7 @@ export class PacearrServices {
           const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
           if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
-          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, identityFailures);
+          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, tautulliIdentityScope, identityFailures);
           prepared.push({
             input: {
               source: "tautulli",
@@ -1617,7 +1627,10 @@ export class PacearrServices {
     // install has no snapshot yet, so it falls back to one direct request until the
     // dedicated refresh job has populated the cache.
     let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
-    const plex = this.getPlex();
+    const plexSettings = this.db.getPlexSettings();
+    if (!plexSettings) throw new Error("Plex is not configured.");
+    const plex = new PlexIntegration(plexSettings, this.logger);
+    const plexIdentityScope = this.sourceIdentityScope(plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
     const identityFailures: SourceIdentityFailures = new Map();
@@ -1629,10 +1642,10 @@ export class PacearrServices {
     // a show that's genuinely untracked by Sonarr then costs exactly one fetch per run,
     // same as before this cache was introduced, never more.
     const matched: Array<{ event: PlexEpisodeActivity; series: SonarrSeries | null }> = [];
-    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, identityFailures, false) });
+    for (const event of events) matched.push({ event, series: await this.matchPlexSeries(event, seriesIndex, plex, plexIdentityScope, identityFailures, false) });
     if (matched.some((item) => !item.series)) {
       seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
-      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, identityFailures, false);
+      for (const item of matched) if (!item.series) item.series = await this.matchPlexSeries(item.event, seriesIndex, plex, plexIdentityScope, identityFailures, false);
     }
 
     let changed = 0;
