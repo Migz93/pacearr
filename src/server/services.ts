@@ -400,6 +400,7 @@ export class PacearrServices {
     }
 
     const errors: string[] = [];
+    const importHistory = Boolean(this.db.getPlexSettings()?.serverUrl);
     for (const item of candidates) {
       const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
       const decision = episodeCount > settings.newShowTriageEpisodeThreshold ? "enroll" : "search";
@@ -424,7 +425,7 @@ export class PacearrServices {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
             if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
-              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory });
               this.db.completeNewShowTriageEnrollment(item.id);
             } else {
               // A rolling row that Pacearr did not mark pending belongs to a manual
@@ -437,10 +438,10 @@ export class PacearrServices {
             // beginEnrollment creates the rolling-show row synchronously after its
             // series read. Mark only that established row as automatic before the
             // subsequent Sonarr mutations can partially fail.
-            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
+            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory });
             try {
               this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory });
               this.db.completeNewShowTriageEnrollment(item.id);
             } catch (error) {
               // completeEnrollment releases in its finally block; this also releases
@@ -770,12 +771,12 @@ export class PacearrServices {
 
   async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
     try {
-      let changed = this.reconcileStoredWatchEvents(series, rolling.id);
-      this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
+      let changed = 0;
       if (options.importHistory) {
-        const result = await this.importHistory();
+        const result = await this.reconcileFullHistory();
         changed += result.changed ?? 0;
       }
+      this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
       if (options.applyBaseline) {
         changed += await this.applyActiveViewerPlan(series.id, "enroll");
       }
@@ -803,18 +804,6 @@ export class PacearrServices {
       this.releaseSeriesOperation(seriesId, operation);
       throw error;
     }
-  }
-
-  private reconcileStoredWatchEvents(_series: SonarrSeries, _rollingShowId: number): number {
-    // Stored events are repaired when their source re-imports them with verified IDs.
-    // A title-only reconciliation here could silently attach the wrong series.
-    return 0;
-  }
-
-  private reconcileAllUnmatchedWatchEvents(_index: SeriesMatchIndex): number {
-    // Full history reconciliation re-fetches source events and repairs exact source IDs.
-    // Do not infer historical associations from a title-only comparison.
-    return 0;
   }
 
   // A show's history is often already associated before it is enrolled. Seed
@@ -1198,7 +1187,7 @@ export class PacearrServices {
    */
   private insertImmediateWatchEvents(
     prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }>
-  ): { imported: number; matched: number; unmatched: number; unmatchedInputs: NormalizedWatchEventInput[]; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[]; repairedUserIds: Set<number> } {
+  ): { imported: number; matched: number; unmatched: number; unmatchedInputs: NormalizedWatchEventInput[]; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[]; repairedUserIds: Set<number>; repairedSeriesCount: number } {
     const immediate = prepared.filter((item) => !item.applyRolling).map((item) => item.input);
     const rolling = prepared.filter((item) => item.applyRolling).map((item) => item.input);
     const results = this.db.insertWatchEventsBatch(immediate);
@@ -1208,6 +1197,7 @@ export class PacearrServices {
     const unmatchedInputs: NormalizedWatchEventInput[] = [];
     const duplicates: NormalizedWatchEventInput[] = [];
     const repairedUserIds = new Set<number>();
+    let repairedSeriesCount = 0;
     for (let index = 0; index < immediate.length; index++) {
       if (!results[index]!.inserted) { duplicates.push(immediate[index]!); continue; }
       imported++;
@@ -1216,10 +1206,11 @@ export class PacearrServices {
     for (const duplicate of duplicates) {
       if (duplicate.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(duplicate.source, duplicate.sourceEventId, duplicate.sonarrSeriesId)) {
         matched++;
+        repairedSeriesCount++;
         if (duplicate.userId) repairedUserIds.add(duplicate.userId);
       }
     }
-    return { imported, matched, unmatched, unmatchedInputs, rolling, duplicates, repairedUserIds };
+    return { imported, matched, unmatched, unmatchedInputs, rolling, duplicates, repairedUserIds, repairedSeriesCount };
   }
 
   private refreshRollingProgressForUsers(userIds: Iterable<number>): void {
@@ -1300,13 +1291,15 @@ export class PacearrServices {
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     if (!stored.inserted) {
+      let repaired = false;
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
+        repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
         if (rolling && input.userId && this.db.getUser(input.userId)?.enabled) {
           this.db.upsertRollingUserProgress(rolling.id, input.userId, input.seasonNumber, input.episodeNumber, input.watchedAt);
         }
       }
-      return { inserted: false, changed: false, progressUpdated: false };
+      return { inserted: false, changed: repaired, progressUpdated: false };
     }
     this.logUnmatchedWatchEvent(input);
     // Complete history is retained for audit and the History tab, but replaying
@@ -1416,7 +1409,6 @@ export class PacearrServices {
     // incoming history against yet.
     const sonarrSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries();
     const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
-    changed += this.reconcileAllUnmatchedWatchEvents(seriesIndex);
     const plex = this.getPlex();
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
@@ -1452,6 +1444,7 @@ export class PacearrServices {
       imported += counts.imported;
       matched += counts.matched;
       unmatched += counts.unmatched;
+      changed += counts.repairedSeriesCount;
       counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
       this.refreshRollingProgressForUsers(counts.repairedUserIds);
       for (const input of counts.rolling) {
@@ -1508,6 +1501,7 @@ export class PacearrServices {
         imported += counts.imported;
         matched += counts.matched;
         unmatched += counts.unmatched;
+        changed += counts.repairedSeriesCount;
         counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
         const repairedUserIds = new Set(counts.repairedUserIds);
         // A duplicate here means this exact event was already imported — most commonly
