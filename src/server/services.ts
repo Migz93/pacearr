@@ -1252,7 +1252,6 @@ export class PacearrServices {
     }
     for (const duplicate of duplicates) {
       if (duplicate.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(duplicate.source, duplicate.sourceEventId, duplicate.sonarrSeriesId)) {
-        matched++;
         repairedSeriesCount++;
         if (duplicate.userId) repairedUserIds.add(duplicate.userId);
       }

@@ -203,7 +203,9 @@ test("history import rechecks a stale missing source identity", async () => {
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
   db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
-  db.saveSourceIdentity("tautulli", `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`, { status: "missing", tvdbId: null, imdbId: null }, new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString());
+  const identityKey = `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`;
+  db.saveSourceIdentity("tautulli", identityKey, { status: "missing", tvdbId: null, imdbId: null }, new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000).toISOString());
+  assert.equal(db.getSourceIdentity("tautulli", identityKey)?.status, "missing");
   const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
   const restoreFetch = installFetchStub({
     series: [series],
@@ -214,7 +216,7 @@ test("history import rechecks a stale missing source identity", async () => {
     const result = await services.importHistory();
 
     assert.equal(result.matched, 1);
-    assert.equal(db.getSourceIdentity("tautulli", `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:118306`)?.status, "resolved");
+    assert.equal(db.getSourceIdentity("tautulli", identityKey)?.status, "resolved");
   } finally {
     restoreFetch();
     cleanup();
@@ -486,6 +488,8 @@ test("a full history reconciliation refreshes rolling progress after repairing a
     const result = await services.reconcileFullHistory();
 
     assert.equal(result.ok, true);
+    assert.equal(result.imported, 0);
+    assert.equal(result.matched, 0);
     assert.equal(result.changed, 1);
     assert.deepEqual(db.listProgressForShow(rolling.id).map((item) => ({ userId: item.userId, season: item.lastWatchedSeason, episode: item.lastWatchedEpisode })), [
       { userId: viewer!.id, season: 2, episode: 3 },
