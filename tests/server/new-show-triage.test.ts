@@ -27,12 +27,15 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; episodesBySeries?: Record<number, SonarrEpisode[]>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
+    const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
     state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
+      return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { headers: { "content-type": "application/xml" } });
+    }
     if (url.pathname === "/api/v3/series") {
       state.onSeriesFetch?.();
       return jsonResponse(state.series);
@@ -51,7 +54,8 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
       }
       return jsonResponse(current ?? {});
     }
-    if (url.pathname === "/api/v3/episode") return jsonResponse([] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episode") return jsonResponse(state.episodesBySeries?.[Number(url.searchParams.get("seriesId"))] ?? [] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episode/monitor") return jsonResponse({});
     if (url.pathname === "/api/v3/command") {
       const command = typeof init?.body === "string" ? JSON.parse(init.body) as { seriesId?: number } : {};
       if (command.seriesId && state.failingSearchSeriesIds?.has(command.seriesId)) return new Response("temporary Sonarr error", { status: 503 });
@@ -107,6 +111,39 @@ test("new-show triage enrolls a series over the episode limit instead of running
     assert.equal(db.listKnownNewShowTriageIds().has(3), true);
     assert.equal(state.series[0]?.monitored, true);
     assert.equal(state.series[0]?.monitorNewItems, "none");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage coalesces automatic enrollment history repair into one full source read", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const [viewer] = db.upsertUsers([{ plexUserId: "plex-viewer", plexAccountId: "1", tautulliUserId: null, username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const existing = { ...series(30, "Existing", 81, "2026-08-11T11:59:59.000Z"), seasons: [{ seasonNumber: 2, monitored: false }] };
+  const existingRolling = db.upsertRollingShow(existing);
+  db.upsertRollingUserProgress(existingRolling.id, viewer!.id, 2, 3, new Date().toISOString());
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state = {
+    requests,
+    series: [existing, series(31, "New large one", 81, "2026-08-11T12:00:01.000Z"), series(32, "New large two", 81, "2026-08-11T12:00:02.000Z")],
+    episodesBySeries: {
+      31: [{ id: 3101, seriesId: 31, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
+      32: [{ id: 3201, seriesId: 32, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
+    },
+  };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.ok(db.getRollingShowBySeriesId(31));
+    assert.ok(db.getRollingShowBySeriesId(32));
+    assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/command" && request.body?.includes("EpisodeSearch")).length, 2);
+    assert.deepEqual(db.getRollingShowBySeriesId(30)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
     cleanup();

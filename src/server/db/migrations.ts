@@ -373,6 +373,25 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // History sources retain their own identity evidence. A verified Plex lookup must
+    // never become evidence for a Tautulli event (or vice versa).
+    version: 21,
+    up(db) {
+      db.exec(`
+        CREATE TABLE source_identity_cache (
+          source TEXT NOT NULL CHECK(source IN ('plex', 'tautulli')),
+          identity_key TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('resolved', 'missing', 'ambiguous')),
+          tvdb_id INTEGER,
+          imdb_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (source, identity_key)
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

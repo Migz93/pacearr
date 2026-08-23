@@ -18,6 +18,8 @@ export interface TautulliHistoryRecord {
   raw: unknown;
 }
 
+export type ExternalIds = { tvdbId: number | null; imdbId: string | null };
+
 export class TautulliIntegration {
   constructor(private readonly settings: TautulliSettings, private readonly logger: Logger) {}
 
@@ -47,6 +49,21 @@ export class TautulliIntegration {
       this.logger.warn("Tautulli connection test failed", { error: error instanceof Error ? error.message : String(error) });
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  async getShowGuids(ratingKey: string): Promise<ExternalIds> {
+    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey });
+    const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];
+    let tvdbId: number | null = null;
+    let imdbId: string | null = null;
+    for (const guid of guids) {
+      const value = String(guid ?? "");
+      const tvdb = value.match(/(?:tvdb|thetvdb):\/\/(\d+)|tvdb:(\d+)/i);
+      if (!tvdbId && tvdb) tvdbId = Number(tvdb[1] ?? tvdb[2]);
+      const imdb = value.match(/imdb:\/\/(tt\d+)|imdb:(tt\d+)/i);
+      if (!imdbId && imdb) imdbId = imdb[1] ?? imdb[2];
+    }
+    return { tvdbId, imdbId };
   }
 
   async getHistory(since?: string): Promise<TautulliHistoryRecord[]> {
