@@ -120,10 +120,15 @@ test("new-show triage enrolls a series over the episode limit instead of running
 test("new-show triage coalesces automatic enrollment history repair into one full source read", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const [viewer] = db.upsertUsers([{ plexUserId: "plex-viewer", plexAccountId: "1", tautulliUserId: null, username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const existing = { ...series(30, "Existing", 81, "2026-08-11T11:59:59.000Z"), seasons: [{ seasonNumber: 2, monitored: false }] };
+  const existingRolling = db.upsertRollingShow(existing);
+  db.upsertRollingUserProgress(existingRolling.id, viewer!.id, 2, 3, new Date().toISOString());
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
   const state = {
     requests,
-    series: [series(31, "New large one", 81, "2026-08-11T12:00:01.000Z"), series(32, "New large two", 81, "2026-08-11T12:00:02.000Z")],
+    series: [existing, series(31, "New large one", 81, "2026-08-11T12:00:01.000Z"), series(32, "New large two", 81, "2026-08-11T12:00:02.000Z")],
     episodesBySeries: {
       31: [{ id: 3101, seriesId: 31, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
       32: [{ id: 3201, seriesId: 32, seasonNumber: 1, episodeNumber: 1, monitored: false, hasFile: false }],
@@ -138,6 +143,7 @@ test("new-show triage coalesces automatic enrollment history repair into one ful
     assert.ok(db.getRollingShowBySeriesId(32));
     assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command" && request.body?.includes("EpisodeSearch")).length, 2);
+    assert.deepEqual(db.getRollingShowBySeriesId(30)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
     cleanup();

@@ -488,7 +488,7 @@ export class PacearrServices {
     }
     if (repairHistoryAfterTriage && automaticallyEnrolledSeriesIds.size > 0) {
       try {
-        await this.reconcileFullHistory();
+        await this.reconcileFullHistory({ reconcileActiveProgress: true });
         for (const seriesId of automaticallyEnrolledSeriesIds) {
           const rolling = this.db.getRollingShowBySeriesId(seriesId);
           if (!rolling) continue;
@@ -1601,8 +1601,8 @@ export class PacearrServices {
     }
 
     // Dry-run records watch events but intentionally does not persist Sonarr
-    // expansion state. Reconcile from active progress so enabling live mode
-    // later still expands seasons whose original events are now duplicates.
+    // expansion state. Routine full reconciliations only repair history, while
+    // enrollment-controlled full reads opt in so active progress is applied immediately.
     if (!full || options.reconcileActiveProgress) for (const rolling of this.db.listRollingShows()) {
       const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
       if (operation === null) continue;
