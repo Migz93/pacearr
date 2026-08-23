@@ -672,9 +672,13 @@ test("enrolling a show seeds rolling progress from watch history that was alread
 test("enrollment repairs and seeds previously unmatched history with a full verified source read", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
   const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null }]);
   db.updateUser(user.id, { enabled: true });
   const fringe: SonarrSeries = { id: 802, title: "Fringe", tvdbId: 82066, year: 2008, seasons: [] };
+  const other: SonarrSeries = { id: 803, title: "Other Show", tvdbId: 82067, seasons: [{ seasonNumber: 2, monitored: false }] };
+  const otherRolling = db.upsertRollingShow(other);
+  db.upsertRollingUserProgress(otherRolling.id, user.id, 2, 3, new Date().toISOString());
   db.insertWatchEvent({
     source: "plex-history", sourceEventId: "pre-enrollment-orphan", userId: user.id, plexAccountId: "1", username: "bob",
     sonarrSeriesId: null, showTitle: "Fringe", seasonNumber: 2, episodeNumber: 4,
@@ -682,7 +686,7 @@ test("enrollment repairs and seeds previously unmatched history with a full veri
   });
   const viewedAt = Math.floor(new Date("2026-04-05T10:00:00.000Z").getTime() / 1000);
   const restoreFetch = installFetchStub({
-    series: [fringe], seriesById: { 802: fringe },
+    series: [fringe, other], seriesById: { 802: fringe, 803: other },
     plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" historyKey="pre-enrollment-orphan" grandparentTitle="Fringe" parentIndex="2" index="4" viewedAt="${viewedAt}" grandparentRatingKey="fringe-show" accountID="1" user="bob"/></MediaContainer>`,
     plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://82066" /></Directory></MediaContainer>',
   });
@@ -690,10 +694,11 @@ test("enrollment repairs and seeds previously unmatched history with a full veri
     const result = await services.enrollShow(802, { applyBaseline: false, importHistory: true });
 
     assert.equal(result.ok, true);
-    assert.equal(result.changed, 1);
+    assert.equal(result.changed, 2);
     assert.deepEqual(db.listProgressForShow(db.getRollingShowBySeriesId(802)!.id).map((item) => ({ userId: item.userId, season: item.lastWatchedSeason, episode: item.lastWatchedEpisode })), [
       { userId: user.id, season: 2, episode: 4 },
     ]);
+    assert.deepEqual(db.getRollingShowBySeriesId(803)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
     cleanup();

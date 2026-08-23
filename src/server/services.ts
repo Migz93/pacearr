@@ -820,7 +820,7 @@ export class PacearrServices {
     try {
       let changed = 0;
       if (options.importHistory) {
-        const result = await this.reconcileFullHistory();
+        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
         changed += result.changed ?? 0;
       }
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
@@ -1450,7 +1450,7 @@ export class PacearrServices {
       .sort((a, b) => a - b);
   }
 
-  async importHistory(options: { full?: boolean } = {}): Promise<RunResult> {
+  async importHistory(options: { full?: boolean; reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
     const full = options.full === true;
     this.logger.info(full ? "Full history reconciliation started" : "History import started");
     const errors: string[] = [];
@@ -1603,7 +1603,7 @@ export class PacearrServices {
     // Dry-run records watch events but intentionally does not persist Sonarr
     // expansion state. Reconcile from active progress so enabling live mode
     // later still expands seasons whose original events are now duplicates.
-    if (!full) for (const rolling of this.db.listRollingShows()) {
+    if (!full || options.reconcileActiveProgress) for (const rolling of this.db.listRollingShows()) {
       const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
       if (operation === null) continue;
       try {
@@ -1624,8 +1624,8 @@ export class PacearrServices {
     return { ok: errors.length === 0, message: full ? `Reconciled ${processed} history events.` : `Imported ${processed} history events.`, processed, fetched: processed, imported, matched, unmatched, changed, errors };
   }
 
-  async reconcileFullHistory(): Promise<RunResult> {
-    return this.importHistory({ full: true });
+  async reconcileFullHistory(options: { reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
+    return this.importHistory({ full: true, ...options });
   }
 
   async checkSessions(): Promise<RunResult> {
