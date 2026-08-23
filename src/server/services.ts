@@ -158,6 +158,7 @@ export class PacearrServices {
   /** Serializes all Sonarr and rolling-state mutations for an individual series. */
   private readonly activeSeriesOperations = new Map<number, number>();
   private readonly sourceIdentityThrottles = new Map<"plex" | "tautulli", ResolutionThrottle>();
+  private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", { configuration: string; scope: string }>();
   private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
@@ -255,9 +256,14 @@ export class PacearrServices {
     return new PlexIntegration(settings, this.logger);
   }
 
-  private sourceIdentityScope(...connectionValues: string[]): string {
+  private sourceIdentityScope(source: "plex" | "tautulli", ...connectionValues: string[]): string {
     // Cache keys must not survive an integration change, but must never persist a token.
-    return crypto.scryptSync(JSON.stringify(connectionValues), this.db.getSessionSecret(), 16).toString("hex");
+    const configuration = JSON.stringify(connectionValues);
+    const cached = this.sourceIdentityScopes.get(source);
+    if (cached?.configuration === configuration) return cached.scope;
+    const scope = crypto.scryptSync(configuration, this.db.getSessionSecret(), 16).toString("hex");
+    this.sourceIdentityScopes.set(source, { configuration, scope });
+    return scope;
   }
 
   async discoverPlexUsers() {
@@ -1458,7 +1464,7 @@ export class PacearrServices {
     const plexSettings = this.db.getPlexSettings();
     if (!plexSettings) throw new Error("Plex is not configured.");
     const plex = new PlexIntegration(plexSettings, this.logger);
-    const plexIdentityScope = this.sourceIdentityScope(plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
+    const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
@@ -1519,7 +1525,7 @@ export class PacearrServices {
     if (tautulliSettings.enabled && tautulliSettings.baseUrl && tautulliSettings.apiKey) {
       try {
         const tautulli = new TautulliIntegration(tautulliSettings, this.logger);
-        const tautulliIdentityScope = this.sourceIdentityScope(tautulliSettings.baseUrl, tautulliSettings.apiKey);
+        const tautulliIdentityScope = this.sourceIdentityScope("tautulli", tautulliSettings.baseUrl, tautulliSettings.apiKey);
         const tautulliEvents = await tautulli.getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
@@ -1629,7 +1635,7 @@ export class PacearrServices {
     const plexSettings = this.db.getPlexSettings();
     if (!plexSettings) throw new Error("Plex is not configured.");
     const plex = new PlexIntegration(plexSettings, this.logger);
-    const plexIdentityScope = this.sourceIdentityScope(plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
+    const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
     const identityFailures: SourceIdentityFailures = new Map();
