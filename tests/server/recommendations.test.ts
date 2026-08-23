@@ -174,6 +174,29 @@ test("Tautulli history resolves through its own rating-key metadata, not its tit
   }
 });
 
+test("history import continues with Tautulli when Plex is not configured", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const restoreFetch = installFetchStub({
+    series: [series],
+    tautulliHistory: [{ reference_id: "tautulli-without-plex", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" }],
+    tautulliMetadata: { guids: ["tvdb://208111"] },
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.ok, false);
+    assert.equal(result.matched, 1);
+    assert.match(result.errors?.[0] ?? "", /Plex is not configured/);
+    assert.equal(db.listHistory(1)[0]?.action, "history.import");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("history import rejects a non-unique Sonarr external ID", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });

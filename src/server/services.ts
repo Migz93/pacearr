@@ -1465,9 +1465,6 @@ export class PacearrServices {
     const sonarrSeries = this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries();
     const seriesIndex = this.buildSeriesMatchIndex(sonarrSeries);
     const plexSettings = this.db.getPlexSettings();
-    if (!plexSettings) throw new Error("Plex is not configured.");
-    const plex = new PlexIntegration(plexSettings, this.logger);
-    const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
@@ -1476,6 +1473,9 @@ export class PacearrServices {
     const identityFailures: SourceIdentityFailures = new Map();
 
     try {
+      if (!plexSettings) throw new Error("Plex is not configured.");
+      const plex = new PlexIntegration(plexSettings, this.logger);
+      const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
       const plexEvents = await plex.getPlaybackHistory(full ? undefined : syncState.plex.backfillComplete ? withOverlap(syncState.plex.cursor) : undefined);
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
