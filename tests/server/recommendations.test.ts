@@ -268,6 +268,7 @@ test("history import rechecks a reused Tautulli rating key after its connection 
     firstFetch();
   }
   db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli-two:8181", apiKey: "second-secret" });
+  services.invalidateSourceIdentityScope("tautulli");
   const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
   const secondFetch = installFetchStub({ series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://208111"] }, requests });
   try {
@@ -293,6 +294,7 @@ test("history import rechecks a reused Plex rating key after its connection chan
     firstFetch();
   }
   db.savePlexSettings({ serverUrl: "http://plex-two:32400", machineIdentifier: "plex-two", token: "second-token" });
+  services.invalidateSourceIdentityScope("plex");
   const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
   const secondFetch = installFetchStub({ series: [series], plexHistoryXml: history, plexMetadataXml: metadata, requests });
   try {

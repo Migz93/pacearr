@@ -158,7 +158,7 @@ export class PacearrServices {
   /** Serializes all Sonarr and rolling-state mutations for an individual series. */
   private readonly activeSeriesOperations = new Map<number, number>();
   private readonly sourceIdentityThrottles = new Map<"plex" | "tautulli", ResolutionThrottle>();
-  private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", { configuration: string; scope: string }>();
+  private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", string>();
   private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
@@ -258,12 +258,15 @@ export class PacearrServices {
 
   private sourceIdentityScope(source: "plex" | "tautulli", ...connectionValues: string[]): string {
     // Cache keys must not survive an integration change, but must never persist a token.
-    const configuration = JSON.stringify(connectionValues);
     const cached = this.sourceIdentityScopes.get(source);
-    if (cached?.configuration === configuration) return cached.scope;
-    const scope = crypto.scryptSync(configuration, this.db.getSessionSecret(), 16).toString("hex");
-    this.sourceIdentityScopes.set(source, { configuration, scope });
+    if (cached) return cached;
+    const scope = crypto.scryptSync(JSON.stringify(connectionValues), this.db.getSessionSecret(), 16).toString("hex");
+    this.sourceIdentityScopes.set(source, scope);
     return scope;
+  }
+
+  invalidateSourceIdentityScope(source: "plex" | "tautulli"): void {
+    this.sourceIdentityScopes.delete(source);
   }
 
   async discoverPlexUsers() {
