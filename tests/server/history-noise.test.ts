@@ -176,7 +176,9 @@ test("a dry-run session check expands an unexpanded season only once", async () 
     db.upsertUsers([
       { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
       { plexUserId: "plex-ivy", plexAccountId: "43", tautulliUserId: null, username: "ivy", displayName: "Ivy", avatarUrl: null },
-    ]).forEach((user) => db.updateUser(user.id, { enabled: true }));
+    ]).forEach((user) => {
+      db.updateUser(user.id, { enabled: true });
+    });
     const wire: SonarrSeries = { id: 32, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
     db.upsertRollingShow(wire);
 
