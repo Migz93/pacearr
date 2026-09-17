@@ -126,7 +126,7 @@ test("a session check that only advances a viewer's progress, without expanding 
   }
 });
 
-test("a session check expands an unexpanded season when playback begins after episode 1", async () => {
+test("a session check expands and searches an unexpanded season when playback begins after episode 1", async () => {
   const { db, services, cleanup } = createHarness();
   let restoreFetch = () => {};
   try {
