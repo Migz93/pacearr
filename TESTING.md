@@ -105,6 +105,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | A session check that moved nobody's progress records no history event | `session-check` can run once a minute; an unconditional entry buried History under "processed 0, changed 0" rows. The run is still logged |
 | A session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event | `processWatchEvent` can persist a `rolling_show_users` update while returning `changed: false` (no premiere, or `earlyPrefetchEnabled` is off) — the audit-log gate must also react to `progressUpdated`, not just `changed`, or a genuine progress move goes unlogged |
+| A session check expands and searches an unexpanded season when playback begins after episode 1 | A missed Plex notification for a season premiere must not leave the remaining episodes unmonitored or unsearched when the next observed playback event is later in that season |
+| A dry-run session check expands an unexpanded season only once | Multiple viewers observed in the same unexpanded season must not create duplicate dry-run expansion history entries when dry-run intentionally leaves persisted expansion state unchanged |
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 | A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 
@@ -210,6 +212,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
 | History import continues with Tautulli when Plex is not configured | A Plex configuration error is reported and audited without preventing configured Tautulli history from importing |
