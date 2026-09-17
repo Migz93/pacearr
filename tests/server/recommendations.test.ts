@@ -441,6 +441,47 @@ test("history import batches events outside the activity window while still appl
   }
 });
 
+test("a dry-run history import expands an unexpanded season only once", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const [user] = db.upsertUsers([{ plexUserId: "plex-dry-run", plexAccountId: "1", tautulliUserId: null, username: "dryrunuser", displayName: "Dry Run User", avatarUrl: null }]);
+  db.updateUser(user!.id, { enabled: true });
+
+  const series: SonarrSeries = {
+    id: 951,
+    title: "Dry Run History Test",
+    tvdbId: 9510,
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 2, monitored: false }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9511, seriesId: 951, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true, episodeFileId: 95101 },
+    { id: 9512, seriesId: 951, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: true, episodeFileId: 95102 },
+  ];
+  db.upsertRollingShow(series);
+
+  const watchedAt = Math.floor(Date.now() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series],
+    seriesById: { 951: series },
+    episodesBySeries: { 951: episodes },
+    episodeFilesBySeries: { 951: [] },
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Dry Run History Test" parentIndex="2" index="2" viewedAt="${watchedAt}" historyKey="dry-run-history" grandparentRatingKey="dry-run-show" accountID="1" user="dryrunuser"/></MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://9510" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.changed, 1);
+    assert.deepEqual(db.getRollingShowBySeriesId(951)?.expandedSeasons, []);
+    assert.equal(db.listHistory(20).filter((entry) => entry.action === "dry_run.sonarr.expand_season").length, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("a full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });

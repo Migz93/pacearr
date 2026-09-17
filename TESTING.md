@@ -212,6 +212,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
 | History import continues with Tautulli when Plex is not configured | A Plex configuration error is reported and audited without preventing configured Tautulli history from importing |

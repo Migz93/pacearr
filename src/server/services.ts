@@ -1613,10 +1613,15 @@ export class PacearrServices {
       try {
         const retainedSeasons = this.getActiveRetainedSeasons(rolling.id);
         for (const seasonNumber of retainedSeasons.filter((season) => !rolling.expandedSeasons.includes(season))) {
+          const expansionKey = `${rolling.id}:${seasonNumber}`;
+          if (this.isDryRun() && dryRunExpandedSeasons.has(expansionKey)) continue;
           const progress = this.db.listProgressForShow(rolling.id)
             .filter((item) => item.lastWatchedSeason === seasonNumber)
             .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt))[0];
-          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile", episodeCache)) changed++;
+          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile", episodeCache)) {
+            if (this.isDryRun()) dryRunExpandedSeasons.add(expansionKey);
+            changed++;
+          }
         }
       } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
     }
