@@ -1343,7 +1343,7 @@ export class PacearrServices {
     return true;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     if (!stored.inserted) {
       let repaired = false;
@@ -1373,8 +1373,11 @@ export class PacearrServices {
     if (operation === null) return { inserted: true, changed: false, progressUpdated: true };
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
-      if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber)) {
-        return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache), progressUpdated: true };
+      const expansionKey = `${rolling.id}:${input.seasonNumber}`;
+      if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
+        const changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
+        if (changed && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
+        return { inserted: true, changed, progressUpdated: true };
       }
       return {
         inserted: true,
@@ -1470,6 +1473,7 @@ export class PacearrServices {
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const episodeCache: EpisodeCache = new Map();
+    const dryRunExpandedSeasons = new Set<string>();
     const identityFailures: SourceIdentityFailures = new Map();
 
     try {
@@ -1507,7 +1511,7 @@ export class PacearrServices {
       counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
       this.refreshRollingProgressForUsers(counts.repairedUserIds);
       for (const input of counts.rolling) {
-        const result = await this.processWatchEvent(input, "plex-history", true, episodeCache);
+        const result = await this.processWatchEvent(input, "plex-history", true, episodeCache, dryRunExpandedSeasons);
         if (result.inserted) {
           imported++;
           if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
@@ -1575,7 +1579,7 @@ export class PacearrServices {
           }
         }
         for (const input of counts.rolling) {
-          const result = await this.processWatchEvent(input, "tautulli", true, episodeCache);
+          const result = await this.processWatchEvent(input, "tautulli", true, episodeCache, dryRunExpandedSeasons);
           if (result.inserted) {
             imported++;
             if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
@@ -1641,6 +1645,7 @@ export class PacearrServices {
     const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
+    const dryRunExpandedSeasons = new Set<string>();
     const identityFailures: SourceIdentityFailures = new Map();
 
     // Match every active session against the cached library first. The cache can be up
@@ -1672,7 +1677,7 @@ export class PacearrServices {
         episodeNumber: event.episodeNumber,
         watchedAt: event.watchedAt,
         rawPayload: event.raw,
-      }, "plex-session", true, episodeCache);
+      }, "plex-session", true, episodeCache, dryRunExpandedSeasons);
       if (result.changed) changed++;
       if (result.progressUpdated) progressUpdated = true;
     }
