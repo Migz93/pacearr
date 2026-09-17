@@ -105,6 +105,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | A session check that moved nobody's progress records no history event | `session-check` can run once a minute; an unconditional entry buried History under "processed 0, changed 0" rows. The run is still logged |
 | A session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event | `processWatchEvent` can persist a `rolling_show_users` update while returning `changed: false` (no premiere, or `earlyPrefetchEnabled` is off) — the audit-log gate must also react to `progressUpdated`, not just `changed`, or a genuine progress move goes unlogged |
+| A session check expands an unexpanded season when playback begins after episode 1 | A missed Plex notification for a season premiere must not leave the remaining episodes unmonitored when the next observed playback event is later in that season |
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 | A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 

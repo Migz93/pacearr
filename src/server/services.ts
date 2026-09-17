@@ -1373,7 +1373,7 @@ export class PacearrServices {
     if (operation === null) return { inserted: true, changed: false, progressUpdated: true };
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
-      if (input.episodeNumber === 1 && input.seasonNumber > 0) {
+      if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber)) {
         return { inserted: true, changed: await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache), progressUpdated: true };
       }
       return {

@@ -8,6 +8,7 @@ import { ImageCacheService } from "../../src/server/image-cache.js";
 import { PacearrServices } from "../../src/server/services.js";
 import type { Logger } from "../../src/server/logger.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
+import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
 
 /**
  * History is the audit log the user reads, not a heartbeat. The session-check job can run
@@ -98,11 +99,11 @@ test("a session check that only advances a viewer's progress, without expanding 
     ]);
     const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
     db.updateAppSettings({ earlyPrefetchEnabled: false });
+    db.markSeasonExpanded(wire.id, 1, new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
     // A watch of episode 2 already resolves at a newer timestamp than this seed, so
-    // upsertRollingUserProgress persists a change. It isn't a premiere (skips
-    // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason
-    // before it ever calls Sonarr), so processWatchEvent reports changed: false even
-    // though a viewer's progress genuinely moved.
+    // upsertRollingUserProgress persists a change. The season is already expanded and
+    // early prefetch is off, so processWatchEvent reports changed: false even though a
+    // viewer's progress genuinely moved.
     db.upsertRollingUserProgress(wire.id, gina.id, 1, 1, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
     const sessionsXml = `<?xml version="1.0"?>
@@ -118,6 +119,45 @@ test("a session check that only advances a viewer's progress, without expanding 
     const history = db.listHistory(10);
     assert.equal(history.length, 1);
     assert.equal(history[0]!.action, "sessions.check");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a session check expands an unexpanded season when playback begins after episode 1", async () => {
+  const { db, services, cleanup } = createHarness();
+  let restoreFetch = () => {};
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const [gina] = db.upsertUsers([
+      { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
+    ]);
+    db.updateUser(gina!.id, { enabled: true });
+    const wire: SonarrSeries = { id: 31, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
+    db.upsertRollingShow(wire);
+
+    const sessionsXml = `<?xml version="1.0"?>
+    <MediaContainer size="1">
+      <Video type="episode" sessionKey="2" ratingKey="101" grandparentRatingKey="11" grandparentTitle="The Wire" parentIndex="2" index="2">
+        <User id="42" title="gina" />
+      </Video>
+    </MediaContainer>`;
+    const episodes: SonarrEpisode[] = [
+      { id: 311, seriesId: 31, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true },
+      { id: 312, seriesId: 31, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: true },
+    ];
+    restoreFetch = installFetchStub(sessionsXml, {
+      seriesJson: JSON.stringify([wire]),
+      seriesByIdJson: { 31: JSON.stringify(wire) },
+      episodesBySeriesJson: { 31: JSON.stringify(episodes) },
+      plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://81189" /></Directory></MediaContainer>',
+    });
+
+    const result = await services.checkSessions();
+
+    assert.equal(result.changed, 1);
+    assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
     cleanup();
