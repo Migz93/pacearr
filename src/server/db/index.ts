@@ -887,23 +887,24 @@ export class PacearrDatabase {
 
   replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): number {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), now(), rollingShowId);
-    // Prefetch records only represent individually retained episodes in an
-    // otherwise unexpanded season. Reconciliation can promote a season from
-    // stored viewer progress without passing through markSeasonExpanded.
-    const clearPrefetched = this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ?");
-    const clearedPrefetchedEpisodes = this.db.transaction(() =>
-      expanded.reduce((count, seasonNumber) => count + clearPrefetched.run(rollingShowId, seasonNumber).changes, 0)
-    )();
-    if (expanded.length === 0) {
-      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
-    } else {
-      this.db.prepare(`DELETE FROM rolling_season_inactivity
-        WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
-        .run(rollingShowId, ...expanded);
-    }
-    return clearedPrefetchedEpisodes;
+    return this.db.transaction(() => {
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), now(), rollingShowId);
+      // Prefetch records only represent individually retained episodes in an
+      // otherwise unexpanded season. Reconciliation can promote a season from
+      // stored viewer progress without passing through markSeasonExpanded.
+      const clearPrefetched = this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ?");
+      const clearedPrefetchedEpisodes = expanded.reduce((count, seasonNumber) =>
+        count + clearPrefetched.run(rollingShowId, seasonNumber).changes, 0);
+      if (expanded.length === 0) {
+        this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+      } else {
+        this.db.prepare(`DELETE FROM rolling_season_inactivity
+          WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
+          .run(rollingShowId, ...expanded);
+      }
+      return clearedPrefetchedEpisodes;
+    })();
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
