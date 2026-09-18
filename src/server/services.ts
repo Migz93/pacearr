@@ -183,10 +183,10 @@ export class PacearrServices {
     return this.sessionMonitor.getStatus().mode === "live";
   }
 
-  private getSonarr() {
+  private getSonarr(dryRun = this.db.getAppSettings().dryRun) {
     const settings = this.db.getSonarrSettings();
     if (!settings) throw new Error("Sonarr is not configured.");
-    return new SonarrIntegration(settings, this.logger, this.db.getAppSettings().dryRun);
+    return new SonarrIntegration(settings, this.logger, dryRun);
   }
 
   private isDryRun() {
@@ -1003,10 +1003,10 @@ export class PacearrServices {
   }
 
   private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
-    const sonarr = this.getSonarr();
+    const settings = this.db.getAppSettings();
+    const sonarr = this.getSonarr(settings.dryRun);
     const series = await sonarr.getSeriesById(seriesId);
     const episodes = await sonarr.getEpisodes(seriesId);
-    const settings = this.db.getAppSettings();
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
     const excludedPrefetched = new Set(excludedPrefetchedSeasons);
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
@@ -1075,7 +1075,30 @@ export class PacearrServices {
     for (const seasonNumber of seasonSearches) {
       await sonarr.searchSeason(seriesId, seasonNumber);
     }
-    const dryRun = this.isDryRun();
+    const dryRun = settings.dryRun;
+    const clearedPrefetchedSeasons = !dryRun && rolling
+      ? [...new Set(this.db.listPrefetchedEpisodes(rolling.id)
+        .filter((prefetched) => plan.retainedSeasons.includes(prefetched.seasonNumber))
+        .map((prefetched) => prefetched.seasonNumber))].sort((a, b) => a - b)
+      : [];
+    const clearedPrefetchedEpisodes = !dryRun && rolling
+      ? this.db.replaceExpandedSeasons(rolling.id, plan.retainedSeasons)
+      : 0;
+    if (clearedPrefetchedEpisodes > 0 && rolling) {
+      this.db.addHistory("info", "cleanup.prefetch", rolling.title, {
+        seasonNumbers: clearedPrefetchedSeasons,
+        clearedPrefetchedEpisodes,
+        reason: "expanded-retention",
+      });
+      this.logger.info("Prefetch records cleared for fully retained seasons", {
+        rollingShowId: rolling.id,
+        seriesId,
+        title: rolling.title,
+        seasonNumbers: clearedPrefetchedSeasons,
+        clearedPrefetchedEpisodes,
+        reason,
+      });
+    }
     // The six-hourly reconcile calls this for every enrolled show, so recording it
     // unconditionally wrote one "Baseline set" row per show per run — the same
     // heartbeat-in-the-audit-log problem as sessions.check. Enrolment and manual resets
@@ -1087,7 +1110,8 @@ export class PacearrServices {
       updates.length > 0 ||
       plan.filesToDelete.length > 0 ||
       seasonSearches.length > 0 ||
-      (searchAllPilots && plan.pilotSearches.length > 0);
+      (searchAllPilots && plan.pilotSearches.length > 0) ||
+      clearedPrefetchedEpisodes > 0;
     if (reason !== "scheduled-reconcile" || changedSomething) {
       this.db.addHistory("info", dryRun ? "dry_run.sonarr.baseline" : "sonarr.baseline", series.title, {
         reason,
@@ -1100,12 +1124,12 @@ export class PacearrServices {
         deletedFiles: plan.filesToDelete.length,
         reclaimedBytes,
         cleanupEpisodes,
+        clearedPrefetchedEpisodes,
       });
     }
-    if (!dryRun && rolling) this.db.replaceExpandedSeasons(rolling.id, plan.retainedSeasons);
     if (rolling) await this.syncPlexArtwork(series, rolling, plan.retainedSeasons);
-    this.logger.info("Sonarr monitoring plan complete", { seriesId, title: series.title, reason, dryRun, changed: updates.length + plan.filesToDelete.length });
-    return updates.length + plan.filesToDelete.length;
+    this.logger.info("Sonarr monitoring plan complete", { seriesId, title: series.title, reason, dryRun, changed: updates.length + plan.filesToDelete.length + clearedPrefetchedEpisodes });
+    return updates.length + plan.filesToDelete.length + clearedPrefetchedEpisodes;
   }
 
   async expandSeason(seriesId: number, seasonNumber: number, watchedAt: string, source: string, episodeCache?: EpisodeCache): Promise<boolean> {

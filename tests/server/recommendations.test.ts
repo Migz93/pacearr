@@ -894,6 +894,45 @@ test("dry-run expansion does not clear existing prefetch targets", async () => {
   }
 });
 
+test("scheduled reconciliation clears prefetch records when active progress retains their season", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 909,
+    title: "Reconciled Prefetch",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 2, monitored: false }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9091, seriesId: 909, seasonNumber: 2, episodeNumber: 1, monitored: true, hasFile: true },
+    { id: 9092, seriesId: 909, seasonNumber: 2, episodeNumber: 2, monitored: true, hasFile: true },
+    { id: 9093, seriesId: 909, seasonNumber: 2, episodeNumber: 3, monitored: true, hasFile: true },
+  ];
+  const restoreFetch = installFetchStub({ seriesById: { 909: series }, episodesBySeries: { 909: episodes } });
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const [user] = db.upsertUsers([{ plexUserId: "plex-reconciled", plexAccountId: "reconciled", tautulliUserId: null, username: "reconciled", displayName: "Reconciled", avatarUrl: null }]);
+    db.updateUser(user.id, { enabled: true });
+    const rolling = db.upsertRollingShow({ id: 909, title: series.title });
+    db.recordPrefetchedEpisodes(rolling.id, user.id, 2, [2, 3], "2026-08-03T10:00:00.000Z");
+    db.upsertRollingUserProgress(rolling.id, user.id, 2, 3, new Date().toISOString());
+
+    const result = await services.reconcileRollingShows();
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [2]);
+    assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(db.listHistory(10).some((entry) => {
+      if (entry.action !== "cleanup.prefetch") return false;
+      const details = JSON.parse(entry.details);
+      return details.reason === "expanded-retention" && details.clearedPrefetchedEpisodes === 2 && JSON.stringify(details.seasonNumbers) === "[2]";
+    }), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("scheduled reconciliation reclaims stale prefetches that no active viewer needs", async () => {
   const { db, services, cleanup } = createHarness();
   const series: SonarrSeries = {
