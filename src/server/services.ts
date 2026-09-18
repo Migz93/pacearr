@@ -1766,6 +1766,7 @@ export class PacearrServices {
       if (result.changed) changed++;
       if (!result.inserted && user && this.db.repairUnmatchedWatchEventUser("tautulli-session", event.referenceId, user.id)) {
         this.refreshRollingProgressForUsers([user.id]);
+        changed++;
         progressUpdated = true;
       }
       if (result.progressUpdated) progressUpdated = true;

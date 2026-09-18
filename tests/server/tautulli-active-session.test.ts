@@ -35,13 +35,14 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
     { id: 312, seriesId: 31, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: false },
   ];
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  let sessionKey = "session-2";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     requests.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "tautulli") {
       const command = url.searchParams.get("cmd");
       if (command === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
-        media_type: "episode", session_key: "session-2", user_id: "tautulli-gina", username: "gina", user: "Gina",
+        media_type: "episode", session_key: sessionKey, user_id: "tautulli-gina", username: "gina", user: "Gina",
         grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: "101", parent_media_index: 2, media_index: 2, started: 1700000000,
       }] } } }), { status: 200, headers: { "content-type": "application/json" } });
       if (command === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: ["tvdb://81189"] } } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -67,6 +68,17 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
     assert.equal(db.countWatchEvents(), 1);
     assert.equal(db.getLatestWatchEventAt("tautulli"), null);
     assert.equal(requests.filter((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 2 })).length, 1);
+
+    // An active event can arrive before its Tautulli identity is mapped. A later poll
+    // repairs that row in place; it is a real job change, even though it is a duplicate.
+    sessionKey = "session-3";
+    db.insertWatchEvent({
+      source: "tautulli-session", sourceEventId: "activity:session-3:101:1700000000", userId: null,
+      plexAccountId: null, username: "gina", sonarrSeriesId: 31, showTitle: "The Wire",
+      seasonNumber: 2, episodeNumber: 2, watchedAt: "2023-11-14T22:13:20.000Z", rawPayload: {},
+    });
+    const repaired = await services.checkTautulliActiveSessions();
+    assert.equal(repaired.changed, 1);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();
