@@ -889,6 +889,10 @@ export class PacearrDatabase {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
+    // Prefetch records only represent individually retained episodes in an
+    // otherwise unexpanded season. Reconciliation can promote a season from
+    // stored viewer progress without passing through markSeasonExpanded.
+    for (const seasonNumber of expanded) this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
     if (expanded.length === 0) {
       this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
     } else {
