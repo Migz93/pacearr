@@ -51,3 +51,44 @@ test("getHistory maps Tautulli's username and user fields independently, not col
     globalThis.fetch = originalFetch;
   }
 });
+
+test("getActiveSessions parses episode activity and uses an activity-only stable event key", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    response: {
+      result: "success",
+      data: {
+        sessions: [{
+          media_type: "episode",
+          session_key: "session-42",
+          user_id: 42,
+          username: "dave_plex",
+          user: "Big Chief Dave",
+          grandparent_title: "The Expanse",
+          parent_media_index: 2,
+          media_index: 5,
+          started: 1700000000,
+          rating_key: "999",
+          grandparent_rating_key: "111",
+        }, {
+          // Movies and malformed episode rows must not enter the playback pipeline.
+          media_type: "movie",
+          session_key: "movie-1",
+          started: 1700000000,
+        }],
+      },
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const logger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
+    const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, logger);
+    const sessions = await tautulli.getActiveSessions();
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]!.referenceId, "activity:session-42:999");
+    assert.equal(sessions[0]!.seasonNumber, 2);
+    assert.equal(sessions[0]!.episodeNumber, 5);
+    assert.equal(sessions[0]!.watchedAt, "2023-11-14T22:13:20.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

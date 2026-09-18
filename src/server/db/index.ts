@@ -48,6 +48,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
+  tautulliSessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
   fullHistoryReconcileIntervalDays: 30,
   rollingReconcileIntervalHours: 6,

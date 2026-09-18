@@ -23,7 +23,7 @@ import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
-import { TautulliIntegration, type TautulliHistoryRecord } from "./integrations/tautulli.js";
+import { TautulliIntegration, type TautulliEpisodeRecord, type TautulliHistoryRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
@@ -1248,7 +1248,7 @@ export class PacearrServices {
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
+  private async matchTautulliSeries(event: TautulliEpisodeRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
     const resolved = await this.resolveIdentity("tautulli", `${identityScope}:rating:${event.grandparentRatingKey}`, async () => {
       const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
@@ -1719,6 +1719,58 @@ export class PacearrServices {
     }
     this.logger.info("Plex session check complete", { processed: events.length, changed });
     return { ok: true, message: `Checked ${events.length} active Plex sessions.`, processed: events.length, changed };
+  }
+
+  async checkTautulliActiveSessions(): Promise<RunResult> {
+    const settings = this.db.getTautulliSettings();
+    if (!settings.enabled || !settings.baseUrl || !settings.apiKey) {
+      return { ok: true, message: "Tautulli is not configured.", processed: 0, changed: 0 };
+    }
+    this.logger.info("Tautulli active session check started");
+    let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
+    const tautulli = new TautulliIntegration(settings, this.logger);
+    const identityScope = this.sourceIdentityScope("tautulli", settings.baseUrl, settings.apiKey);
+    const events = await tautulli.getActiveSessions();
+    const failures: SourceIdentityFailures = new Map();
+    const findTautulliUser = this.db.createTautulliUserResolver();
+    const matched: Array<{ event: TautulliEpisodeRecord; series: SonarrSeries | null }> = [];
+    const resolve = async (event: TautulliEpisodeRecord) => this.matchTautulliSeries(event, seriesIndex, tautulli, identityScope, failures);
+    for (const event of events) matched.push({ event, series: await resolve(event) });
+    // As with Plex sessions, retry misses against one fresh library snapshot so a recent
+    // Sonarr addition can recover from a missed live-playback notification immediately.
+    if (matched.some((item) => !item.series)) {
+      seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
+      for (const item of matched) if (!item.series) item.series = await resolve(item.event);
+    }
+
+    const episodeCache: EpisodeCache = new Map();
+    const dryRunExpandedSeasons = new Set<string>();
+    let changed = 0;
+    let progressUpdated = false;
+    for (const { event, series } of matched) {
+      const user = findTautulliUser(event.userId, event.username, event.friendlyName);
+      const username = event.username?.trim() || event.friendlyName?.trim() || null;
+      const result = await this.processWatchEvent({
+        source: "tautulli",
+        sourceEventId: event.referenceId,
+        userId: user?.id ?? null,
+        plexAccountId: null,
+        username,
+        sonarrSeriesId: series?.id ?? null,
+        showTitle: event.showTitle,
+        seasonNumber: event.seasonNumber,
+        episodeNumber: event.episodeNumber,
+        watchedAt: event.watchedAt,
+        rawPayload: event.raw,
+      }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons);
+      if (result.changed) changed++;
+      if (result.progressUpdated) progressUpdated = true;
+    }
+    if (changed > 0 || progressUpdated) {
+      this.db.addHistory("info", "tautulli.sessions.check", "Tautulli active sessions", { processed: events.length, changed });
+    }
+    this.logger.info("Tautulli active session check complete", { processed: events.length, changed });
+    return { ok: true, message: `Checked ${events.length} active Tautulli sessions.`, processed: events.length, changed };
   }
 
   async reconcileRollingShows(): Promise<RunResult> {

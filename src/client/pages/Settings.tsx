@@ -38,6 +38,7 @@ const LEVEL_BADGE: Record<LogFilter, string> = {
 
 const JOB_PRESETS: Record<string, { unit: "minutes" | "hours" | "days"; values: number[] }> = {
   "session-check": { unit: "minutes", values: [1, 2, 5, 10, 15, 30, 60] },
+  "tautulli-session-check": { unit: "minutes", values: [1, 5, 15, 30, 60, 120] },
   "history-import": { unit: "hours", values: [60, 120, 240, 360, 720, 1440] },
   "full-history-reconcile": { unit: "days", values: [10080, 20160, 43200, 86400, 129600] },
   "rolling-reconcile": { unit: "hours", values: [60, 180, 360, 720, 1440] },

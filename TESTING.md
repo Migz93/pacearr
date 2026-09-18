@@ -174,6 +174,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
+| `getActiveSessions` parses episode activity and uses an activity-only stable event key | Tautulli's `get_activity` rows preserve the episode/user fields Pacearr needs and prefix the repeated-poll key so it cannot collide with completed-history records |
+
+### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
+
+| Test | What it checks |
+|---|---|
+| An active Tautulli session expands an unexpanded season after episode 1 and is deduplicated on the next poll | A missed Plex live event is recovered from Tautulli activity, performs the normal rolling season expansion/search once, and does not repeat it on later polls of the same session |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 

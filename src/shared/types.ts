@@ -82,6 +82,7 @@ export interface AppSettings {
   viewerActivityWindowDays: number;
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
+  tautulliSessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
   fullHistoryReconcileIntervalDays: number;
   rollingReconcileIntervalHours: number;
