@@ -26,7 +26,7 @@ function createHarness() {
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("an active Tautulli session expands an unexpanded season after episode 1 and is deduplicated on the next poll", async () => {
+test("an active Tautulli session retries expansion after a series-operation collision and is then deduplicated", async () => {
   const { db, services, cleanup } = createHarness();
   const originalFetch = globalThis.fetch;
   const series: SonarrSeries = { id: 31, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
@@ -36,6 +36,10 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
   ];
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
   let sessionKey = "session-2";
+  const operations = services as unknown as {
+    acquireSeriesOperation(seriesId: number): number | null;
+    releaseSeriesOperation(seriesId: number, operation: number): void;
+  };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     requests.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
@@ -59,6 +63,13 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
     db.updateUser(gina!.id, { enabled: true });
     db.upsertRollingShow(series);
 
+    const operation = operations.acquireSeriesOperation(31);
+    assert.notEqual(operation, null);
+    const deferred = await services.checkTautulliActiveSessions();
+    assert.equal(deferred.changed, 0);
+    assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, []);
+
+    operations.releaseSeriesOperation(31, operation as number);
     const first = await services.checkTautulliActiveSessions();
     const second = await services.checkTautulliActiveSessions();
 

@@ -181,7 +181,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| An active Tautulli session expands an unexpanded season after episode 1 and is deduplicated on the next poll | A missed Plex live event is recovered from Tautulli activity, performs the normal rolling season expansion/search once, backfills a matched user's Tautulli username, does not advance the completed-history cursor, and does not repeat on later polls of the same playback |
+| An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered from Tautulli activity after a competing session job releases the series lock, performs the normal rolling expansion/search once, backfills a matched user's Tautulli username, does not advance the completed-history cursor, and does not repeat on later polls |
 | A reused Tautulli session key with a later start is a new playback event | The start time distinguishes separate plays when Tautulli recycles a session key |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
