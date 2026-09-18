@@ -64,6 +64,7 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
 
     assert.equal(first.changed, 1);
     assert.equal(second.changed, 0);
+    assert.equal(db.getUser(gina!.id)?.tautulliUsername, "gina");
     assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
     assert.equal(db.countWatchEvents(), 1);
     assert.equal(db.getLatestWatchEventAt("tautulli"), null);

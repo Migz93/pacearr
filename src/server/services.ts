@@ -23,7 +23,7 @@ import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
-import { TautulliIntegration, type TautulliEpisodeRecord, type TautulliHistoryRecord } from "./integrations/tautulli.js";
+import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
@@ -1733,6 +1733,7 @@ export class PacearrServices {
     const events = await tautulli.getActiveSessions();
     const failures: SourceIdentityFailures = new Map();
     const findTautulliUser = this.db.createTautulliUserResolver();
+    const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
     const matched: Array<{ event: TautulliEpisodeRecord; series: SonarrSeries | null }> = [];
     const resolve = async (event: TautulliEpisodeRecord) => this.matchTautulliSeries(event, seriesIndex, tautulli, identityScope, failures);
     for (const event of events) matched.push({ event, series: await resolve(event) });
@@ -1750,6 +1751,7 @@ export class PacearrServices {
     for (const { event, series } of matched) {
       const user = findTautulliUser(event.userId, event.username, event.friendlyName);
       const username = event.username?.trim() || event.friendlyName?.trim() || null;
+      if (user) tautulliUsernames.push({ userId: user.id, username });
       const result = await this.processWatchEvent({
         source: "tautulli-session",
         sourceEventId: event.referenceId,
@@ -1771,6 +1773,7 @@ export class PacearrServices {
       }
       if (result.progressUpdated) progressUpdated = true;
     }
+    this.db.fillMissingTautulliUsernames(tautulliUsernames);
     if (changed > 0 || progressUpdated) {
       this.db.addHistory("info", "tautulli.sessions.check", "Tautulli active sessions", { processed: events.length, changed });
     }
