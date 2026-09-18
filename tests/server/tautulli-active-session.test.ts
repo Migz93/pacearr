@@ -29,13 +29,17 @@ function createHarness() {
 test("an active Tautulli session retries expansion after a series-operation collision and is then deduplicated", async () => {
   const { db, services, cleanup } = createHarness();
   const originalFetch = globalThis.fetch;
-  const series: SonarrSeries = { id: 31, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
+  const series: SonarrSeries = { id: 31, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }, { seasonNumber: 3, monitored: false }] };
   const episodes: SonarrEpisode[] = [
     { id: 311, seriesId: 31, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true },
     { id: 312, seriesId: 31, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: false },
+    { id: 313, seriesId: 31, seasonNumber: 3, episodeNumber: 1, monitored: false, hasFile: true },
+    { id: 314, seriesId: 31, seasonNumber: 3, episodeNumber: 2, monitored: false, hasFile: false },
   ];
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
   let sessionKey = "session-2";
+  let seasonNumber = 2;
+  let ratingKey = "101";
   const operations = services as unknown as {
     acquireSeriesOperation(seriesId: number): number | null;
     releaseSeriesOperation(seriesId: number, operation: number): void;
@@ -47,7 +51,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
       const command = url.searchParams.get("cmd");
       if (command === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
         media_type: "episode", session_key: sessionKey, user_id: "tautulli-gina", username: "gina", user: "Gina",
-        grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: "101", parent_media_index: 2, media_index: 2, started: 1700000000,
+        grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: ratingKey, parent_media_index: seasonNumber, media_index: 2, started: 1700000000,
       }] } } }), { status: 200, headers: { "content-type": "application/json" } });
       if (command === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: ["tvdb://81189"] } } }), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -88,13 +92,17 @@ test("an active Tautulli session retries expansion after a series-operation coll
     // An active event can arrive before its Tautulli identity is mapped. A later poll
     // repairs that row in place; it is a real job change, even though it is a duplicate.
     sessionKey = "session-3";
+    seasonNumber = 3;
+    ratingKey = "103";
     db.insertWatchEvent({
-      source: "tautulli-session", sourceEventId: "activity:session-3:101:1700000000", userId: null,
+      source: "tautulli-session", sourceEventId: "activity:session-3:103:1700000000", userId: null,
       plexAccountId: null, username: "gina", sonarrSeriesId: 31, showTitle: "The Wire",
-      seasonNumber: 2, episodeNumber: 2, watchedAt: "2023-11-14T22:13:20.000Z", rawPayload: {},
+      seasonNumber: 3, episodeNumber: 2, watchedAt: "2023-11-14T22:13:20.000Z", rawPayload: {},
     });
     const repaired = await services.checkTautulliActiveSessions();
-    assert.equal(repaired.changed, 1);
+    assert.equal(repaired.changed, 2);
+    assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2, 3]);
+    assert.equal(requests.filter((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 3 })).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();

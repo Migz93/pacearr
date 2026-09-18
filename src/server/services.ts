@@ -1369,7 +1369,7 @@ export class PacearrServices {
     return true;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     const retryKey = `${input.source}:${input.sourceEventId}`;
     let repaired = false;
@@ -1392,7 +1392,7 @@ export class PacearrServices {
     // Duplicate live polls ordinarily mean the same playback is still in progress and
     // must stay silent. Only a prior operation collision places an event in this set,
     // letting its next duplicate complete the deferred rolling work exactly once.
-    if (!stored.inserted && !this.pendingRollingRetries.has(retryKey)) {
+    if (!stored.inserted && !repaired && !retryDuplicateRolling && !this.pendingRollingRetries.has(retryKey)) {
       return { inserted: false, changed: repaired, progressUpdated: false };
     }
 
@@ -1777,6 +1777,21 @@ export class PacearrServices {
         this.refreshRollingProgressForUsers([user.id]);
         changed++;
         progressUpdated = true;
+        const retried = await this.processWatchEvent({
+          source: "tautulli-session",
+          sourceEventId: event.referenceId,
+          userId: user.id,
+          plexAccountId: null,
+          username,
+          sonarrSeriesId: series?.id ?? null,
+          showTitle: event.showTitle,
+          seasonNumber: event.seasonNumber,
+          episodeNumber: event.episodeNumber,
+          watchedAt: event.watchedAt,
+          rawPayload: event.raw,
+        }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons, true);
+        if (retried.changed) changed++;
+        if (retried.progressUpdated) progressUpdated = true;
       }
       if (result.progressUpdated) progressUpdated = true;
     }
