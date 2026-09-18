@@ -183,10 +183,10 @@ export class PacearrServices {
     return this.sessionMonitor.getStatus().mode === "live";
   }
 
-  private getSonarr() {
+  private getSonarr(dryRun = this.db.getAppSettings().dryRun) {
     const settings = this.db.getSonarrSettings();
     if (!settings) throw new Error("Sonarr is not configured.");
-    return new SonarrIntegration(settings, this.logger, this.db.getAppSettings().dryRun);
+    return new SonarrIntegration(settings, this.logger, dryRun);
   }
 
   private isDryRun() {
@@ -1003,10 +1003,10 @@ export class PacearrServices {
   }
 
   private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
-    const sonarr = this.getSonarr();
+    const settings = this.db.getAppSettings();
+    const sonarr = this.getSonarr(settings.dryRun);
     const series = await sonarr.getSeriesById(seriesId);
     const episodes = await sonarr.getEpisodes(seriesId);
-    const settings = this.db.getAppSettings();
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
     const excludedPrefetched = new Set(excludedPrefetchedSeasons);
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
@@ -1075,7 +1075,7 @@ export class PacearrServices {
     for (const seasonNumber of seasonSearches) {
       await sonarr.searchSeason(seriesId, seasonNumber);
     }
-    const dryRun = this.isDryRun();
+    const dryRun = settings.dryRun;
     const clearedPrefetchedSeasons = !dryRun && rolling
       ? [...new Set(this.db.listPrefetchedEpisodes(rolling.id)
         .filter((prefetched) => plan.retainedSeasons.includes(prefetched.seasonNumber))
