@@ -71,9 +71,17 @@ test("getActiveSessions parses episode activity and uses an activity-only stable
           rating_key: "999",
           grandparent_rating_key: "111",
         }, {
-          // Movies and malformed episode rows must not enter the playback pipeline.
+          // Non-episode rows must not enter the playback pipeline.
           media_type: "movie",
           session_key: "movie-1",
+          started: 1700000000,
+        }, {
+          // Episode activity without its required season, episode, or start fields is
+          // not a usable playback observation either.
+          media_type: "episode",
+          session_key: "malformed-episode",
+          parent_media_index: 2,
+          media_index: 0,
           started: 1700000000,
         }],
       },

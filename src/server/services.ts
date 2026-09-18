@@ -1369,8 +1369,8 @@ export class PacearrServices {
 
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
+    let repaired = false;
     if (!stored.inserted) {
-      let repaired = false;
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
         repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
@@ -1378,35 +1378,36 @@ export class PacearrServices {
           this.db.upsertRollingUserProgress(rolling.id, input.userId, input.seasonNumber, input.episodeNumber, input.watchedAt);
         }
       }
-      return { inserted: false, changed: repaired, progressUpdated: false };
-    }
-    this.logUnmatchedWatchEvent(input);
+    } else this.logUnmatchedWatchEvent(input);
     // Complete history is retained for audit and the History tab, but replaying
     // old pilot watches must not expand seasons or retrigger Sonarr actions.
-    if (!applyRolling) return { inserted: true, changed: false, progressUpdated: false };
-    if (!input.userId || !input.sonarrSeriesId) return { inserted: true, changed: false, progressUpdated: false };
+    if (!applyRolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    if (!input.userId || !input.sonarrSeriesId) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
     const user = this.db.getUser(input.userId);
     const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
-    if (!user?.enabled || !rolling) return { inserted: true, changed: false, progressUpdated: false };
+    if (!user?.enabled || !rolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
-    if (!progressUpdated) return { inserted: true, changed: false, progressUpdated: false };
+    // A first observation may persist progress while another session job owns the
+    // series operation. Its later duplicate must still be allowed to perform the
+    // skipped expansion/prefetch once that operation is available.
+    if (!progressUpdated && stored.inserted) return { inserted: true, changed: repaired, progressUpdated: false };
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
-    if (operation === null) return { inserted: true, changed: false, progressUpdated: true };
+    if (operation === null) return { inserted: stored.inserted, changed: repaired, progressUpdated };
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       const expansionKey = `${rolling.id}:${input.seasonNumber}`;
       if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
         const changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
         if (changed && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
-        return { inserted: true, changed, progressUpdated: true };
+        return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
       }
       return {
-        inserted: true,
-        changed: await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache),
-        progressUpdated: true,
+        inserted: stored.inserted,
+        changed: repaired || await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache),
+        progressUpdated,
       };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
