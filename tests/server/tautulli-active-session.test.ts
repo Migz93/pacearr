@@ -6,6 +6,7 @@ import test from "node:test";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import { ImageCacheService } from "../../src/server/image-cache.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
+import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
 import { PacearrServices } from "../../src/server/services.js";
 import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
@@ -64,9 +65,29 @@ test("an active Tautulli session expands an unexpanded season after episode 1 an
     assert.equal(second.changed, 0);
     assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
     assert.equal(db.countWatchEvents(), 1);
+    assert.equal(db.getLatestWatchEventAt("tautulli"), null);
     assert.equal(requests.filter((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 2 })).length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();
   }
+});
+
+test("a reused Tautulli session key with a later start is a new playback event", async () => {
+  const originalFetch = globalThis.fetch;
+  let started = 1700000000;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
+    media_type: "episode", session_key: "reused-key", user_id: "1", grandparent_title: "The Wire", rating_key: "101",
+    parent_media_index: 1, media_index: 1, started,
+  }] } } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const { db, cleanup } = createHarness();
+    try {
+      const integration = new TautulliIntegration(db.getTautulliSettings(), silentLogger());
+      const first = await integration.getActiveSessions();
+      started += 3600;
+      const second = await integration.getActiveSessions();
+      assert.notEqual(first[0]!.referenceId, second[0]!.referenceId);
+    } finally { cleanup(); }
+  } finally { globalThis.fetch = originalFetch; }
 });

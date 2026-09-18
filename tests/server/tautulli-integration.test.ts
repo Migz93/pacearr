@@ -84,7 +84,7 @@ test("getActiveSessions parses episode activity and uses an activity-only stable
     const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, logger);
     const sessions = await tautulli.getActiveSessions();
     assert.equal(sessions.length, 1);
-    assert.equal(sessions[0]!.referenceId, "activity:session-42:999");
+    assert.equal(sessions[0]!.referenceId, "activity:session-42:999:1700000000");
     assert.equal(sessions[0]!.seasonNumber, 2);
     assert.equal(sessions[0]!.episodeNumber, 5);
     assert.equal(sessions[0]!.watchedAt, "2023-11-14T22:13:20.000Z");

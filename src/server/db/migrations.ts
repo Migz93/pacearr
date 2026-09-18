@@ -392,6 +392,44 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Completed Tautulli history and polled activity must have distinct sources: the
+    // incremental-history cursor reads only the former, so a near-live activity row
+    // cannot skip a completed play that Tautulli has not indexed yet.
+    version: 22,
+    up(db) {
+      db.exec(`
+        CREATE TABLE watch_events_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL CHECK(source IN ('plex-history', 'plex-session', 'tautulli', 'tautulli-session')),
+          source_event_id TEXT NOT NULL,
+          user_id INTEGER,
+          plex_account_id TEXT,
+          username TEXT,
+          sonarr_series_id INTEGER,
+          show_title TEXT NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          watched_at TEXT NOT NULL,
+          raw_payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source, source_event_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT INTO watch_events_next
+          SELECT id, source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at
+          FROM watch_events;
+        DROP TABLE watch_events;
+        ALTER TABLE watch_events_next RENAME TO watch_events;
+        CREATE INDEX idx_watch_events_user ON watch_events(user_id);
+        CREATE INDEX idx_watch_events_show ON watch_events(sonarr_series_id);
+        CREATE INDEX idx_watch_events_series_user_watched
+          ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+          ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

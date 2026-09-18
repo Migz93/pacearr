@@ -123,9 +123,9 @@ export class TautulliIntegration {
       // A Tautulli activity poll sees the same live session repeatedly. Prefix the
       // event identity so its stable session/rating key can never be mistaken for a
       // completed-history reference ID imported by getHistory.
-      const sessionIdentity = row.session_key ?? row.session_id ?? `${row.user_id ?? "unknown"}:${row.rating_key ?? "unknown"}:${startedAtUnix}`;
+      const sessionIdentity = row.session_key ?? row.session_id ?? `${row.user_id ?? "unknown"}:${row.rating_key ?? "unknown"}`;
       records.push({
-        referenceId: `activity:${sessionIdentity}:${row.rating_key ?? "unknown"}`,
+        referenceId: `activity:${sessionIdentity}:${row.rating_key ?? "unknown"}:${startedAtUnix}`,
         userId: row.user_id ? String(row.user_id) : null,
         username: row.username === null || row.username === undefined ? null : String(row.username),
         friendlyName: row.user === null || row.user === undefined ? null : String(row.user),

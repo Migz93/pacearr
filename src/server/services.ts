@@ -1751,7 +1751,7 @@ export class PacearrServices {
       const user = findTautulliUser(event.userId, event.username, event.friendlyName);
       const username = event.username?.trim() || event.friendlyName?.trim() || null;
       const result = await this.processWatchEvent({
-        source: "tautulli",
+        source: "tautulli-session",
         sourceEventId: event.referenceId,
         userId: user?.id ?? null,
         plexAccountId: null,
@@ -1764,6 +1764,10 @@ export class PacearrServices {
         rawPayload: event.raw,
       }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons);
       if (result.changed) changed++;
+      if (!result.inserted && user && this.db.repairUnmatchedWatchEventUser("tautulli-session", event.referenceId, user.id)) {
+        this.refreshRollingProgressForUsers([user.id]);
+        progressUpdated = true;
+      }
       if (result.progressUpdated) progressUpdated = true;
     }
     if (changed > 0 || progressUpdated) {

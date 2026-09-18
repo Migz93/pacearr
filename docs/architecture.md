@@ -78,13 +78,13 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 ### Watch history import
 
-Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled.
+Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled. Its separately scheduled `get_activity` episode polling records active playback under a distinct source, so it cannot advance the completed-history import cursor.
 
 Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
 
 ### Live session monitoring
 
-The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalised into the same watch-event path used by history import.
+The `session-check` job polls Plex `/status/sessions`. The optional `tautulli-session-check` job polls Tautulli `get_activity` at a separately configurable interval (15 minutes by default). Episode sessions are normalised into the same watch-event path used by history import.
 
 Watching SxxE01 for an enrolled show expands that season.
 
