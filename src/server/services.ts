@@ -159,6 +159,8 @@ export class PacearrServices {
   private readonly activeSeriesOperations = new Map<number, number>();
   private readonly sourceIdentityThrottles = new Map<"plex" | "tautulli", ResolutionThrottle>();
   private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", string>();
+  /** Event-side rolling work deferred while another job owns the same series. */
+  private readonly pendingRollingRetries = new Set<string>();
   private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
@@ -1369,6 +1371,7 @@ export class PacearrServices {
 
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
+    const retryKey = `${input.source}:${input.sourceEventId}`;
     let repaired = false;
     if (!stored.inserted) {
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
@@ -1386,29 +1389,32 @@ export class PacearrServices {
     const user = this.db.getUser(input.userId);
     const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
     if (!user?.enabled || !rolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    // Duplicate live polls ordinarily mean the same playback is still in progress and
+    // must stay silent. Only a prior operation collision places an event in this set,
+    // letting its next duplicate complete the deferred rolling work exactly once.
+    if (!stored.inserted && !this.pendingRollingRetries.has(retryKey)) {
+      return { inserted: false, changed: repaired, progressUpdated: false };
+    }
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
-    // A first observation may persist progress while another session job owns the
-    // series operation. Its later duplicate must still be allowed to perform the
-    // skipped expansion/prefetch once that operation is available.
     if (!progressUpdated && stored.inserted) return { inserted: true, changed: repaired, progressUpdated: false };
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
-    if (operation === null) return { inserted: stored.inserted, changed: repaired, progressUpdated };
+    if (operation === null) {
+      this.pendingRollingRetries.add(retryKey);
+      return { inserted: stored.inserted, changed: repaired, progressUpdated };
+    }
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       const expansionKey = `${rolling.id}:${input.seasonNumber}`;
+      let changed: boolean;
       if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
-        const changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
+        changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
         if (changed && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
-        return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
-      }
-      return {
-        inserted: stored.inserted,
-        changed: repaired || await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache),
-        progressUpdated,
-      };
+      } else changed = await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache);
+      this.pendingRollingRetries.delete(retryKey);
+      return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 

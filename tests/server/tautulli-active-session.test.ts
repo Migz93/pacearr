@@ -71,10 +71,14 @@ test("an active Tautulli session retries expansion after a series-operation coll
 
     operations.releaseSeriesOperation(31, operation as number);
     const first = await services.checkTautulliActiveSessions();
+    const historyCountAfterFirst = db.listHistory(100).length;
+    const episodeFetchesAfterFirst = requests.filter((request) => request.method === "GET" && request.pathname === "/api/v3/episode").length;
     const second = await services.checkTautulliActiveSessions();
 
     assert.equal(first.changed, 1);
     assert.equal(second.changed, 0);
+    assert.equal(db.listHistory(100).length, historyCountAfterFirst);
+    assert.equal(requests.filter((request) => request.method === "GET" && request.pathname === "/api/v3/episode").length, episodeFetchesAfterFirst);
     assert.equal(db.getUser(gina!.id)?.tautulliUsername, "gina");
     assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
     assert.equal(db.countWatchEvents(), 1);
