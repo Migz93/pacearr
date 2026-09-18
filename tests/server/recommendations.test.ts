@@ -922,6 +922,11 @@ test("scheduled reconciliation clears prefetch records when active progress reta
     assert.equal(result.ok, true);
     assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [2]);
     assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    assert.equal(db.listHistory(10).some((entry) => {
+      if (entry.action !== "cleanup.prefetch") return false;
+      const details = JSON.parse(entry.details);
+      return details.reason === "expanded-retention" && details.clearedPrefetchedEpisodes === 2 && JSON.stringify(details.seasonNumbers) === "[2]";
+    }), true);
   } finally {
     restoreFetch();
     cleanup();

@@ -34,8 +34,9 @@ receives episodes that actually exist, so short seasons are naturally capped.
 Prefetched episodes are stored separately from `expanded_seasons`, including the
 user and timestamp that triggered them. Reconciliation preserves those
 individual episode targets without treating the entire season as expanded. When
-E01 is watched and the season expands, its prefetch records are cleared. The
-show detail page displays the prefetched episodes and triggering user. During
+a season expands from playback or is retained from active viewer progress, its
+prefetch records are cleared. The show detail page displays the prefetched
+episodes and triggering user. During
 scheduled reconciliation, a prefetch is reclaimed after the progressive cleanup
 delay when no active enabled viewer still needs that season (because viewers are
 inactive or have progressed beyond it). Dry-run previews this cleanup without
