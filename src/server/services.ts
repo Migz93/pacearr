@@ -1777,21 +1777,23 @@ export class PacearrServices {
         this.refreshRollingProgressForUsers([user.id]);
         changed++;
         progressUpdated = true;
-        const retried = await this.processWatchEvent({
-          source: "tautulli-session",
-          sourceEventId: event.referenceId,
-          userId: user.id,
-          plexAccountId: null,
-          username,
-          sonarrSeriesId: series?.id ?? null,
-          showTitle: event.showTitle,
-          seasonNumber: event.seasonNumber,
-          episodeNumber: event.episodeNumber,
-          watchedAt: event.watchedAt,
-          rawPayload: event.raw,
-        }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons, true);
-        if (retried.changed) changed++;
-        if (retried.progressUpdated) progressUpdated = true;
+        if (!result.changed) {
+          const retried = await this.processWatchEvent({
+            source: "tautulli-session",
+            sourceEventId: event.referenceId,
+            userId: user.id,
+            plexAccountId: null,
+            username,
+            sonarrSeriesId: series?.id ?? null,
+            showTitle: event.showTitle,
+            seasonNumber: event.seasonNumber,
+            episodeNumber: event.episodeNumber,
+            watchedAt: event.watchedAt,
+            rawPayload: event.raw,
+          }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons, true);
+          if (retried.changed) changed++;
+          if (retried.progressUpdated) progressUpdated = true;
+        }
       }
       if (result.progressUpdated) progressUpdated = true;
     }

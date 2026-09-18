@@ -40,6 +40,9 @@ test("an active Tautulli session retries expansion after a series-operation coll
   let sessionKey = "session-2";
   let seasonNumber = 2;
   let ratingKey = "101";
+  let activityUserId = "tautulli-gina";
+  let activityUsername = "gina";
+  let seriesAvailable = true;
   const operations = services as unknown as {
     acquireSeriesOperation(seriesId: number): number | null;
     releaseSeriesOperation(seriesId: number, operation: number): void;
@@ -50,12 +53,12 @@ test("an active Tautulli session retries expansion after a series-operation coll
     if (url.hostname === "tautulli") {
       const command = url.searchParams.get("cmd");
       if (command === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
-        media_type: "episode", session_key: sessionKey, user_id: "tautulli-gina", username: "gina", user: "Gina",
+        media_type: "episode", session_key: sessionKey, user_id: activityUserId, username: activityUsername, user: "Gina",
         grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: ratingKey, parent_media_index: seasonNumber, media_index: 2, started: 1700000000,
       }] } } }), { status: 200, headers: { "content-type": "application/json" } });
       if (command === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: ["tvdb://81189"] } } }), { status: 200, headers: { "content-type": "application/json" } });
     }
-    if (url.pathname === "/api/v3/series") return new Response(JSON.stringify([series]), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.pathname === "/api/v3/series") return new Response(JSON.stringify(seriesAvailable ? [series] : []), { status: 200, headers: { "content-type": "application/json" } });
     if (url.pathname === "/api/v3/series/31") return new Response(JSON.stringify(series), { status: 200, headers: { "content-type": "application/json" } });
     if (url.pathname === "/api/v3/episode") return new Response(JSON.stringify(episodes), { status: 200, headers: { "content-type": "application/json" } });
     if ((init?.method ?? "GET").toUpperCase() !== "GET") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
@@ -64,7 +67,9 @@ test("an active Tautulli session retries expansion after a series-operation coll
   try {
     db.updateAppSettings({ dryRun: false });
     const [gina] = db.upsertUsers([{ plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: "tautulli-gina", username: "gina", displayName: "Gina", avatarUrl: null }]);
+    const [ivy] = db.upsertUsers([{ plexUserId: "plex-ivy", plexAccountId: "43", tautulliUserId: null, username: "ivy", displayName: "Ivy", avatarUrl: null }]);
     db.updateUser(gina!.id, { enabled: true });
+    db.updateUser(ivy!.id, { enabled: true });
     db.upsertRollingShow(series);
 
     const operation = operations.acquireSeriesOperation(31);
@@ -89,11 +94,32 @@ test("an active Tautulli session retries expansion after a series-operation coll
     assert.equal(db.getLatestWatchEventAt("tautulli"), null);
     assert.equal(requests.filter((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 2 })).length, 1);
 
+    // A poll can repair both links at once. In dry-run mode, the repair must
+    // not replay prefetch work after the series repair already completed it.
+    db.updateAppSettings({ dryRun: true, earlyPrefetchEnabled: true });
+    sessionKey = "session-combined";
+    ratingKey = "102";
+    activityUserId = "tautulli-ivy";
+    activityUsername = "not-yet-mapped";
+    seriesAvailable = false;
+    await services.checkTautulliActiveSessions();
+    const prefetchesBeforeRepair = db.listHistory(100).filter((entry) => entry.action === "dry_run.sonarr.early_prefetch").length;
+    const episodeFetchesBeforeRepair = requests.filter((request) => request.method === "GET" && request.pathname === "/api/v3/episode").length;
+    activityUsername = "ivy";
+    seriesAvailable = true;
+    await services.checkTautulliActiveSessions();
+    assert.equal(db.listHistory(100).filter((entry) => entry.action === "dry_run.sonarr.early_prefetch").length, prefetchesBeforeRepair + 1);
+    assert.equal(requests.filter((request) => request.method === "GET" && request.pathname === "/api/v3/episode").length, episodeFetchesBeforeRepair + 1);
+    assert.equal(db.listUnmappedTautulliUsers().some((entry) => entry.tautulliUserId === "tautulli-ivy"), false);
+    db.updateAppSettings({ dryRun: false, earlyPrefetchEnabled: false });
+
     // An active event can arrive before its Tautulli identity is mapped. A later poll
     // repairs that row in place; it is a real job change, even though it is a duplicate.
     sessionKey = "session-3";
     seasonNumber = 3;
     ratingKey = "103";
+    activityUserId = "tautulli-gina";
+    activityUsername = "gina";
     db.insertWatchEvent({
       source: "tautulli-session", sourceEventId: "activity:session-3:103:1700000000", userId: null,
       plexAccountId: null, username: "gina", sonarrSeriesId: 31, showTitle: "The Wire",
