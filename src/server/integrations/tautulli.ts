@@ -90,6 +90,7 @@ export class TautulliIntegration {
         if (
           !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
           !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+          !Number.isFinite(watchedAtUnix) || watchedAtUnix <= 0 ||
           !Number.isFinite(watchedAt.getTime())
         ) continue;
         pageRecords.push({
@@ -128,6 +129,7 @@ export class TautulliIntegration {
       if (
         !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
         !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+        !Number.isFinite(startedAtUnix) || startedAtUnix <= 0 ||
         !Number.isFinite(watchedAt.getTime())
       ) continue;
       // A Tautulli activity poll sees the same live session repeatedly. Prefix the

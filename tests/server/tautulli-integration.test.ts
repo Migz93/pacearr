@@ -39,6 +39,10 @@ test("getHistory maps valid records independently and skips malformed rows", asy
           parent_media_index: 2,
           media_index: 7,
           date: "Infinity",
+        }, {
+          reference_id: "missing-date",
+          parent_media_index: 2,
+          media_index: 8,
         }],
       },
     },
@@ -103,6 +107,11 @@ test("getActiveSessions parses episode activity and uses an activity-only stable
           parent_media_index: 2,
           media_index: 1,
           started: "Infinity",
+        }, {
+          media_type: "episode",
+          session_key: "missing-date",
+          parent_media_index: 2,
+          media_index: 1,
         }],
       },
     },
