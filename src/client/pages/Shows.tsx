@@ -150,7 +150,7 @@ function ShowsBrowser() {
       tabStrip.removeEventListener("scroll", updateTabAffordance);
       observer.disconnect();
     };
-  }, []);
+  }, [ignoredCount]);
 
   // Tracks the tab actually selected right now, independent of `load`'s closure, so a
   // slow response for a tab the user has since switched away from can't overwrite it.
@@ -278,7 +278,7 @@ function ShowsBrowser() {
       </PageHeader>
       {error && <ErrorBanner message={error} />}
       <div className="relative">
-        <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+        <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" style={tabsHaveMoreToReveal ? { maskImage: "linear-gradient(to right, black calc(100% - 2.25rem), transparent)" } : undefined}>
           <legend className="sr-only">Show category</legend>
           {TABS.map((entry) => (
             <button
@@ -292,7 +292,6 @@ function ShowsBrowser() {
             </button>
           ))}
         </fieldset>
-        {tabsHaveMoreToReveal && <span className="pointer-events-none absolute inset-y-1 right-1 w-9 rounded-r-lg bg-gradient-to-l from-background-container-high via-background-container-high/90 to-transparent" aria-hidden="true" />}
       </div>
       <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
