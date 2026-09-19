@@ -1539,7 +1539,9 @@ export class PacearrServices {
       matched += counts.matched;
       unmatched += counts.unmatched;
       changed += counts.repairedSeriesCount;
-      counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
+      counts.unmatchedInputs.forEach((input) => {
+        this.logUnmatchedWatchEvent(input);
+      });
       this.refreshRollingProgressForUsers(counts.repairedUserIds);
       for (const input of counts.rolling) {
         const result = await this.processWatchEvent(input, "plex-history", true, episodeCache, dryRunExpandedSeasons);
@@ -1597,7 +1599,9 @@ export class PacearrServices {
         matched += counts.matched;
         unmatched += counts.unmatched;
         changed += counts.repairedSeriesCount;
-        counts.unmatchedInputs.forEach((input) => this.logUnmatchedWatchEvent(input));
+        counts.unmatchedInputs.forEach((input) => {
+          this.logUnmatchedWatchEvent(input);
+        });
         const repairedUserIds = new Set(counts.repairedUserIds);
         // A duplicate here means this exact event was already imported — most commonly
         // before it could be matched to a Pacearr user, since #75 let the old friendly-name
