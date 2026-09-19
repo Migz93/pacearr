@@ -59,12 +59,3 @@ session:
    capture to full document height, which renders fixed elements pinned to
    their initial position instead of centered in the visible viewport (a
    screenshot-tool artifact, not a real rendering bug).
-
-## Deferred Follow-Ups
-
-Tracked in #102, not fixed in #87 because they affect desktop layout too
-(not mobile-specific regressions) and need a deliberate design pass:
-
-- Viewer-card checkbox touch target (18×18px)
-- Shows tab-bar scroll affordance
-- Settings → About version-link height

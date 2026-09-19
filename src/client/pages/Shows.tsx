@@ -128,8 +128,29 @@ function ShowsBrowser() {
   const addTriggerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
   const [sort, setSort] = useState<SortMode>(() => loadStoredSort(tab));
+  const tabStripRef = useRef<HTMLFieldSetElement>(null);
+  const [tabsHaveMoreToReveal, setTabsHaveMoreToReveal] = useState(false);
 
   useEffect(() => { setView(loadStoredView(tab)); setSort(loadStoredSort(tab)); setQuery(""); }, [tab]);
+
+  useEffect(() => {
+    const tabStrip = tabStripRef.current;
+    if (!tabStrip) return;
+
+    const updateTabAffordance = () => {
+      const canScroll = tabStrip.scrollWidth > tabStrip.clientWidth;
+      setTabsHaveMoreToReveal(canScroll && tabStrip.scrollLeft + tabStrip.clientWidth < tabStrip.scrollWidth - 1);
+    };
+
+    updateTabAffordance();
+    tabStrip.addEventListener("scroll", updateTabAffordance, { passive: true });
+    const observer = new ResizeObserver(updateTabAffordance);
+    observer.observe(tabStrip);
+    return () => {
+      tabStrip.removeEventListener("scroll", updateTabAffordance);
+      observer.disconnect();
+    };
+  }, []);
 
   // Tracks the tab actually selected right now, independent of `load`'s closure, so a
   // slow response for a tab the user has since switched away from can't overwrite it.
@@ -256,20 +277,23 @@ function ShowsBrowser() {
         </button>
       </PageHeader>
       {error && <ErrorBanner message={error} />}
-      <fieldset className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
-        <legend className="sr-only">Show category</legend>
-        {TABS.map((entry) => (
-          <button
-            type="button"
-            key={entry.id}
-            aria-pressed={tab === entry.id}
-            className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
-            onClick={() => setTab(entry.id)}
-          >
-            {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
-          </button>
-        ))}
-      </fieldset>
+      <div className="relative">
+        <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+          <legend className="sr-only">Show category</legend>
+          {TABS.map((entry) => (
+            <button
+              type="button"
+              key={entry.id}
+              aria-pressed={tab === entry.id}
+              className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
+              onClick={() => setTab(entry.id)}
+            >
+              {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
+            </button>
+          ))}
+        </fieldset>
+        {tabsHaveMoreToReveal && <span className="pointer-events-none absolute inset-y-1 right-1 w-9 rounded-r-lg bg-gradient-to-l from-background-container-high via-background-container-high/90 to-transparent" aria-hidden="true" />}
+      </div>
       <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />

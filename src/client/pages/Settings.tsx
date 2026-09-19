@@ -690,8 +690,8 @@ function LogsTab() {
               <span className={LEVEL_BADGE[entry.level]}>{entry.level}</span>
               <span className="break-words leading-relaxed">{entry.message}</span>
               <span className="flex gap-1 opacity-70">
-                {entry.meta !== undefined && <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(entry)} title="View details" aria-label="View details"><Eye size={13} /></button>}
-                <button type="button" className="inline-flex size-7 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => copyLog(entry)} title="Copy" aria-label="Copy"><ClipboardCopy size={13} /></button>
+                {entry.meta !== undefined && <button type="button" className="inline-flex size-8 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => setActiveLog(entry)} title="View details" aria-label="View details"><Eye size={13} /></button>}
+                <button type="button" className="inline-flex size-8 items-center justify-center rounded-lg border border-outline-variant/30 bg-background-container-high text-on-surface" onClick={() => copyLog(entry)} title="Copy" aria-label="Copy"><ClipboardCopy size={13} /></button>
               </span>
             </div>
           ))}
@@ -880,7 +880,7 @@ function AboutTab() {
     <div className="grid gap-4">
       <SectionCard title="About Pacearr">
         <div className="grid gap-2.5">
-          <InfoRow label="Version"><a className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
+          <InfoRow label="Version"><a className="inline-flex min-h-6 items-center text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline" href={GITHUB_RELEASES_URL} target="_blank" rel="noopener noreferrer">v{info?.version ?? "..."}</a></InfoRow>
           <InfoRow label="Build channel"><span>{info?.buildChannel ?? "..."}</span></InfoRow>
           {info?.buildChannel !== "stable" && <InfoRow label="Commit"><code className={codeClass}>{info?.commitSha ?? "..."}</code></InfoRow>}
           <InfoRow label="Node"><code className={codeClass}>{info?.nodeVersion ?? "..."}</code></InfoRow>
