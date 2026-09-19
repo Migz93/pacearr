@@ -128,8 +128,31 @@ function ShowsBrowser() {
   const addTriggerRef = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<ViewMode>(() => loadStoredView(tab));
   const [sort, setSort] = useState<SortMode>(() => loadStoredSort(tab));
+  const tabStripRef = useRef<HTMLFieldSetElement>(null);
+  const [tabsHaveMoreToReveal, setTabsHaveMoreToReveal] = useState(false);
 
   useEffect(() => { setView(loadStoredView(tab)); setSort(loadStoredSort(tab)); setQuery(""); }, [tab]);
+
+  // The fetched ignored count changes a tab label after the first layout, which can
+  // create overflow without resizing the strip.
+  useEffect(() => {
+    const tabStrip = tabStripRef.current;
+    if (!tabStrip) return;
+
+    const updateTabAffordance = () => {
+      const canScroll = tabStrip.scrollWidth > tabStrip.clientWidth;
+      setTabsHaveMoreToReveal(canScroll && tabStrip.scrollLeft + tabStrip.clientWidth < tabStrip.scrollWidth - 1);
+    };
+
+    updateTabAffordance();
+    tabStrip.addEventListener("scroll", updateTabAffordance, { passive: true });
+    const observer = new ResizeObserver(updateTabAffordance);
+    observer.observe(tabStrip);
+    return () => {
+      tabStrip.removeEventListener("scroll", updateTabAffordance);
+      observer.disconnect();
+    };
+  }, [ignoredCount]);
 
   // Tracks the tab actually selected right now, independent of `load`'s closure, so a
   // slow response for a tab the user has since switched away from can't overwrite it.
@@ -256,7 +279,7 @@ function ShowsBrowser() {
         </button>
       </PageHeader>
       {error && <ErrorBanner message={error} />}
-      <fieldset className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1">
+      <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" style={tabsHaveMoreToReveal ? { maskImage: "linear-gradient(to right, black calc(100% - 2.25rem), transparent)" } : undefined}>
         <legend className="sr-only">Show category</legend>
         {TABS.map((entry) => (
           <button
