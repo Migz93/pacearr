@@ -8,6 +8,7 @@ import { ImageCacheService } from "../../src/server/image-cache.js";
 import { PacearrServices } from "../../src/server/services.js";
 import type { Logger } from "../../src/server/logger.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
+import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
 
 /**
  * History is the audit log the user reads, not a heartbeat. The session-check job can run
@@ -40,13 +41,17 @@ function createHarness() {
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function installFetchStub(sessionsXml: string, options: { seriesJson?: string; seriesByIdJson?: Record<number, string>; episodesBySeriesJson?: Record<number, string> } = {}) {
-  const { seriesJson = "[]", seriesByIdJson = {}, episodesBySeriesJson = {} } = options;
+function installFetchStub(sessionsXml: string, options: { seriesJson?: string; seriesByIdJson?: Record<number, string>; episodesBySeriesJson?: Record<number, string>; plexMetadataXml?: string; requests?: Array<{ method: string; pathname: string; body?: string }> } = {}) {
+  const { seriesJson = "[]", seriesByIdJson = {}, episodesBySeriesJson = {}, plexMetadataXml = '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', requests } = options;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    requests?.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions") {
       return new Response(sessionsXml, { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    if (url.hostname === "plex" && url.pathname.startsWith("/library/metadata/")) {
+      return new Response(plexMetadataXml, { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.pathname === "/api/v3/series") {
       return new Response(seriesJson, { status: 200, headers: { "content-type": "application/json" } });
@@ -95,11 +100,11 @@ test("a session check that only advances a viewer's progress, without expanding 
     ]);
     const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
     db.updateAppSettings({ earlyPrefetchEnabled: false });
+    db.markSeasonExpanded(wire.id, 1, new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
     // A watch of episode 2 already resolves at a newer timestamp than this seed, so
-    // upsertRollingUserProgress persists a change. It isn't a premiere (skips
-    // expandSeason) and earlyPrefetchEnabled defaults to false (skips prefetchNextSeason
-    // before it ever calls Sonarr), so processWatchEvent reports changed: false even
-    // though a viewer's progress genuinely moved.
+    // upsertRollingUserProgress persists a change. The season is already expanded and
+    // early prefetch is off, so processWatchEvent reports changed: false even though a
+    // viewer's progress genuinely moved.
     db.upsertRollingUserProgress(wire.id, gina.id, 1, 1, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
 
     const sessionsXml = `<?xml version="1.0"?>
@@ -108,13 +113,96 @@ test("a session check that only advances a viewer's progress, without expanding 
         <User id="42" title="gina" />
       </Video>
     </MediaContainer>`;
-    const seriesJson = JSON.stringify([{ id: 30, title: "The Wire" }]);
-    restoreFetch = installFetchStub(sessionsXml, { seriesJson });
+    const seriesJson = JSON.stringify([{ id: 30, title: "The Wire", tvdbId: 81189 }]);
+    restoreFetch = installFetchStub(sessionsXml, { seriesJson, plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://81189" /></Directory></MediaContainer>' });
     const result = await services.checkSessions();
     assert.equal(result.changed, 0);
     const history = db.listHistory(10);
     assert.equal(history.length, 1);
     assert.equal(history[0]!.action, "sessions.check");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a session check expands and searches an unexpanded season when playback begins after episode 1", async () => {
+  const { db, services, cleanup } = createHarness();
+  let restoreFetch = () => {};
+  try {
+    db.updateAppSettings({ dryRun: false });
+    const [gina] = db.upsertUsers([
+      { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
+    ]);
+    db.updateUser(gina!.id, { enabled: true });
+    const wire: SonarrSeries = { id: 31, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
+    db.upsertRollingShow(wire);
+
+    const sessionsXml = `<?xml version="1.0"?>
+    <MediaContainer size="1">
+      <Video type="episode" sessionKey="2" ratingKey="101" grandparentRatingKey="11" grandparentTitle="The Wire" parentIndex="2" index="2">
+        <User id="42" title="gina" />
+      </Video>
+    </MediaContainer>`;
+    const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+    const episodes: SonarrEpisode[] = [
+      { id: 311, seriesId: 31, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true },
+      { id: 312, seriesId: 31, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: false },
+    ];
+    restoreFetch = installFetchStub(sessionsXml, {
+      seriesJson: JSON.stringify([wire]),
+      seriesByIdJson: { 31: JSON.stringify(wire) },
+      episodesBySeriesJson: { 31: JSON.stringify(episodes) },
+      plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://81189" /></Directory></MediaContainer>',
+      requests,
+    });
+
+    const result = await services.checkSessions();
+
+    assert.equal(result.changed, 1);
+    assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
+    assert.equal(requests.some((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 2 })), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a dry-run session check expands an unexpanded season only once", async () => {
+  const { db, services, cleanup } = createHarness();
+  let restoreFetch = () => {};
+  try {
+    db.updateAppSettings({ earlyPrefetchEnabled: false });
+    db.upsertUsers([
+      { plexUserId: "plex-gina", plexAccountId: "42", tautulliUserId: null, username: "gina", displayName: "Gina", avatarUrl: null },
+      { plexUserId: "plex-ivy", plexAccountId: "43", tautulliUserId: null, username: "ivy", displayName: "Ivy", avatarUrl: null },
+    ]).forEach((user) => {
+      db.updateUser(user.id, { enabled: true });
+    });
+    const wire: SonarrSeries = { id: 32, title: "The Wire", tvdbId: 81189, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: false }] };
+    db.upsertRollingShow(wire);
+
+    const sessionsXml = `<?xml version="1.0"?>
+    <MediaContainer size="2">
+      <Video type="episode" sessionKey="3" ratingKey="102" grandparentRatingKey="12" grandparentTitle="The Wire" parentIndex="2" index="2"><User id="42" title="gina" /></Video>
+      <Video type="episode" sessionKey="4" ratingKey="103" grandparentRatingKey="12" grandparentTitle="The Wire" parentIndex="2" index="3"><User id="43" title="ivy" /></Video>
+    </MediaContainer>`;
+    const episodes: SonarrEpisode[] = [
+      { id: 321, seriesId: 32, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true },
+      { id: 322, seriesId: 32, seasonNumber: 2, episodeNumber: 2, monitored: false, hasFile: true },
+      { id: 323, seriesId: 32, seasonNumber: 2, episodeNumber: 3, monitored: false, hasFile: true },
+    ];
+    restoreFetch = installFetchStub(sessionsXml, {
+      seriesJson: JSON.stringify([wire]),
+      seriesByIdJson: { 32: JSON.stringify(wire) },
+      episodesBySeriesJson: { 32: JSON.stringify(episodes) },
+      plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://81189" /></Directory></MediaContainer>',
+    });
+
+    await services.checkSessions();
+
+    assert.deepEqual(db.getRollingShowBySeriesId(32)?.expandedSeasons, []);
+    assert.equal(db.listHistory(10).filter((entry) => entry.action === "dry_run.sonarr.expand_season").length, 1);
   } finally {
     restoreFetch();
     cleanup();

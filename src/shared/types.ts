@@ -1,5 +1,5 @@
 export type SyncStatus = "idle" | "running" | "success" | "error";
-export type EventSourceKind = "plex-history" | "plex-session" | "tautulli";
+export type EventSourceKind = "plex-history" | "plex-session" | "tautulli" | "tautulli-session";
 
 export interface SessionUser {
   plexId: string;
@@ -82,6 +82,7 @@ export interface AppSettings {
   viewerActivityWindowDays: number;
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
+  tautulliSessionPollIntervalMinutes: number;
   historyImportIntervalHours: number;
   fullHistoryReconcileIntervalDays: number;
   rollingReconcileIntervalHours: number;

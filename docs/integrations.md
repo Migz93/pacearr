@@ -76,13 +76,9 @@ Only `episode` sessions are processed. Live sessions use the same normalization 
 
 ### Matching
 
-Pacearr tries to match Plex/Tautulli events to enrolled Sonarr shows in this order:
+Pacearr associates history with Sonarr only through verified TVDB or IMDb IDs. For Plex history, it first resolves a supplied show rating key through Plex metadata. Sparse Plex history without that key may perform a library-title lookup only to find a Plex candidate; its metadata IDs must still uniquely agree with Sonarr before the event is linked. The live-session job never performs the title lookup.
 
-1. TVDB id, when Plex show metadata can provide it
-2. IMDB id, when Plex show metadata can provide it
-3. normalised show title fallback
-
-This means Plex events with a show rating key may trigger an extra Plex metadata fetch to read GUIDs.
+Plex identity results are persisted by a hash of the configured Plex connection plus the rating key (or, for sparse history, library section and title), so repeated events do not repeat metadata requests and a different configured server never reuses the old server's result. Resolved identities are revalidated after seven days, preventing a reused local-library key from becoming a permanent association; missing and ambiguous identities are rechecked after one day, so later Plex metadata repairs can link them. During a history import, new Plex identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate. After three consecutive Plex metadata failures in one job, further uncached Plex identities are left unmatched until the next job.
 
 ## Sonarr
 
@@ -149,6 +145,8 @@ cmd=get_history
 ```
 
 Tautulli events are normalised into the same `watch_events` table as Plex events.
+
+For content matching, Pacearr resolves Tautulli's `grandparent_rating_key` through `cmd=get_metadata` and uses the returned TVDB/IMDb GUIDs. Tautulli identity results are cached separately from Plex results and are hashed with the configured Tautulli connection; one source or configured instance never supplies matching evidence for another. Resolved identities are revalidated after seven days; missing and ambiguous identities are rechecked after one day. During a history import, new Tautulli identities are resolved at most once per second across all Pacearr jobs; cached identities are immediate. After three consecutive Tautulli metadata failures in one job, further uncached Tautulli identities are left unmatched until the next job.
 
 Tautulli is useful when it has longer or more reliable local watch history than Plex. It is not required for Pacearr to function.
 

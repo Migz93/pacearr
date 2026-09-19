@@ -98,6 +98,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
+| Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -105,6 +106,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | A session check that moved nobody's progress records no history event | `session-check` can run once a minute; an unconditional entry buried History under "processed 0, changed 0" rows. The run is still logged |
 | A session check that only advances a viewer's progress, without expanding or prefetching a season, still records a history event | `processWatchEvent` can persist a `rolling_show_users` update while returning `changed: false` (no premiere, or `earlyPrefetchEnabled` is off) — the audit-log gate must also react to `progressUpdated`, not just `changed`, or a genuine progress move goes unlogged |
+| A session check expands and searches an unexpanded season when playback begins after episode 1 | A missed Plex notification for a season premiere must not leave the remaining episodes unmonitored or unsearched when the next observed playback event is later in that season |
+| A dry-run session check expands an unexpanded season only once | Multiple viewers observed in the same unexpanded season must not create duplicate dry-run expansion history entries when dry-run intentionally leaves persisted expansion state unchanged |
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 | A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 
@@ -171,13 +174,22 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
+| `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
+| `getActiveSessions` parses valid episode activity and uses an activity-only stable event key | Tautulli's `get_activity` rows preserve the episode/user fields Pacearr needs, reject malformed activity safely, and include the playback start in a prefixed key so it cannot collide with completed history or a reused session key |
+
+### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
+
+| Test | What it checks |
+|---|---|
+| An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
+| A reused Tautulli session key with a later start is a new playback event | The start time distinguishes separate plays when Tautulli recycles a session key |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |
 |---|---|
 | Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
+| Automatic enrollment history repair is coalesced | A batch of large new shows causes one full Plex history read after triage, rather than one whole-history read per enrolled series or duplicate pilot searches; it immediately applies pending active progress for existing enrolled shows |
 | A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
 | Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
 | Dry-run does not persist a fallback baseline | An undated dry-run response cannot suppress that series if Sonarr later supplies a post-activation `added` time in live mode |
@@ -209,14 +221,25 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
+| Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
+| History import continues with Tautulli when Plex is not configured | A Plex configuration error is reported and audited without preventing configured Tautulli history from importing |
+| History import rejects a non-unique Sonarr external ID | A duplicate TVDB/IMDb value in Sonarr leaves the event unmatched rather than selecting whichever series appeared first |
+| History import rechecks a stale missing source identity | A cached missing Plex/Tautulli identity is revalidated after one day, allowing later metadata repairs to link the event |
+| History import stops repeated failed source identity lookups | Three consecutive Plex or Tautulli metadata failures stop further uncached lookups from that source for the current job, so a full reconciliation continues with unmatched events instead of pacing one failed request per event |
+| History import scopes identity cache entries to the configured source connection | Reused Plex and Tautulli rating keys are resolved again after their configured connection changes, rather than reusing metadata from the prior instance |
+| Sparse Plex history uses title search only for verified ID discovery | A single Plex title-search candidate links through matching TVDB metadata despite an alternate title; multiple candidates remain unmatched without a metadata request |
 | Recommendation refresh is cache-only | The calculation job waits for a populated library cache rather than issuing another whole-library Sonarr request |
 | A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
+| A full history reconciliation refreshes rolling progress after repairing an orphaned Plex series link | A previously unmatched Plex event can be linked by verified metadata during a full reconciliation; its viewer progress must be refreshed immediately rather than waiting for the rolling-reconcile schedule |
+| Enrollment repairs and seeds previously unmatched history with a full verified source read | Enrolling after a source event was stored without a verified series link re-reads source history, repairs the exact event, and seeds viewer progress immediately; the read also applies pending active-progress expansion for other enrolled shows |
 | Manual Tautulli mapping refreshes rolling progress from relinked history | Assigning an unmatched Tautulli identity immediately rebuilds its enrolled-show progress from stored history, without waiting for the next import |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
 | Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |
 | Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
+| Scheduled reconciliation clears prefetches promoted to a retained season | Existing per-episode prefetch records are removed and audited when active viewer progress makes their season fully retained, so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention

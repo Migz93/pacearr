@@ -48,6 +48,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
+  tautulliSessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
   fullHistoryReconcileIntervalDays: 30,
   rollingReconcileIntervalHours: 6,
@@ -81,6 +82,13 @@ export interface NormalizedWatchEventInput {
   watchedAt: string;
   rawPayload: unknown;
 }
+
+export type SourceIdentityCacheEntry = {
+  status: "resolved" | "missing" | "ambiguous";
+  tvdbId: number | null;
+  imdbId: string | null;
+  updatedAt: string;
+};
 
 function plexArtworkFromRow(row: any): PlexArtworkRecord {
   return {
@@ -269,6 +277,24 @@ export class PacearrDatabase {
       VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, JSON.stringify(value), now());
+  }
+
+  getSourceIdentity(source: "plex" | "tautulli", identityKey: string): SourceIdentityCacheEntry | null {
+    const row = this.db.prepare(`
+      SELECT status, tvdb_id AS tvdbId, imdb_id AS imdbId, updated_at AS updatedAt
+      FROM source_identity_cache WHERE source = ? AND identity_key = ?
+    `).get(source, identityKey) as SourceIdentityCacheEntry | undefined;
+    return row ?? null;
+  }
+
+  saveSourceIdentity(source: "plex" | "tautulli", identityKey: string, entry: Omit<SourceIdentityCacheEntry, "updatedAt">, updatedAt = now()): void {
+    const createdAt = now();
+    this.db.prepare(`
+      INSERT INTO source_identity_cache (source, identity_key, status, tvdb_id, imdb_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source, identity_key) DO UPDATE SET
+        status = excluded.status, tvdb_id = excluded.tvdb_id, imdb_id = excluded.imdb_id, updated_at = excluded.updated_at
+    `).run(source, identityKey, entry.status, entry.tvdbId, entry.imdbId, createdAt, updatedAt);
   }
 
   getSessionSecret(): string {
@@ -599,11 +625,22 @@ export class PacearrDatabase {
    * no stable account identifier to relink by.
    */
   repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
+    return this.repairUnmatchedWatchEventUser("tautulli", sourceEventId, userId);
+  }
+
+  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceEventId: string, userId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events
       SET user_id = ?
-      WHERE source = 'tautulli' AND source_event_id = ? AND user_id IS NULL
-    `).run(userId, sourceEventId).changes > 0;
+      WHERE source = ? AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, source, sourceEventId).changes > 0;
+  }
+
+  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceEventId: string, seriesId: number): boolean {
+    return this.db.prepare(`
+      UPDATE watch_events SET sonarr_series_id = ?
+      WHERE source = ? AND source_event_id = ? AND sonarr_series_id IS NULL
+    `).run(seriesId, source, sourceEventId).changes > 0;
   }
 
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
@@ -673,7 +710,7 @@ export class PacearrDatabase {
         SELECT id, CAST(json_extract(raw_payload, '$.user_id') AS TEXT) AS tautulliUserId,
           username, json_extract(raw_payload, '$.user') AS friendlyName, watched_at
         FROM watch_events
-        WHERE source = 'tautulli' AND user_id IS NULL
+        WHERE source IN ('tautulli', 'tautulli-session') AND user_id IS NULL
           AND json_extract(raw_payload, '$.user_id') IS NOT NULL
       ), ranked AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY tautulliUserId ORDER BY watched_at DESC, id DESC) AS row_number,
@@ -713,7 +750,7 @@ export class PacearrDatabase {
   linkUnassignedTautulliWatchEvents(userId: number, tautulliUserId: string): number {
     return this.db.prepare(`
       UPDATE watch_events SET user_id = ?
-      WHERE source = 'tautulli' AND user_id IS NULL
+        WHERE source IN ('tautulli', 'tautulli-session') AND user_id IS NULL
         AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) = ?
     `).run(userId, tautulliUserId).changes;
   }
@@ -853,17 +890,26 @@ export class PacearrDatabase {
       .run(rollingShowId, seasonNumber);
   }
 
-  replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): void {
+  replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): number {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), now(), rollingShowId);
-    if (expanded.length === 0) {
-      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
-    } else {
-      this.db.prepare(`DELETE FROM rolling_season_inactivity
-        WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
-        .run(rollingShowId, ...expanded);
-    }
+    return this.db.transaction(() => {
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), now(), rollingShowId);
+      // Prefetch records only represent individually retained episodes in an
+      // otherwise unexpanded season. Reconciliation can promote a season from
+      // stored viewer progress without passing through markSeasonExpanded.
+      const clearPrefetched = this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ?");
+      const clearedPrefetchedEpisodes = expanded.reduce((count, seasonNumber) =>
+        count + clearPrefetched.run(rollingShowId, seasonNumber).changes, 0);
+      if (expanded.length === 0) {
+        this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+      } else {
+        this.db.prepare(`DELETE FROM rolling_season_inactivity
+          WHERE rolling_show_id = ? AND season_number NOT IN (${expanded.map(() => "?").join(", ")})`)
+          .run(rollingShowId, ...expanded);
+      }
+      return clearedPrefetchedEpisodes;
+    })();
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {

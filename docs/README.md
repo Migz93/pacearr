@@ -40,6 +40,7 @@ These are specific to this app and have no equivalent in the sibling projects.
 | [rolling-monitoring.md](rolling-monitoring.md) | Changing enrollment, baseline application, season expansion, resets, or deletion behaviour |
 | [integrations.md](integrations.md) | Changing Plex OAuth/history/session logic, Sonarr API calls, Tautulli import, or matching |
 | [jobs-and-history.md](jobs-and-history.md) | Changing scheduled jobs, manual job triggers, event import, or audit/history output |
+| [mobile-review.md](mobile-review.md) | Changing layout, adding a page-level container, or adding an `auto-fill`/`minmax()` grid — breakpoints in use and how to verify against a real mobile viewport |
 
 ## Maintenance Rule
 

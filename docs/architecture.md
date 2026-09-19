@@ -68,7 +68,7 @@ When changing the schema in the future:
 
 The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the `sonarr-library-refresh` job, which owns routine whole-library fetching and caching of missing posters. `recommendation-refresh` separately recalculates recommendations from that snapshot on its own configurable schedule, at initial setup, or on demand; it does not repeat the whole-library fetch. History processing uses the snapshot, falling back to a direct fetch only before the first cache exists. Session processing also makes one direct fetch when an active session is absent from the cached snapshot.
 
-Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run history import immediately.
+Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run one full verified history reconciliation immediately to repair older unmatched source events and apply pending active progress. New-show triage coalesces that reconciliation after its automatic enrollment batch.
 
 Every Sonarr series can be opened at `/shows/:seriesId`, whether or not it is enrolled. The detail view shows current Sonarr monitoring, seasons and episodes, plus matched viewer progress. Unenrolled shows offer an Enroll action; enrolled shows offer Reset and Unenroll. In live mode, Unenroll restores any Pacearr-managed Plex artwork and re-monitors the Sonarr series, seasons, and episodes before removing Pacearr's enrollment and rolling-progress state. It does not search for or delete media, and requests a background recommendation refresh after completing.
 
@@ -78,13 +78,13 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 ### Watch history import
 
-Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled.
+Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled. Its separately scheduled `get_activity` episode polling records active playback under a distinct source, so it cannot advance the completed-history import cursor.
 
 Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
 
 ### Live session monitoring
 
-The `session-check` job polls Plex `/status/sessions`. Episode sessions are normalised into the same watch-event path used by history import.
+The `session-check` job polls Plex `/status/sessions`. The optional `tautulli-session-check` job polls Tautulli `get_activity` at a separately configurable interval (15 minutes by default). Episode sessions are normalised into the same watch-event path used by history import.
 
 Watching SxxE01 for an enrolled show expands that season.
 

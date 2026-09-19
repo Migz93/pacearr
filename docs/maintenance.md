@@ -30,6 +30,7 @@ authoritative behaviour and safety boundary.
 | `watch_events` | Never pruned | — |
 | `history_events` | Configurable, default 7 days | `historyRetentionDays` setting; pruned by the `rolling-reconcile` job |
 | `reclaimed_storage_events` | Never pruned | — |
+| `source_identity_cache` | Never pruned | Source identity cache; resolved entries revalidate after 7 days, missing/ambiguous entries after 1 day |
 
 **Settings → Logs** combines the in-memory ring with today's active
 machine-readable log file (see `readRecentLogEntries` in `app.ts`).

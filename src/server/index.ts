@@ -28,6 +28,7 @@ function requiresSetup(task: (context: { scheduled: boolean }) => Promise<void>)
 }
 
 const settings = db.getAppSettings();
+const tautulliSettings = db.getTautulliSettings();
 scheduler.registerRecurringJob({
   id: "session-check",
   intervalMs: settings.sessionPollIntervalMinutes * 60 * 1000,
@@ -44,6 +45,12 @@ scheduler.registerRecurringJob({
   id: "history-import",
   intervalMs: settings.historyImportIntervalHours * 60 * 60 * 1000,
   task: requiresSetup(() => services.importHistory().then(() => undefined)),
+});
+scheduler.registerRecurringJob({
+  id: "tautulli-session-check",
+  intervalMs: settings.tautulliSessionPollIntervalMinutes * 60 * 1000,
+  enabled: tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey),
+  task: requiresSetup(() => services.checkTautulliActiveSessions().then(() => undefined)),
 });
 scheduler.registerRecurringJob({
   id: "full-history-reconcile",

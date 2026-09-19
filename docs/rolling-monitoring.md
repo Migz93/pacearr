@@ -19,7 +19,7 @@ Enrollment starts from an existing Sonarr series. Pacearr does not search for or
 When a show is enrolled:
 
 1. Pacearr creates or updates a `rolling_shows` row keyed by Sonarr series id.
-2. If history import is enabled, Pacearr imports Plex/Tautulli history and identifies seasons retained by active viewers.
+2. If history import is enabled, Pacearr performs a full verified Plex/Tautulli history read so older previously unmatched events can be repaired before it identifies seasons retained by active viewers. That enrollment read immediately applies pending active progress; automatic new-show triage coalesces it into one read after its enrollment batch.
 3. If baseline application is enabled, Pacearr applies the all-season-pilot baseline only to seasons without active viewers. Retained seasons remain fully monitored.
 
 The current UI enroll action sends both `applyBaseline: true` and `importHistory: true`.
@@ -34,8 +34,9 @@ receives episodes that actually exist, so short seasons are naturally capped.
 Prefetched episodes are stored separately from `expanded_seasons`, including the
 user and timestamp that triggered them. Reconciliation preserves those
 individual episode targets without treating the entire season as expanded. When
-E01 is watched and the season expands, its prefetch records are cleared. The
-show detail page displays the prefetched episodes and triggering user. During
+a season expands from playback or is retained from active viewer progress, its
+prefetch records are cleared. The show detail page displays the prefetched
+episodes and triggering user. During
 scheduled reconciliation, a prefetch is reclaimed after the progressive cleanup
 delay when no active enabled viewer still needs that season (because viewers are
 inactive or have progressed beyond it). Dry-run previews this cleanup without

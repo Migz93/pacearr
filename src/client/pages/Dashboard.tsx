@@ -80,7 +80,7 @@ export default function Dashboard() {
         <section>
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="font-headline text-base font-semibold">Recently active shows</h2>
-            <Link to="/shows" className="text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline">View all</Link>
+            <Link to="/shows" className="-m-2 p-2 text-[13px] font-bold text-on-surface-variant hover:text-on-surface hover:underline">View all</Link>
           </div>
           {shows.length > 0 ? (
             <div className="grid grid-cols-6 gap-3 max-[520px]:grid-cols-3 min-[521px]:max-[1000px]:grid-cols-4">

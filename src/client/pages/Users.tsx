@@ -151,13 +151,13 @@ export default function Users() {
       <UserGrid title="Enabled" users={enabledUsers} emptyLabel="No other enabled users" selectedIds={selectedIds} onToggleSelected={toggleSelected} onOpenShows={setShowsUserId} onEdit={setEditUserId} />
 
       <div className="mb-6">
-        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={disabledOpen} onClick={() => setDisabledOpen((open) => !open)}>
+        <button type="button" className="-m-2 inline-flex items-center gap-1.5 border-0 bg-transparent p-2 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={disabledOpen} onClick={() => setDisabledOpen((open) => !open)}>
           {disabledOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Disabled ({disabledUsers.length})
         </button>
         {disabledOpen && (
           disabledUsers.length > 0 ? (
-            <div className="mt-3 grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
+            <div className="mt-3 grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 max-[480px]:grid-cols-1 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
               {disabledUsers.map((user) => (
                 <UserCard
                   key={user.id}
@@ -176,7 +176,7 @@ export default function Users() {
       </div>
 
       <div className="mb-6">
-        <button type="button" className="inline-flex items-center gap-1.5 border-0 bg-transparent p-0 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={unmappedOpen} onClick={() => setUnmappedOpen((open) => !open)}>
+        <button type="button" className="-m-2 inline-flex items-center gap-1.5 border-0 bg-transparent p-2 text-xs font-extrabold uppercase text-on-surface-variant hover:text-on-surface" aria-expanded={unmappedOpen} onClick={() => setUnmappedOpen((open) => !open)}>
           {unmappedOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Unmapped Tautulli users ({unmappedTautulliUsers.length})
         </button>
@@ -230,7 +230,7 @@ function UserGrid({ title, users, emptyLabel, selectedIds, onToggleSelected, onO
     <section className="mb-6">
       <h2 className="mb-3 text-xs font-extrabold uppercase text-on-surface-variant">{title} ({users.length})</h2>
       {users.length > 0 ? (
-        <div className="grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
+        <div className="grid grid-cols-6 gap-3 max-[820px]:grid-cols-2 max-[480px]:grid-cols-1 min-[821px]:max-[1120px]:grid-cols-4 min-[1121px]:max-[1320px]:grid-cols-5">
           {users.map((user) => (
             <UserCard
               key={user.id}
@@ -264,9 +264,9 @@ function UserCard({
 }) {
   return (
     <article className={`relative grid grid-cols-[36px_minmax(0,1fr)_auto] grid-rows-[38px_auto] items-center gap-x-2.5 gap-y-2 rounded-lg border p-2.5 transition-colors hover:bg-background-container-high ${selected ? "border-primary/55 bg-background-container-high" : "border-outline-variant/30 bg-background-container"}`}>
-      <label className="relative col-start-1 row-start-1 block size-[18px] cursor-pointer" title={selected ? "Deselect user" : "Select user"}>
-        <input className="peer absolute inset-0 m-0 size-[18px] cursor-pointer opacity-0" type="checkbox" aria-label={`Select ${user.username}`} checked={selected} onChange={onToggleSelected} />
-        <span className="grid size-[18px] place-items-center rounded-[5px] border border-on-surface/28 bg-background text-on-surface transition-colors peer-checked:border-primary peer-checked:bg-primary-dim peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary">{selected && <Check size={12} />}</span>
+      <label className="relative col-start-1 row-start-1 block size-6 cursor-pointer" title={selected ? "Deselect user" : "Select user"}>
+        <input className="peer absolute inset-0 m-0 size-6 cursor-pointer opacity-0" type="checkbox" aria-label={`Select ${user.username}`} checked={selected} onChange={onToggleSelected} />
+        <span className="grid size-6 place-items-center rounded-[5px] border border-on-surface/28 bg-background text-on-surface transition-colors peer-checked:border-primary peer-checked:bg-primary-dim peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-primary">{selected && <Check size={14} />}</span>
       </label>
 
       <div className={`col-start-2 row-start-1 min-w-0 self-center ${!user.enabled ? "opacity-[.62]" : ""}`}>
@@ -275,7 +275,7 @@ function UserCard({
 
       <button
         type="button"
-        className="col-start-3 row-start-1 grid size-7 shrink-0 place-items-center rounded-md border-0 bg-transparent text-on-surface-variant hover:bg-background-bright hover:text-on-surface"
+        className="col-start-3 row-start-1 grid size-8 shrink-0 place-items-center rounded-md border-0 bg-transparent text-on-surface-variant hover:bg-background-bright hover:text-on-surface"
         onClick={onEdit}
         title={`Edit ${user.username}`}
         aria-label={`Edit ${user.username}`}

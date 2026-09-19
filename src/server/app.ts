@@ -161,6 +161,10 @@ const JOB_LABELS: Record<string, { name: string; intervalDescription: (settings:
     name: "Plex session fallback check",
     intervalDescription: (settings) => `Fallback every ${settings.sessionPollIntervalMinutes} minute${settings.sessionPollIntervalMinutes !== 1 ? "s" : ""}`,
   },
+  "tautulli-session-check": {
+    name: "Tautulli active session check",
+    intervalDescription: (settings) => `Every ${settings.tautulliSessionPollIntervalMinutes} minute${settings.tautulliSessionPollIntervalMinutes !== 1 ? "s" : ""} when Tautulli is enabled`,
+  },
   "history-import": {
     name: "History import",
     intervalDescription: (settings) => `Every ${settings.historyImportIntervalHours} hour${settings.historyImportIntervalHours !== 1 ? "s" : ""}`,
@@ -361,6 +365,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
+    services.invalidateSourceIdentityScope("plex");
     if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
     await services.discoverPlexUsers();
@@ -414,6 +419,8 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       apiKey: typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : existing.apiKey,
     };
     db.saveTautulliSettings(tautulliSettings);
+    scheduler?.updateJob("tautulli-session-check", { enabled: tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
+    services.invalidateSourceIdentityScope("tautulli");
     logger.info("Tautulli settings saved", { enabled: tautulliSettings.enabled, configured: Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
     res.json({ ok: true, tautulli: db.getTautulliSettingsView() });
   });
@@ -430,6 +437,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     if (body.sessionPollIntervalMinutes !== undefined) {
       patch.sessionPollIntervalMinutes = normaliseScheduleIntervalMinutes(body.sessionPollIntervalMinutes, DEFAULT_APP_SETTINGS.sessionPollIntervalMinutes);
+    }
+    if (body.tautulliSessionPollIntervalMinutes !== undefined) {
+      patch.tautulliSessionPollIntervalMinutes = normaliseScheduleIntervalMinutes(body.tautulliSessionPollIntervalMinutes, DEFAULT_APP_SETTINGS.tautulliSessionPollIntervalMinutes);
     }
     if (body.historyImportIntervalHours !== undefined) {
       patch.historyImportIntervalHours = normaliseScheduleIntervalHours(body.historyImportIntervalHours, DEFAULT_APP_SETTINGS.historyImportIntervalHours);
@@ -498,6 +508,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const appSettings = db.updateAppSettings(patch);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
+    scheduler?.updateJob("tautulli-session-check", { intervalMs: appSettings.tautulliSessionPollIntervalMinutes * 60 * 1000 });
     scheduler?.updateJob("history-import", { intervalMs: appSettings.historyImportIntervalHours * 60 * 60 * 1000 });
     scheduler?.updateJob("full-history-reconcile", { intervalMs: appSettings.fullHistoryReconcileIntervalDays * 24 * 60 * 60 * 1000 });
     scheduler?.updateJob("rolling-reconcile", { intervalMs: appSettings.rollingReconcileIntervalHours * 60 * 60 * 1000 });
@@ -604,6 +615,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     const schedules: Record<string, { setting: keyof AppSettings; unitMinutes: number; intervalMs: (value: number) => number }> = {
       "session-check": { setting: "sessionPollIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
+      "tautulli-session-check": { setting: "tautulliSessionPollIntervalMinutes", unitMinutes: 1, intervalMs: (value) => value * 60 * 1000 },
       "history-import": { setting: "historyImportIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
       "full-history-reconcile": { setting: "fullHistoryReconcileIntervalDays", unitMinutes: 24 * 60, intervalMs: (value) => value * 24 * 60 * 60 * 1000 },
       "rolling-reconcile": { setting: "rollingReconcileIntervalHours", unitMinutes: 60, intervalMs: (value) => value * 60 * 60 * 1000 },
