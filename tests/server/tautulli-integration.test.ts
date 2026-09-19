@@ -3,7 +3,7 @@ import test from "node:test";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
 
-test("getHistory maps Tautulli's username and user fields independently, not collapsed into one", async () => {
+test("getHistory maps valid records independently and skips malformed rows", async () => {
   const originalFetch = globalThis.fetch;
   // Regression for #75: Tautulli's `user` (admin-editable friendly name) and `username`
   // (real Plex username) used to be collapsed into a single field with `??`, discarding
@@ -33,6 +33,12 @@ test("getHistory maps Tautulli's username and user fields independently, not col
           date: 1700000001,
           rating_key: "1000",
           grandparent_rating_key: "111",
+        }, {
+          // One malformed history row must not discard the valid records around it.
+          reference_id: "invalid-date",
+          parent_media_index: 2,
+          media_index: 7,
+          date: "Infinity",
         }],
       },
     },

@@ -86,7 +86,12 @@ export class TautulliIntegration {
         const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);
         const episodeNumber = Number(row.media_index ?? row.episode ?? 0);
         const watchedAtUnix = Number(row.date ?? row.started ?? row.stopped ?? 0);
-        if (!seasonNumber || !episodeNumber || !watchedAtUnix) continue;
+        const watchedAt = new Date(watchedAtUnix * 1000);
+        if (
+          !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
+          !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+          !Number.isFinite(watchedAt.getTime())
+        ) continue;
         pageRecords.push({
           referenceId: String(row.reference_id ?? row.id ?? `${row.user_id}:${row.rating_key}:${watchedAtUnix}`),
           userId: row.user_id ? String(row.user_id) : null,
@@ -95,7 +100,7 @@ export class TautulliIntegration {
           showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
           seasonNumber,
           episodeNumber,
-          watchedAt: new Date(watchedAtUnix * 1000).toISOString(),
+          watchedAt: watchedAt.toISOString(),
           ratingKey: row.rating_key ? String(row.rating_key) : null,
           grandparentRatingKey: row.grandparent_rating_key ? String(row.grandparent_rating_key) : null,
           raw: row,
