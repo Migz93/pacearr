@@ -3,7 +3,7 @@ import test from "node:test";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
 
-test("getHistory maps Tautulli's username and user fields independently, not collapsed into one", async () => {
+test("getHistory maps valid records independently and skips malformed rows", async () => {
   const originalFetch = globalThis.fetch;
   // Regression for #75: Tautulli's `user` (admin-editable friendly name) and `username`
   // (real Plex username) used to be collapsed into a single field with `??`, discarding
@@ -33,6 +33,16 @@ test("getHistory maps Tautulli's username and user fields independently, not col
           date: 1700000001,
           rating_key: "1000",
           grandparent_rating_key: "111",
+        }, {
+          // One malformed history row must not discard the valid records around it.
+          reference_id: "invalid-date",
+          parent_media_index: 2,
+          media_index: 7,
+          date: "Infinity",
+        }, {
+          reference_id: "missing-date",
+          parent_media_index: 2,
+          media_index: 8,
         }],
       },
     },
@@ -47,6 +57,74 @@ test("getHistory maps Tautulli's username and user fields independently, not col
     assert.equal(record.friendlyName, "Big Chief Dave");
     assert.equal(history[1]!.username, null);
     assert.equal(history[1]!.friendlyName, "Managed viewer");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getActiveSessions parses episode activity and uses an activity-only stable event key", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    response: {
+      result: "success",
+      data: {
+        sessions: [{
+          media_type: "episode",
+          session_key: "session-42",
+          user_id: 42,
+          username: "dave_plex",
+          user: "Big Chief Dave",
+          grandparent_title: "The Expanse",
+          parent_media_index: 2,
+          media_index: 5,
+          started: 1700000000,
+          rating_key: "999",
+          grandparent_rating_key: "111",
+        }, {
+          // Non-episode rows must not enter the playback pipeline.
+          media_type: "movie",
+          session_key: "movie-1",
+          started: 1700000000,
+        }, {
+          // Episode activity without its required season, episode, or start fields is
+          // not a usable playback observation either.
+          media_type: "episode",
+          session_key: "malformed-episode",
+          parent_media_index: 2,
+          media_index: 0,
+          started: 1700000000,
+        }, {
+          // Tautulli data is external input: fractional episode positions and invalid
+          // dates must be ignored without preventing valid sessions from processing.
+          media_type: "episode",
+          session_key: "fractional-season",
+          parent_media_index: 2.5,
+          media_index: 1,
+          started: 1700000000,
+        }, {
+          media_type: "episode",
+          session_key: "invalid-date",
+          parent_media_index: 2,
+          media_index: 1,
+          started: "Infinity",
+        }, {
+          media_type: "episode",
+          session_key: "missing-date",
+          parent_media_index: 2,
+          media_index: 1,
+        }],
+      },
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    const logger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
+    const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, logger);
+    const sessions = await tautulli.getActiveSessions();
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]!.referenceId, "activity:session-42:999:1700000000");
+    assert.equal(sessions[0]!.seasonNumber, 2);
+    assert.equal(sessions[0]!.episodeNumber, 5);
+    assert.equal(sessions[0]!.watchedAt, "2023-11-14T22:13:20.000Z");
   } finally {
     globalThis.fetch = originalFetch;
   }

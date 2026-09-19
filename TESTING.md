@@ -98,6 +98,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An ambiguous saved Tautulli username is never resolved through a weaker fallback | Two editable mappings that collide case-insensitively leave the event unmatched even when its friendly name could otherwise resolve to another user |
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
+| Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -173,7 +174,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| `getHistory` maps Tautulli's `username` and `user` fields independently, not collapsed into one | Regression for #75 — these used to be collapsed into a single field with `??`, discarding whichever one lost; this asserts they stay distinct all the way out of `getHistory` |
+| `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
+| `getActiveSessions` parses valid episode activity and uses an activity-only stable event key | Tautulli's `get_activity` rows preserve the episode/user fields Pacearr needs, reject malformed activity safely, and include the playback start in a prefixed key so it cannot collide with completed history or a reused session key |
+
+### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
+
+| Test | What it checks |
+|---|---|
+| An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
+| A reused Tautulli session key with a later start is a new playback event | The start time distinguishes separate plays when Tautulli recycles a session key |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 

@@ -2,7 +2,7 @@ import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.
 import type { Logger } from "../logger.js";
 import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
-export interface TautulliHistoryRecord {
+export interface TautulliEpisodeRecord {
   referenceId: string;
   userId: string | null;
   /** The Plex username (Tautulli's `username` field) — absent for Plex Home/managed users. */
@@ -17,6 +17,9 @@ export interface TautulliHistoryRecord {
   grandparentRatingKey: string | null;
   raw: unknown;
 }
+
+export type TautulliHistoryRecord = TautulliEpisodeRecord;
+export type TautulliActivityRecord = TautulliEpisodeRecord;
 
 export type ExternalIds = { tvdbId: number | null; imdbId: string | null };
 
@@ -83,7 +86,13 @@ export class TautulliIntegration {
         const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);
         const episodeNumber = Number(row.media_index ?? row.episode ?? 0);
         const watchedAtUnix = Number(row.date ?? row.started ?? row.stopped ?? 0);
-        if (!seasonNumber || !episodeNumber || !watchedAtUnix) continue;
+        const watchedAt = new Date(watchedAtUnix * 1000);
+        if (
+          !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
+          !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+          !Number.isFinite(watchedAtUnix) || watchedAtUnix <= 0 ||
+          !Number.isFinite(watchedAt.getTime())
+        ) continue;
         pageRecords.push({
           referenceId: String(row.reference_id ?? row.id ?? `${row.user_id}:${row.rating_key}:${watchedAtUnix}`),
           userId: row.user_id ? String(row.user_id) : null,
@@ -92,7 +101,7 @@ export class TautulliIntegration {
           showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
           seasonNumber,
           episodeNumber,
-          watchedAt: new Date(watchedAtUnix * 1000).toISOString(),
+          watchedAt: watchedAt.toISOString(),
           ratingKey: row.rating_key ? String(row.rating_key) : null,
           grandparentRatingKey: row.grandparent_rating_key ? String(row.grandparent_rating_key) : null,
           raw: row,
@@ -104,6 +113,44 @@ export class TautulliIntegration {
       start += length;
     }
     this.logger.info("Tautulli history fetched", { records: records.length, since: since ?? null });
+    return records;
+  }
+
+  async getActiveSessions(): Promise<TautulliActivityRecord[]> {
+    const data = await this.command<{ sessions?: any[] }>("get_activity", {}, 60_000);
+    const sessions = data?.sessions ?? [];
+    const records: TautulliActivityRecord[] = [];
+    for (const row of sessions) {
+      if (String(row.media_type ?? row.type ?? "") !== "episode") continue;
+      const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);
+      const episodeNumber = Number(row.media_index ?? row.episode ?? 0);
+      const startedAtUnix = Number(row.started ?? row.date ?? 0);
+      const watchedAt = new Date(startedAtUnix * 1000);
+      if (
+        !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
+        !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+        !Number.isFinite(startedAtUnix) || startedAtUnix <= 0 ||
+        !Number.isFinite(watchedAt.getTime())
+      ) continue;
+      // A Tautulli activity poll sees the same live session repeatedly. Prefix the
+      // event identity so its stable session/rating key can never be mistaken for a
+      // completed-history reference ID imported by getHistory.
+      const sessionIdentity = row.session_key ?? row.session_id ?? `${row.user_id ?? "unknown"}:${row.rating_key ?? "unknown"}`;
+      records.push({
+        referenceId: `activity:${sessionIdentity}:${row.rating_key ?? "unknown"}:${startedAtUnix}`,
+        userId: row.user_id ? String(row.user_id) : null,
+        username: row.username === null || row.username === undefined ? null : String(row.username),
+        friendlyName: row.user === null || row.user === undefined ? null : String(row.user),
+        showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
+        seasonNumber,
+        episodeNumber,
+        watchedAt: watchedAt.toISOString(),
+        ratingKey: row.rating_key ? String(row.rating_key) : null,
+        grandparentRatingKey: row.grandparent_rating_key ? String(row.grandparent_rating_key) : null,
+        raw: row,
+      });
+    }
+    this.logger.info("Tautulli active sessions fetched", { records: records.length });
     return records;
   }
 }

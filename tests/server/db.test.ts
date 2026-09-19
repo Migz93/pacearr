@@ -883,6 +883,30 @@ test("migration 17 retains one duplicate Tautulli identity before adding its uni
   }
 });
 
+test("migration 22 separates Tautulli active-session events without losing existing watch events", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 21);
+    const stamp = "2026-08-12T09:00:00.000Z";
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli", "completed-1", "The Expanse", 1, 1, stamp, "{}", stamp);
+
+    runMigrations(raw);
+
+    assert.equal((raw.prepare("SELECT COUNT(*) AS count FROM watch_events WHERE source = 'tautulli'").get() as { count: number }).count, 1);
+    raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("tautulli-session", "activity:1", "The Expanse", 1, 1, stamp, "{}", stamp);
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {

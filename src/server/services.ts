@@ -23,7 +23,7 @@ import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
-import { TautulliIntegration, type TautulliHistoryRecord } from "./integrations/tautulli.js";
+import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
@@ -159,6 +159,8 @@ export class PacearrServices {
   private readonly activeSeriesOperations = new Map<number, number>();
   private readonly sourceIdentityThrottles = new Map<"plex" | "tautulli", ResolutionThrottle>();
   private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", string>();
+  /** Event-side rolling work deferred while another job owns the same series. */
+  private readonly pendingRollingRetries = new Set<string>();
   private nextEnrollmentOperation = 0;
 
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
@@ -1248,7 +1250,7 @@ export class PacearrServices {
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliHistoryRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
+  private async matchTautulliSeries(event: TautulliEpisodeRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, failures: SourceIdentityFailures): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
     const resolved = await this.resolveIdentity("tautulli", `${identityScope}:rating:${event.grandparentRatingKey}`, async () => {
       const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
@@ -1367,10 +1369,11 @@ export class PacearrServices {
     return true;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
+    const retryKey = `${input.source}:${input.sourceEventId}`;
+    let repaired = false;
     if (!stored.inserted) {
-      let repaired = false;
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
         repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
@@ -1378,36 +1381,40 @@ export class PacearrServices {
           this.db.upsertRollingUserProgress(rolling.id, input.userId, input.seasonNumber, input.episodeNumber, input.watchedAt);
         }
       }
-      return { inserted: false, changed: repaired, progressUpdated: false };
-    }
-    this.logUnmatchedWatchEvent(input);
+    } else this.logUnmatchedWatchEvent(input);
     // Complete history is retained for audit and the History tab, but replaying
     // old pilot watches must not expand seasons or retrigger Sonarr actions.
-    if (!applyRolling) return { inserted: true, changed: false, progressUpdated: false };
-    if (!input.userId || !input.sonarrSeriesId) return { inserted: true, changed: false, progressUpdated: false };
+    if (!applyRolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    if (!input.userId || !input.sonarrSeriesId) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
     const user = this.db.getUser(input.userId);
     const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
-    if (!user?.enabled || !rolling) return { inserted: true, changed: false, progressUpdated: false };
+    if (!user?.enabled || !rolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    // Duplicate live polls ordinarily mean the same playback is still in progress and
+    // must stay silent. Only a prior operation collision places an event in this set,
+    // letting its next duplicate complete the deferred rolling work exactly once.
+    if (!stored.inserted && !repaired && !retryDuplicateRolling && !this.pendingRollingRetries.has(retryKey)) {
+      return { inserted: false, changed: repaired, progressUpdated: false };
+    }
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
-    if (!progressUpdated) return { inserted: true, changed: false, progressUpdated: false };
+    if (!progressUpdated && stored.inserted) return { inserted: true, changed: repaired, progressUpdated: false };
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
-    if (operation === null) return { inserted: true, changed: false, progressUpdated: true };
+    if (operation === null) {
+      this.pendingRollingRetries.add(retryKey);
+      return { inserted: stored.inserted, changed: repaired, progressUpdated };
+    }
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       const expansionKey = `${rolling.id}:${input.seasonNumber}`;
+      let changed: boolean;
       if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
-        const changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
+        changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
         if (changed && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
-        return { inserted: true, changed, progressUpdated: true };
-      }
-      return {
-        inserted: true,
-        changed: await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache),
-        progressUpdated: true,
-      };
+      } else changed = await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache);
+      this.pendingRollingRetries.delete(retryKey);
+      return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
@@ -1719,6 +1726,83 @@ export class PacearrServices {
     }
     this.logger.info("Plex session check complete", { processed: events.length, changed });
     return { ok: true, message: `Checked ${events.length} active Plex sessions.`, processed: events.length, changed };
+  }
+
+  async checkTautulliActiveSessions(): Promise<RunResult> {
+    const settings = this.db.getTautulliSettings();
+    if (!settings.enabled || !settings.baseUrl || !settings.apiKey) {
+      return { ok: true, message: "Tautulli is not configured.", processed: 0, changed: 0 };
+    }
+    this.logger.info("Tautulli active session check started");
+    let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
+    const tautulli = new TautulliIntegration(settings, this.logger);
+    const identityScope = this.sourceIdentityScope("tautulli", settings.baseUrl, settings.apiKey);
+    const events = await tautulli.getActiveSessions();
+    const failures: SourceIdentityFailures = new Map();
+    const findTautulliUser = this.db.createTautulliUserResolver();
+    const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
+    const matched: Array<{ event: TautulliEpisodeRecord; series: SonarrSeries | null }> = [];
+    const resolve = async (event: TautulliEpisodeRecord) => this.matchTautulliSeries(event, seriesIndex, tautulli, identityScope, failures);
+    for (const event of events) matched.push({ event, series: await resolve(event) });
+    // As with Plex sessions, retry misses against one fresh library snapshot so a recent
+    // Sonarr addition can recover from a missed live-playback notification immediately.
+    if (matched.some((item) => !item.series)) {
+      seriesIndex = this.buildSeriesMatchIndex(await this.getSonarr().getSeries());
+      for (const item of matched) if (!item.series) item.series = await resolve(item.event);
+    }
+
+    const episodeCache: EpisodeCache = new Map();
+    const dryRunExpandedSeasons = new Set<string>();
+    let changed = 0;
+    let progressUpdated = false;
+    for (const { event, series } of matched) {
+      const user = findTautulliUser(event.userId, event.username, event.friendlyName);
+      const username = event.username?.trim() || event.friendlyName?.trim() || null;
+      if (user) tautulliUsernames.push({ userId: user.id, username });
+      const result = await this.processWatchEvent({
+        source: "tautulli-session",
+        sourceEventId: event.referenceId,
+        userId: user?.id ?? null,
+        plexAccountId: null,
+        username,
+        sonarrSeriesId: series?.id ?? null,
+        showTitle: event.showTitle,
+        seasonNumber: event.seasonNumber,
+        episodeNumber: event.episodeNumber,
+        watchedAt: event.watchedAt,
+        rawPayload: event.raw,
+      }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons);
+      if (result.changed) changed++;
+      if (!result.inserted && user && this.db.repairUnmatchedWatchEventUser("tautulli-session", event.referenceId, user.id)) {
+        this.refreshRollingProgressForUsers([user.id]);
+        changed++;
+        progressUpdated = true;
+        if (!result.changed) {
+          const retried = await this.processWatchEvent({
+            source: "tautulli-session",
+            sourceEventId: event.referenceId,
+            userId: user.id,
+            plexAccountId: null,
+            username,
+            sonarrSeriesId: series?.id ?? null,
+            showTitle: event.showTitle,
+            seasonNumber: event.seasonNumber,
+            episodeNumber: event.episodeNumber,
+            watchedAt: event.watchedAt,
+            rawPayload: event.raw,
+          }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons, true);
+          if (retried.changed) changed++;
+          if (retried.progressUpdated) progressUpdated = true;
+        }
+      }
+      if (result.progressUpdated) progressUpdated = true;
+    }
+    this.db.fillMissingTautulliUsernames(tautulliUsernames);
+    if (changed > 0 || progressUpdated) {
+      this.db.addHistory("info", "tautulli.sessions.check", "Tautulli active sessions", { processed: events.length, changed });
+    }
+    this.logger.info("Tautulli active session check complete", { processed: events.length, changed });
+    return { ok: true, message: `Checked ${events.length} active Tautulli sessions.`, processed: events.length, changed };
   }
 
   async reconcileRollingShows(): Promise<RunResult> {

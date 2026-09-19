@@ -48,6 +48,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
+  tautulliSessionPollIntervalMinutes: 15,
   historyImportIntervalHours: 24,
   fullHistoryReconcileIntervalDays: 30,
   rollingReconcileIntervalHours: 6,
@@ -624,11 +625,15 @@ export class PacearrDatabase {
    * no stable account identifier to relink by.
    */
   repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
+    return this.repairUnmatchedWatchEventUser("tautulli", sourceEventId, userId);
+  }
+
+  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceEventId: string, userId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events
       SET user_id = ?
-      WHERE source = 'tautulli' AND source_event_id = ? AND user_id IS NULL
-    `).run(userId, sourceEventId).changes > 0;
+      WHERE source = ? AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, source, sourceEventId).changes > 0;
   }
 
   repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceEventId: string, seriesId: number): boolean {
@@ -705,7 +710,7 @@ export class PacearrDatabase {
         SELECT id, CAST(json_extract(raw_payload, '$.user_id') AS TEXT) AS tautulliUserId,
           username, json_extract(raw_payload, '$.user') AS friendlyName, watched_at
         FROM watch_events
-        WHERE source = 'tautulli' AND user_id IS NULL
+        WHERE source IN ('tautulli', 'tautulli-session') AND user_id IS NULL
           AND json_extract(raw_payload, '$.user_id') IS NOT NULL
       ), ranked AS (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY tautulliUserId ORDER BY watched_at DESC, id DESC) AS row_number,
@@ -745,7 +750,7 @@ export class PacearrDatabase {
   linkUnassignedTautulliWatchEvents(userId: number, tautulliUserId: string): number {
     return this.db.prepare(`
       UPDATE watch_events SET user_id = ?
-      WHERE source = 'tautulli' AND user_id IS NULL
+        WHERE source IN ('tautulli', 'tautulli-session') AND user_id IS NULL
         AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) = ?
     `).run(userId, tautulliUserId).changes;
   }
