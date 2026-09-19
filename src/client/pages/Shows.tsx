@@ -133,6 +133,8 @@ function ShowsBrowser() {
 
   useEffect(() => { setView(loadStoredView(tab)); setSort(loadStoredSort(tab)); setQuery(""); }, [tab]);
 
+  // The fetched ignored count changes a tab label after the first layout, which can
+  // create overflow without resizing the strip.
   useEffect(() => {
     const tabStrip = tabStripRef.current;
     if (!tabStrip) return;
@@ -277,22 +279,20 @@ function ShowsBrowser() {
         </button>
       </PageHeader>
       {error && <ErrorBanner message={error} />}
-      <div className="relative">
-        <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" style={tabsHaveMoreToReveal ? { maskImage: "linear-gradient(to right, black calc(100% - 2.25rem), transparent)" } : undefined}>
-          <legend className="sr-only">Show category</legend>
-          {TABS.map((entry) => (
-            <button
-              type="button"
-              key={entry.id}
-              aria-pressed={tab === entry.id}
-              className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
-              onClick={() => setTab(entry.id)}
-            >
-              {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
-            </button>
-          ))}
-        </fieldset>
-      </div>
+      <fieldset ref={tabStripRef} className="m-0 flex min-w-0 gap-1 overflow-x-auto rounded-xl border border-outline-variant/30 bg-background-container-high p-1" style={tabsHaveMoreToReveal ? { maskImage: "linear-gradient(to right, black calc(100% - 2.25rem), transparent)" } : undefined}>
+        <legend className="sr-only">Show category</legend>
+        {TABS.map((entry) => (
+          <button
+            type="button"
+            key={entry.id}
+            aria-pressed={tab === entry.id}
+            className={`min-h-10 flex-1 whitespace-nowrap rounded-lg px-3.5 font-bold ${tab === entry.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`}
+            onClick={() => setTab(entry.id)}
+          >
+            {entry.label}{entry.id === "ignored" && ignoredCount > 0 ? ` (${ignoredCount})` : ""}
+          </button>
+        ))}
+      </fieldset>
       <div className="mb-[18px] mt-[18px] flex items-center gap-3 max-[820px]:flex-col max-[820px]:items-stretch">
         <div className="flex h-10 flex-1 items-center gap-2.5 rounded-lg border border-outline-variant/30 bg-background px-3 text-on-surface-variant">
           <Search size={17} />
