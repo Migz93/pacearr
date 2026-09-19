@@ -83,6 +83,20 @@ test("getActiveSessions parses episode activity and uses an activity-only stable
           parent_media_index: 2,
           media_index: 0,
           started: 1700000000,
+        }, {
+          // Tautulli data is external input: fractional episode positions and invalid
+          // dates must be ignored without preventing valid sessions from processing.
+          media_type: "episode",
+          session_key: "fractional-season",
+          parent_media_index: 2.5,
+          media_index: 1,
+          started: 1700000000,
+        }, {
+          media_type: "episode",
+          session_key: "invalid-date",
+          parent_media_index: 2,
+          media_index: 1,
+          started: "Infinity",
         }],
       },
     },

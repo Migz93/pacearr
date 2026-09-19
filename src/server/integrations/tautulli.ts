@@ -119,7 +119,12 @@ export class TautulliIntegration {
       const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);
       const episodeNumber = Number(row.media_index ?? row.episode ?? 0);
       const startedAtUnix = Number(row.started ?? row.date ?? 0);
-      if (!seasonNumber || !episodeNumber || !startedAtUnix) continue;
+      const watchedAt = new Date(startedAtUnix * 1000);
+      if (
+        !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
+        !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
+        !Number.isFinite(watchedAt.getTime())
+      ) continue;
       // A Tautulli activity poll sees the same live session repeatedly. Prefix the
       // event identity so its stable session/rating key can never be mistaken for a
       // completed-history reference ID imported by getHistory.
@@ -132,7 +137,7 @@ export class TautulliIntegration {
         showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
         seasonNumber,
         episodeNumber,
-        watchedAt: new Date(startedAtUnix * 1000).toISOString(),
+        watchedAt: watchedAt.toISOString(),
         ratingKey: row.rating_key ? String(row.rating_key) : null,
         grandparentRatingKey: row.grandparent_rating_key ? String(row.grandparent_rating_key) : null,
         raw: row,
