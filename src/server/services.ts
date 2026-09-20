@@ -821,13 +821,24 @@ export class PacearrServices {
   async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
     try {
       let changed = 0;
-      if (options.importHistory) {
-        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
-        changed += result.changed ?? 0;
-      }
+      // Routine history imports already keep stored viewer progress current. Apply the
+      // pilot baseline from that state first so manual enrollment does not wait for a
+      // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
       if (options.applyBaseline) {
         changed += await this.applyActiveViewerPlan(series.id, "enroll");
+      }
+      if (options.importHistory) {
+        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
+        changed += result.changed ?? 0;
+        // This enrollment owns the series operation lock, so the reconciliation
+        // deliberately skips it. Re-seed and correct it here after the full read;
+        // pilots were already searched by the baseline, so only search a newly
+        // required season.
+        this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
+        if (options.applyBaseline) {
+          changed += await this.applyActiveViewerPlan(series.id, "enroll-history", false);
+        }
       }
       await this.syncPlexArtwork(series, rolling, this.getActiveRetainedSeasons(rolling.id));
       return { ok: true, message: `Enrolled ${rolling.title}.`, changed };

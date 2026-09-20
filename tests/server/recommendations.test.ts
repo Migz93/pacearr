@@ -733,6 +733,32 @@ test("enrolling a show seeds rolling progress from watch history that was alread
   }
 });
 
+test("manual enrollment applies its pilot baseline before its full history reconciliation", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
+  const series: SonarrSeries = { id: 804, title: "Immediate Baseline", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8041, seriesId: 804, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: false },
+    { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ series: [series], seriesById: { 804: series }, episodesBySeries: { 804: episodes }, requests });
+  try {
+    const result = await services.enrollShow(804, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    const firstSonarrMutation = requests.findIndex((request) => request.pathname.startsWith("/api/v3/") && request.method !== "GET");
+    const historyRead = requests.findIndex((request) => request.pathname === "/status/sessions/history/all");
+    assert.ok(firstSonarrMutation >= 0);
+    assert.ok(historyRead >= 0);
+    assert.ok(firstSonarrMutation < historyRead, "the pilot baseline must reach Sonarr before the full history read");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("enrollment repairs and seeds previously unmatched history with a full verified source read", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
