@@ -772,6 +772,28 @@ test("manual enrollment applies its pilot baseline before its full history recon
   }
 });
 
+test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false });
+  const series: SonarrSeries = { id: 805, title: "Degraded History", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true, hasFile: true, episodeFileId: 8051 },
+    { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ series: [series], seriesById: { 805: series }, episodesBySeries: { 805: episodes }, requests });
+  try {
+    const result = await services.enrollShow(805, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
+    assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("enrollment repairs and seeds previously unmatched history with a full verified source read", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
