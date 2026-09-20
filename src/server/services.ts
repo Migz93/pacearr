@@ -419,7 +419,11 @@ export class PacearrServices {
     }
 
     const errors: string[] = [];
-    const repairHistoryAfterTriage = Boolean(this.db.getPlexSettings()?.serverUrl);
+    const tautulliSettings = this.db.getTautulliSettings();
+    const repairHistoryAfterTriage = Boolean(
+      this.db.getPlexSettings()?.serverUrl
+      || (tautulliSettings.enabled && tautulliSettings.baseUrl && tautulliSettings.apiKey)
+    );
     const automaticallyEnrolledSeriesIds = new Set<number>();
     for (const item of candidates) {
       const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
