@@ -826,12 +826,16 @@ export class PacearrServices {
       // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
       if (options.applyBaseline) {
-        changed += await this.applyActiveViewerPlan(series.id, "enroll");
+        // The history read may reveal a currently active season missing from the
+        // local progress cache. Defer destructive cleanup until it completes.
+        changed += await this.applyActiveViewerPlan(series.id, "enroll", true, options.importHistory ? false : undefined);
       }
+      let historyReconciled = !options.importHistory;
       if (options.importHistory) {
         try {
           const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
           changed += result.changed ?? 0;
+          historyReconciled = true;
         } catch (error) {
           // The immediate baseline is the primary enrollment operation. A failed
           // corrective history read must not prevent us from applying whatever
@@ -846,7 +850,7 @@ export class PacearrServices {
         // required season.
         this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
         if (options.applyBaseline) {
-          changed += await this.applyActiveViewerPlan(series.id, "enroll-history", false);
+          changed += await this.applyActiveViewerPlan(series.id, "enroll-history", false, historyReconciled ? undefined : false);
         }
       }
       await this.syncPlexArtwork(series, rolling, this.getActiveRetainedSeasons(rolling.id));
@@ -1019,12 +1023,12 @@ export class PacearrServices {
     return { retainedSeasons: [...retained].sort((a, b) => a - b), eligibleForCleanup };
   }
 
-  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true): Promise<number> {
+  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true, deleteFiles?: boolean): Promise<number> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots);
+    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots, [], deleteFiles);
   }
 
-  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
+  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = [], deleteFiles?: boolean): Promise<number> {
     const settings = this.db.getAppSettings();
     const sonarr = this.getSonarr(settings.dryRun);
     const series = await sonarr.getSeriesById(seriesId);
@@ -1034,8 +1038,9 @@ export class PacearrServices {
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
       .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
     const prefetchedIds = new Set(prefetchedEpisodeIds);
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles, prefetchedEpisodeIds);
-    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
+    const fileDeletionEnabled = deleteFiles ?? settings.cleanupDeletesFiles;
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds);
+    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
       await sonarr.updateSeriesMonitoring(seriesId, { monitored: true, monitorNewItems: "none" });

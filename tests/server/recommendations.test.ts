@@ -742,9 +742,9 @@ test("manual enrollment applies its pilot baseline before its full history recon
   const series: SonarrSeries = { id: 804, title: "Immediate Baseline", tvdbId: 804, seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }] };
   const episodes: SonarrEpisode[] = [
     { id: 8041, seriesId: 804, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: false },
-    { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true },
+    { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8042 },
     { id: 8043, seriesId: 804, seasonNumber: 2, episodeNumber: 1, title: "Second season pilot", monitored: true },
-    { id: 8044, seriesId: 804, seasonNumber: 2, episodeNumber: 2, title: "Second season episode", monitored: true },
+    { id: 8044, seriesId: 804, seasonNumber: 2, episodeNumber: 2, title: "Second season episode", monitored: true, hasFile: true, episodeFileId: 8044 },
   ];
   const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
   const viewedAt = Math.floor(Date.now() / 1000);
@@ -762,6 +762,9 @@ test("manual enrollment applies its pilot baseline before its full history recon
     assert.ok(firstSonarrMutation >= 0);
     assert.ok(historyRead >= 0);
     assert.ok(firstSonarrMutation < historyRead, "the pilot baseline must reach Sonarr before the full history read");
+    const fileDeletes = requests.filter((request) => request.method === "DELETE" && request.pathname.startsWith("/api/v3/episodefile/"));
+    assert.deepEqual(fileDeletes.map((request) => request.pathname), ["/api/v3/episodefile/8042"]);
+    assert.ok(requests.indexOf(fileDeletes[0]!) > historyRead, "the provisional baseline must not delete episode files");
     assert.deepEqual(db.getRollingShowBySeriesId(804)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
