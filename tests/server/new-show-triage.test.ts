@@ -56,6 +56,7 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
       return jsonResponse(current ?? {});
     }
     if (url.pathname === "/api/v3/episode") return jsonResponse(state.episodesBySeries?.[Number(url.searchParams.get("seriesId"))] ?? [] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episodefile") return jsonResponse([]);
     if (url.pathname === "/api/v3/episode/monitor") return jsonResponse({});
     if (method === "DELETE" && url.pathname.startsWith("/api/v3/episodefile/")) return jsonResponse({});
     if (url.pathname === "/api/v3/command") {
@@ -174,6 +175,33 @@ test("new-show triage preserves files when its shared history repair is degraded
 
     assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
     assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/3302"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage deletes unretained files after a clean shared history repair", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const large = { ...series(34, "New large cleaned after repair", 81, "2026-08-11T12:00:01.000Z"), seasons: [{ seasonNumber: 1, monitored: true }] };
+  const restoreFetch = installSonarrFetchStub({
+    requests,
+    series: [large],
+    episodesBySeries: {
+      34: [
+        { id: 3401, seriesId: 34, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 3401 },
+        { id: 3402, seriesId: 34, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 3402 },
+      ],
+    },
+  });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
+    assert.equal(requests.filter((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/3402").length, 1);
   } finally {
     restoreFetch();
     cleanup();
