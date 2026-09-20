@@ -27,14 +27,18 @@ function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; body?: string }>; episodesBySeries?: Record<number, SonarrEpisode[]>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; onSeriesFetch?: () => void }) {
+function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array<{ method: string; pathname: string; search?: string; body?: string }>; episodesBySeries?: Record<number, SonarrEpisode[]>; failingSearchSeriesIds?: Set<number>; failingSeriesReadIds?: Set<number>; failingSeriesUpdateIds?: Set<number>; plexHistoryStatus?: number; onSeriesFetch?: () => void }) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
-    state.requests.push({ method, pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
+    state.requests.push({ method, pathname: url.pathname, search: url.search, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
+      if (state.plexHistoryStatus) return new Response("temporary Plex error", { status: state.plexHistoryStatus });
       return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { headers: { "content-type": "application/xml" } });
+    }
+    if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
+      return jsonResponse({ response: { result: "success", data: { data: [] } } });
     }
     if (url.pathname === "/api/v3/series") {
       state.onSeriesFetch?.();
@@ -55,7 +59,9 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
       return jsonResponse(current ?? {});
     }
     if (url.pathname === "/api/v3/episode") return jsonResponse(state.episodesBySeries?.[Number(url.searchParams.get("seriesId"))] ?? [] satisfies SonarrEpisode[]);
+    if (url.pathname === "/api/v3/episodefile") return jsonResponse([]);
     if (url.pathname === "/api/v3/episode/monitor") return jsonResponse({});
+    if (method === "DELETE" && url.pathname.startsWith("/api/v3/episodefile/")) return jsonResponse({});
     if (url.pathname === "/api/v3/command") {
       const command = typeof init?.body === "string" ? JSON.parse(init.body) as { seriesId?: number } : {};
       if (command.seriesId && state.failingSearchSeriesIds?.has(command.seriesId)) return new Response("temporary Sonarr error", { status: 503 });
@@ -144,6 +150,88 @@ test("new-show triage coalesces automatic enrollment history repair into one ful
     assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
     assert.equal(requests.filter((request) => request.pathname === "/api/v3/command" && request.body?.includes("EpisodeSearch")).length, 2);
     assert.deepEqual(db.getRollingShowBySeriesId(30)?.expandedSeasons, [2]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage preserves files when its shared history repair is degraded", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const large = { ...series(33, "New large with files", 81, "2026-08-11T12:00:01.000Z"), seasons: [{ seasonNumber: 1, monitored: true }] };
+  const restoreFetch = installSonarrFetchStub({
+    requests,
+    series: [large],
+    plexHistoryStatus: 503,
+    episodesBySeries: {
+      33: [
+        { id: 3301, seriesId: 33, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 3301 },
+        { id: 3302, seriesId: 33, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 3302 },
+      ],
+    },
+  });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/3302"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage uses Tautulli-only history repair before cleanup", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const large = { ...series(35, "Tautulli-only repair", 81, "2026-08-11T12:00:01.000Z"), seasons: [{ seasonNumber: 1, monitored: true }] };
+  const restoreFetch = installSonarrFetchStub({
+    requests,
+    series: [large],
+    episodesBySeries: {
+      35: [
+        { id: 3501, seriesId: 35, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 3501 },
+        { id: 3502, seriesId: 35, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 3502 },
+      ],
+    },
+  });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/api/v2" && request.search?.includes("cmd=get_history")).length, 1);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/3502"), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("new-show triage deletes unretained files after a clean shared history repair", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const large = { ...series(34, "New large cleaned after repair", 81, "2026-08-11T12:00:01.000Z"), seasons: [{ seasonNumber: 1, monitored: true }] };
+  const restoreFetch = installSonarrFetchStub({
+    requests,
+    series: [large],
+    episodesBySeries: {
+      34: [
+        { id: 3401, seriesId: 34, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 3401 },
+        { id: 3402, seriesId: 34, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 3402 },
+      ],
+    },
+  });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    assert.equal(requests.filter((request) => request.pathname === "/status/sessions/history/all").length, 1);
+    assert.equal(requests.filter((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/3402").length, 1);
   } finally {
     restoreFetch();
     cleanup();

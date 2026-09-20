@@ -733,6 +733,67 @@ test("enrolling a show seeds rolling progress from watch history that was alread
   }
 });
 
+test("manual enrollment applies its pilot baseline before its full history reconciliation", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
+  const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null }]);
+  db.updateUser(user.id, { enabled: true });
+  const series: SonarrSeries = { id: 804, title: "Immediate Baseline", tvdbId: 804, seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8041, seriesId: 804, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: false },
+    { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8042 },
+    { id: 8043, seriesId: 804, seasonNumber: 2, episodeNumber: 1, title: "Second season pilot", monitored: true },
+    { id: 8044, seriesId: 804, seasonNumber: 2, episodeNumber: 2, title: "Second season episode", monitored: true, hasFile: true, episodeFileId: 8044 },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const viewedAt = Math.floor(Date.now() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 804: series }, episodesBySeries: { 804: episodes }, requests,
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" historyKey="immediate-baseline-history" grandparentTitle="Immediate Baseline" parentIndex="2" index="2" viewedAt="${viewedAt}" grandparentRatingKey="immediate-baseline" accountID="1" user="bob"/></MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://804" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.enrollShow(804, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    const firstSonarrMutation = requests.findIndex((request) => request.pathname.startsWith("/api/v3/") && request.method !== "GET");
+    const historyRead = requests.findIndex((request) => request.pathname === "/status/sessions/history/all");
+    assert.ok(firstSonarrMutation >= 0);
+    assert.ok(historyRead >= 0);
+    assert.ok(firstSonarrMutation < historyRead, "the pilot baseline must reach Sonarr before the full history read");
+    const fileDeletes = requests.filter((request) => request.method === "DELETE" && request.pathname.startsWith("/api/v3/episodefile/"));
+    assert.deepEqual(fileDeletes.map((request) => request.pathname), ["/api/v3/episodefile/8042"]);
+    assert.ok(requests.indexOf(fileDeletes[0]!) > historyRead, "the provisional baseline must not delete episode files");
+    assert.deepEqual(db.getRollingShowBySeriesId(804)?.expandedSeasons, [2]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false });
+  const series: SonarrSeries = { id: 805, title: "Degraded History", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true, hasFile: true, episodeFileId: 8051 },
+    { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ series: [series], seriesById: { 805: series }, episodesBySeries: { 805: episodes }, requests });
+  try {
+    const result = await services.enrollShow(805, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
+    assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("enrollment repairs and seeds previously unmatched history with a full verified source read", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
