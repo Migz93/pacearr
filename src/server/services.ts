@@ -829,8 +829,17 @@ export class PacearrServices {
         changed += await this.applyActiveViewerPlan(series.id, "enroll");
       }
       if (options.importHistory) {
-        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
-        changed += result.changed ?? 0;
+        try {
+          const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
+          changed += result.changed ?? 0;
+        } catch (error) {
+          // The immediate baseline is the primary enrollment operation. A failed
+          // corrective history read must not prevent us from applying whatever
+          // current progress is already available below.
+          const message = error instanceof Error ? error.message : String(error);
+          this.db.addHistory("warn", "history.full_reconcile", "Full history reconciliation", { reason: "enrollment", seriesId: series.id, error: message });
+          this.logger.warn("Full history reconciliation failed during enrollment; applying available viewer progress", { seriesId: series.id, title: rolling.title, error: message });
+        }
         // This enrollment owns the series operation lock, so the reconciliation
         // deliberately skips it. Re-seed and correct it here after the full read;
         // pilots were already searched by the baseline, so only search a newly

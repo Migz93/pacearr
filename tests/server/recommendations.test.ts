@@ -737,13 +737,22 @@ test("manual enrollment applies its pilot baseline before its full history recon
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   db.updateAppSettings({ dryRun: false });
-  const series: SonarrSeries = { id: 804, title: "Immediate Baseline", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null }]);
+  db.updateUser(user.id, { enabled: true });
+  const series: SonarrSeries = { id: 804, title: "Immediate Baseline", tvdbId: 804, seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }] };
   const episodes: SonarrEpisode[] = [
     { id: 8041, seriesId: 804, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: false },
     { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true },
+    { id: 8043, seriesId: 804, seasonNumber: 2, episodeNumber: 1, title: "Second season pilot", monitored: true },
+    { id: 8044, seriesId: 804, seasonNumber: 2, episodeNumber: 2, title: "Second season episode", monitored: true },
   ];
   const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
-  const restoreFetch = installFetchStub({ series: [series], seriesById: { 804: series }, episodesBySeries: { 804: episodes }, requests });
+  const viewedAt = Math.floor(Date.now() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 804: series }, episodesBySeries: { 804: episodes }, requests,
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" historyKey="immediate-baseline-history" grandparentTitle="Immediate Baseline" parentIndex="2" index="2" viewedAt="${viewedAt}" grandparentRatingKey="immediate-baseline" accountID="1" user="bob"/></MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://804" /></Directory></MediaContainer>',
+  });
   try {
     const result = await services.enrollShow(804, { applyBaseline: true, importHistory: true });
 
@@ -753,6 +762,7 @@ test("manual enrollment applies its pilot baseline before its full history recon
     assert.ok(firstSonarrMutation >= 0);
     assert.ok(historyRead >= 0);
     assert.ok(firstSonarrMutation < historyRead, "the pilot baseline must reach Sonarr before the full history read");
+    assert.deepEqual(db.getRollingShowBySeriesId(804)?.expandedSeasons, [2]);
   } finally {
     restoreFetch();
     cleanup();
