@@ -84,6 +84,22 @@ export function selectEarlyPrefetchEpisodes(
   };
 }
 
+/**
+ * A Sonarr episode file can represent more than one episode. Deletion must be
+ * decided per file, not per episode, so a retained pilot protects its shared file.
+ */
+export function selectEpisodeFilesToDelete(episodes: SonarrEpisode[], shouldDeleteEpisode: (episode: SonarrEpisode) => boolean): number[] {
+  const deletionCandidates = new Set<number>();
+  const protectedFiles = new Set<number>();
+  for (const episode of episodes) {
+    const fileId = episode.episodeFileId;
+    if (!episode.hasFile || !fileId || fileId <= 0) continue;
+    if (shouldDeleteEpisode(episode)) deletionCandidates.add(fileId);
+    else protectedFiles.add(fileId);
+  }
+  return [...deletionCandidates].filter((fileId) => !protectedFiles.has(fileId));
+}
+
 export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = []) {
   const retained = new Set(retainedSeasons);
   const prefetched = new Set(prefetchedEpisodeIds);
@@ -115,9 +131,7 @@ export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpiso
     pilotSearches,
     seasonSearches,
     filesToDelete: deleteFiles
-      ? realEpisodes.filter((episode) =>
-          !targetMonitored(episode) && episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0
-        ).map((episode) => episode.episodeFileId!)
+      ? selectEpisodeFilesToDelete(episodes, (episode) => isRealSeasonEpisode(episode) && !targetMonitored(episode))
       : [],
   };
 }
@@ -1462,7 +1476,8 @@ export class PacearrServices {
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return { changed: 0, reclaimedBytes: 0 };
     const settings = this.db.getAppSettings();
-    const episodes = (await sonarr.getEpisodes(seriesId)).filter((episode) => episode.seasonNumber === seasonNumber);
+    const seriesEpisodes = await sonarr.getEpisodes(seriesId);
+    const episodes = seriesEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
     const pilot = episodes.find((episode) => episode.episodeNumber === 1);
     const nonPilots = episodes.filter((episode) => episode.episodeNumber > 1);
     const updates = [
@@ -1474,7 +1489,9 @@ export class PacearrServices {
     // the pilot only after that season-level update.
     await sonarr.updateEpisodesMonitoring(updates);
     const filesToDelete = settings.cleanupDeletesFiles
-      ? nonPilots.filter((episode) => episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0).map((episode) => episode.episodeFileId!)
+      ? selectEpisodeFilesToDelete(seriesEpisodes, (episode) =>
+          episode.seasonNumber === seasonNumber && episode.episodeNumber > 1
+        )
       : [];
     const reclaimedBytes = await this.deleteEpisodeFilesAndRecord({
       sonarr,

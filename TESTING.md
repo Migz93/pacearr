@@ -250,6 +250,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Early prefetch selection skips the pilot and caps the candidate count | Episodes selected from the next season start after E01 and respect the configured count |
 | Rolling plans preserve prefetched episodes individually | Prefetched episode targets remain monitored without retaining the entire season |
+| File cleanup protects multipart releases needed by a retained episode | Sonarr files shared with a pilot or another retained episode are not deleted; a file shared only by disposable episodes is deleted once, including when the retained link is in another season |
 
 ### `tests/playwright/pages.spec.ts` — Page smoke tests
 

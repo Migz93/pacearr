@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateRollingPlan, selectEarlyPrefetchEpisodes } from "../../src/server/services.js";
+import { calculateRollingPlan, selectEarlyPrefetchEpisodes, selectEpisodeFilesToDelete } from "../../src/server/services.js";
 import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
 
 const series = {
@@ -95,4 +95,37 @@ test("rolling plan deletes an orphaned non-pilot file even when it was already u
 
   assert.equal(plan.episodesToUnmonitor.some((episode) => episode.id === 403), false);
   assert.deepEqual(plan.filesToDelete, [1002, 1003, 2002, 2003, 3002, 3003, 4002, 4003]);
+});
+
+test("rolling plan retains a multipart file when its pilot is still protected", () => {
+  const multipartEpisodes = [
+    { id: 401, seriesId: 1, seasonNumber: 4, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 4001 },
+    { id: 402, seriesId: 1, seasonNumber: 4, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 4001 },
+  ] as SonarrEpisode[];
+
+  const plan = calculateRollingPlan({ ...series, seasons: [{ seasonNumber: 4, monitored: true }] }, multipartEpisodes, [], true);
+
+  assert.deepEqual(plan.episodesToUnmonitor.map((episode) => episode.id), [402]);
+  assert.deepEqual(plan.filesToDelete, []);
+});
+
+test("file deletion removes a shared multipart file once every linked episode is disposable", () => {
+  const multipartEpisodes = [
+    { id: 402, seriesId: 1, seasonNumber: 4, episodeNumber: 2, monitored: false, hasFile: true, episodeFileId: 4002 },
+    { id: 403, seriesId: 1, seasonNumber: 4, episodeNumber: 3, monitored: false, hasFile: true, episodeFileId: 4002 },
+  ] as SonarrEpisode[];
+
+  assert.deepEqual(selectEpisodeFilesToDelete(multipartEpisodes, () => true), [4002]);
+});
+
+test("file deletion protects a multipart file linked to a retained episode in another season", () => {
+  const multipartEpisodes = [
+    { id: 410, seriesId: 1, seasonNumber: 4, episodeNumber: 20, monitored: false, hasFile: true, episodeFileId: 4999 },
+    { id: 501, seriesId: 1, seasonNumber: 5, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 4999 },
+  ] as SonarrEpisode[];
+
+  assert.deepEqual(
+    selectEpisodeFilesToDelete(multipartEpisodes, (episode) => episode.seasonNumber === 4 && episode.episodeNumber > 1),
+    [],
+  );
 });
