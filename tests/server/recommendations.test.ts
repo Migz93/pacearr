@@ -647,6 +647,42 @@ test("rolling reconciliation honours a custom delay and immediate cleanup at zer
   }
 });
 
+test("progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 904,
+    title: "Batch Cleanup Test",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [1, 2].map((seasonNumber) => ({ seasonNumber, monitored: true })),
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 90401, seriesId: 904, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90401 },
+    { id: 90402, seriesId: 904, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90499 },
+    { id: 90411, seriesId: 904, seasonNumber: 2, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90411 },
+    { id: 90412, seriesId: 904, seasonNumber: 2, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90499 },
+  ];
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 904: series }, episodesBySeries: { 904: episodes }, episodeFilesBySeries: { 904: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const rolling = db.upsertRollingShow({ id: 904, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z");
+
+    await (services as unknown as { performProgressiveCleanup: (rollingShowId: number, currentSeason: number, observedAt: Date) => Promise<void> })
+      .performProgressiveCleanup(rolling.id, 3, new Date("2026-01-02T00:00:00.000Z"));
+
+    assert.deepEqual(
+      requests.filter((request) => request.method === "DELETE").map((request) => request.pathname),
+      ["/api/v3/episodefile/90499"],
+    );
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("a returning active viewer clears an inactive season's cleanup timer", async () => {
   const { db, services, cleanup } = createHarness();
   const series = rollingSeries(903);

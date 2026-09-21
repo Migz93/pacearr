@@ -84,6 +84,22 @@ export function selectEarlyPrefetchEpisodes(
   };
 }
 
+/**
+ * A Sonarr episode file can represent more than one episode. Deletion must be
+ * decided per file, not per episode, so a retained pilot protects its shared file.
+ */
+export function selectEpisodeFilesToDelete(episodes: SonarrEpisode[], shouldDeleteEpisode: (episode: SonarrEpisode) => boolean): number[] {
+  const deletionCandidates = new Set<number>();
+  const protectedFiles = new Set<number>();
+  for (const episode of episodes) {
+    const fileId = episode.episodeFileId;
+    if (!episode.hasFile || !fileId || fileId <= 0) continue;
+    if (shouldDeleteEpisode(episode)) deletionCandidates.add(fileId);
+    else protectedFiles.add(fileId);
+  }
+  return [...deletionCandidates].filter((fileId) => !protectedFiles.has(fileId));
+}
+
 export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = []) {
   const retained = new Set(retainedSeasons);
   const prefetched = new Set(prefetchedEpisodeIds);
@@ -115,9 +131,7 @@ export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpiso
     pilotSearches,
     seasonSearches,
     filesToDelete: deleteFiles
-      ? realEpisodes.filter((episode) =>
-          !targetMonitored(episode) && episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0
-        ).map((episode) => episode.episodeFileId!)
+      ? selectEpisodeFilesToDelete(episodes, (episode) => isRealSeasonEpisode(episode) && !targetMonitored(episode))
       : [],
   };
 }
@@ -1457,12 +1471,10 @@ export class PacearrServices {
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
-  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number): Promise<{ changed: number; reclaimedBytes: number }> {
-    const sonarr = this.getSonarr();
+  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number, sonarr: SonarrIntegration, seriesEpisodes: SonarrEpisode[], filesToDelete: number[]): Promise<{ changed: number; reclaimedBytes: number }> {
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return { changed: 0, reclaimedBytes: 0 };
-    const settings = this.db.getAppSettings();
-    const episodes = (await sonarr.getEpisodes(seriesId)).filter((episode) => episode.seasonNumber === seasonNumber);
+    const episodes = seriesEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
     const pilot = episodes.find((episode) => episode.episodeNumber === 1);
     const nonPilots = episodes.filter((episode) => episode.episodeNumber > 1);
     const updates = [
@@ -1473,9 +1485,6 @@ export class PacearrServices {
     // Disabling the season unmonitors all child episodes in Sonarr. Restore
     // the pilot only after that season-level update.
     await sonarr.updateEpisodesMonitoring(updates);
-    const filesToDelete = settings.cleanupDeletesFiles
-      ? nonPilots.filter((episode) => episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0).map((episode) => episode.episodeFileId!)
-      : [];
     const reclaimedBytes = await this.deleteEpisodeFilesAndRecord({
       sonarr,
       seriesId,
@@ -1497,8 +1506,40 @@ export class PacearrServices {
     if (!rolling) return;
     const { eligibleForCleanup } = this.getCleanupRetention(rolling, observedAt);
     if (!settings.progressiveCleanupEnabled) return;
-    for (const season of eligibleForCleanup.filter((season) => season < currentSeason)) {
-      const result = await this.cleanupSeasonToPilot(rolling.sonarrSeriesId, rolling.id, season);
+    const cleanupSeasons = eligibleForCleanup.filter((season) => season < currentSeason);
+    if (cleanupSeasons.length === 0) return;
+
+    const sonarr = this.getSonarr();
+    const seriesEpisodes = await sonarr.getEpisodes(rolling.sonarrSeriesId);
+    const cleanupSeasonSet = new Set(cleanupSeasons);
+    // Select once for the complete cleanup batch. A multipart file shared only
+    // by non-pilots in two eligible seasons must be deleted, not protected by
+    // whichever season happens to be processed second.
+    const filesToDelete = settings.cleanupDeletesFiles
+      ? selectEpisodeFilesToDelete(seriesEpisodes, (episode) =>
+          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1
+        )
+      : [];
+    const filesToDeleteBySeason = new Map<number, number[]>();
+    for (const fileId of filesToDelete) {
+      const ownerSeason = seriesEpisodes
+        .filter((episode) => episode.episodeFileId === fileId && cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1)
+        .map((episode) => episode.seasonNumber)
+        .sort((a, b) => a - b)[0];
+      if (ownerSeason === undefined) continue;
+      const fileIds = filesToDeleteBySeason.get(ownerSeason) ?? [];
+      fileIds.push(fileId);
+      filesToDeleteBySeason.set(ownerSeason, fileIds);
+    }
+    for (const season of cleanupSeasons) {
+      const result = await this.cleanupSeasonToPilot(
+        rolling.sonarrSeriesId,
+        rolling.id,
+        season,
+        sonarr,
+        seriesEpisodes,
+        filesToDeleteBySeason.get(season) ?? [],
+      );
       this.db.addHistory("info", "cleanup.progressive", rolling.title, { seasonNumber: season, reason: "inactive-delay-elapsed", ...result });
     }
   }
