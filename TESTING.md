@@ -245,6 +245,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
 | Scheduled reconciliation clears prefetches promoted to a retained season | Existing per-episode prefetch records are removed and audited when active viewer progress makes their season fully retained, so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
+| Progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once | The complete cleanup batch is evaluated together, so one eligible season does not incorrectly protect a file needed only by another eligible season |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
 
