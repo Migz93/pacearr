@@ -51,4 +51,8 @@ RUN chmod 755 /entrypoint.sh
 RUN mkdir -p /config && chown node:node /config
 ENTRYPOINT ["/entrypoint.sh"]
 EXPOSE 9302
+# Uses Node's built-in fetch so the check needs no curl/wget and survives npm's
+# removal above. Follows a custom PORT; /api/health is unauthenticated.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||9302)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "dist/server/server/index.js"]
