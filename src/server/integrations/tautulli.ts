@@ -1,5 +1,6 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { liveSessionEventId } from "./live-session.js";
 import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 export interface TautulliEpisodeRecord {
@@ -120,31 +121,27 @@ export class TautulliIntegration {
     const data = await this.command<{ sessions?: any[] }>("get_activity", {}, 60_000);
     const sessions = data?.sessions ?? [];
     const records: TautulliActivityRecord[] = [];
+    // get_activity has no playback start time (its updated_at is the media item's
+    // metadata timestamp), so the watch is dated when Pacearr observed it, as Plex
+    // session polling does.
+    const observedAt = new Date();
     for (const row of sessions) {
       if (String(row.media_type ?? row.type ?? "") !== "episode") continue;
       const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);
       const episodeNumber = Number(row.media_index ?? row.episode ?? 0);
-      const startedAtUnix = Number(row.started ?? row.date ?? 0);
-      const watchedAt = new Date(startedAtUnix * 1000);
       if (
         !Number.isInteger(seasonNumber) || seasonNumber <= 0 ||
-        !Number.isInteger(episodeNumber) || episodeNumber <= 0 ||
-        !Number.isFinite(startedAtUnix) || startedAtUnix <= 0 ||
-        !Number.isFinite(watchedAt.getTime())
+        !Number.isInteger(episodeNumber) || episodeNumber <= 0
       ) continue;
-      // A Tautulli activity poll sees the same live session repeatedly. Prefix the
-      // event identity so its stable session/rating key can never be mistaken for a
-      // completed-history reference ID imported by getHistory.
-      const sessionIdentity = row.session_key ?? row.session_id ?? `${row.user_id ?? "unknown"}:${row.rating_key ?? "unknown"}`;
       records.push({
-        referenceId: `activity:${sessionIdentity}:${row.rating_key ?? "unknown"}:${startedAtUnix}`,
+        referenceId: liveSessionEventId({ sessionId: row.session_id, sessionKey: row.session_key, userId: row.user_id, ratingKey: row.rating_key, observedAt }),
         userId: row.user_id ? String(row.user_id) : null,
         username: row.username === null || row.username === undefined ? null : String(row.username),
         friendlyName: row.user === null || row.user === undefined ? null : String(row.user),
         showTitle: String(row.grandparent_title ?? row.full_title ?? row.title ?? ""),
         seasonNumber,
         episodeNumber,
-        watchedAt: watchedAt.toISOString(),
+        watchedAt: observedAt.toISOString(),
         ratingKey: row.rating_key ? String(row.rating_key) : null,
         grandparentRatingKey: row.grandparent_rating_key ? String(row.grandparent_rating_key) : null,
         raw: row,
