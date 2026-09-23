@@ -63,6 +63,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   earlyPrefetchEnabled: false,
   earlyPrefetchTriggerEpisodesRemaining: 3,
   earlyPrefetchEpisodeCount: 2,
+  expandNextSeasonOnFinaleEnabled: false,
   newShowTriageEnabled: false,
   newShowTriageIntervalMinutes: 5,
   newShowTriageEpisodeThreshold: 80,

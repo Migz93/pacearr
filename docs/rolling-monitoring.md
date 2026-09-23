@@ -43,13 +43,35 @@ inactive or have progressed beyond it). Dry-run previews this cleanup without
 clearing persisted prefetch state. This reclaim, like expanded-season cleanup,
 is disabled when the **Progressive cleanup** setting is disabled.
 
-The setting is controlled under Settings → Automation:
+The settings are under Settings → General → Rolling behaviour:
 
 | Setting | Default | Meaning |
 |---|---:|---|
 | Early season prefetch | off | Enable early monitoring/searching of the next season |
 | Episodes remaining trigger | 3 | Start when this many episodes remain after the watched episode |
 | Episodes to prefetch | 2 | Number of next-season episodes after E01 to target |
+
+### Expand Next Season On Finale
+
+Optional and disabled by default, independent of early prefetch. When an enabled
+user's watch event is for the last episode of a season, Pacearr fully expands the
+next real season (see Expansion), so it downloads while the finale is still playing.
+
+| Rule | Behaviour |
+|---|---|
+| Last episode | Highest episode number Sonarr lists for that season, aired or not — a season still airing only triggers on its announced finale |
+| Next season | Next real season in Sonarr, skipping gaps and season `0`; nothing happens if none exists yet or it is already expanded |
+| Trigger timing | Same as E01 expansion: the first live session poll that sees the episode playing, or a history import |
+| One-episode season | Its E01 expands that season and then the next |
+| Early prefetch | A finale expansion replaces prefetching that season; its prefetch records are cleared |
+| Retention | The next season is held while any active viewer's last watched season is at or before it, so a viewer still on the finale keeps it |
+| Dry run | Records `dry_run.sonarr.expand_season` without changing Sonarr or `expanded_seasons` |
+
+History entries record `source` as `<source>-finale` (for example `plex-session-finale`).
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| Expand next season on finale | off | Expand the whole next season when a season's last episode is watched |
 
 When the optional rolling-season artwork setting is enabled in live mode,
 Pacearr also labels pilot-only Plex season posters with `WATCH E01 TO UNLOCK`.
@@ -76,7 +98,9 @@ Season `0` specials are ignored.
 
 ## Expansion
 
-Pacearr expands a season when an enabled user watches E01 of that season.
+Pacearr expands a season when an enabled user watches E01 of that season, or,
+with **Expand next season on finale** enabled, the last episode of the season
+before it.
 
 The trigger can come from:
 

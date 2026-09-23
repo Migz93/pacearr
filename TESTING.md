@@ -207,6 +207,18 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
 | A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — through `checkTautulliActiveSessions()`, a new `session_id` on a recycled session key stores a second row for the same episode, while repeated polls of each playback add nothing |
 
+### `tests/server/finale-expansion.test.ts` — Expand next season on finale
+
+| Test | What it checks |
+|---|---|
+| Finale selection finds the next real season only from a season's last known episode | The last episode is the highest one Sonarr lists (aired or not), the next season skips gaps and season `0`, and nothing is selected when no later season exists |
+| Starting a season's last episode expands the whole next season, with early prefetch off | A live session on S1E10 of 10 monitors the rest of season 2, runs `SeasonSearch`, marks it expanded and records a `-finale` history source; the setting does not depend on `earlyPrefetchEnabled` |
+| With the setting off, the finale leaves early prefetch behaving as before | The finale only prefetches E02–E03, and season 2 is not expanded |
+| A finale expansion supersedes early prefetch of the same season | Earlier prefetch records for the next season are cleared by the expansion, and no second prefetch runs |
+| A one-episode season expands both itself and the next season from its only episode | E01 as finale still reaches the finale check after expanding its own season |
+| A dry-run finale records the expansion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, one `dry_run.sonarr.expand_season` entry, and a repeat poll of the same playback stays silent |
+| Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
+
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |
