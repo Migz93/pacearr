@@ -24,7 +24,8 @@ function part(value: unknown): string {
  * Plex and Tautulli both send Session.id today; the fallback accepts two known gaps
  * rather than keeping cross-poll state: a playback spanning UTC midnight gets a second
  * row, and a same-day replay of the same episode by the same viewer on a recycled key is
- * treated as the first playback. Neither changes that viewer's progress.
+ * treated as the first playback. Neither moves the viewer's season/episode position or
+ * triggers Sonarr work; at most last_watched_at shifts.
  */
 export function liveSessionEventId(identity: LiveSessionIdentity): string {
   const ratingKey = part(identity.ratingKey);
