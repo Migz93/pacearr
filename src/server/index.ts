@@ -40,7 +40,9 @@ scheduler.registerRecurringJob({
     await services.checkSessions();
   }),
 });
-services.startPlexSessionMonitor(() => { scheduler.runNow("session-check"); });
+// Playback events must not push back the polling fallback, which has to keep its
+// cadence in case the live connection drops right after an event.
+services.startPlexSessionMonitor(() => { scheduler.runNow("session-check", { keepSchedule: true }); });
 scheduler.registerRecurringJob({
   id: "history-import",
   intervalMs: settings.historyImportIntervalHours * 60 * 60 * 1000,
