@@ -159,6 +159,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Updating a job without changing its interval or enabled state keeps its next run | Saving settings cannot postpone a job indefinitely |
 | Changing a job's interval measures the new interval from its last run | Switching an interval away and back leaves the original due time |
 | A manual run satisfies a pending catch-up | A startup `runNow` is not repeated by the catch-up moments later |
+| A manual run moves a job's next scheduled run a full interval after it | A scheduled run cannot follow a manual run by less than one interval |
+| Repeated interval edits keep an overdue job's catch-up slot | Editing an overdue job's interval back and forth cannot push its catch-up further out |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds

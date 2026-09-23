@@ -101,6 +101,30 @@ test("a manual run satisfies a pending catch-up instead of repeating it", async 
   scheduler.updateJob("rolling-reconcile", { enabled: false });
 });
 
+test("a manual run moves a job's next scheduled run a full interval after it", async () => {
+  const scheduler = schedulerWithLastRun({ "sonarr-library-refresh": new Date(Date.now() - HOUR_MS).toISOString() });
+  scheduler.registerRecurringJob({ id: "sonarr-library-refresh", intervalMs: 2 * HOUR_MS, task: async () => {} });
+  const startedAt = Date.now();
+
+  assert.equal(await scheduler.runNowAndWait("sonarr-library-refresh"), true);
+  assert.ok(nextRunMs(scheduler, "sonarr-library-refresh") >= startedAt + 2 * HOUR_MS);
+  scheduler.updateJob("sonarr-library-refresh", { enabled: false });
+});
+
+test("repeated interval edits keep an overdue job's catch-up slot", () => {
+  const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun({ "history-import": longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.registerRecurringJob({ id: "history-import", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  const catchUpAt = nextRunMs(scheduler, "history-import");
+
+  for (let edit = 0; edit < 5; edit += 1) {
+    scheduler.updateJob("history-import", { intervalMs: HOUR_MS });
+    scheduler.updateJob("history-import", { intervalMs: 24 * HOUR_MS });
+  }
+  assert.equal(nextRunMs(scheduler, "history-import"), catchUpAt);
+  scheduler.updateJob("history-import", { enabled: false });
+});
+
 test("a failed catch-up run waits a full interval before retrying", async () => {
   const scheduler = schedulerWithLastRun(
     { "history-import": new Date(Date.now() - 30 * HOUR_MS).toISOString() },

@@ -40,7 +40,8 @@ interval after boot or a settings save:
 |---|---|
 | Last run plus interval is still ahead | That time |
 | Overdue, never run, or last run failed before a restart | After a 30-second grace, staggered 30 seconds apart across jobs |
-| A manual or startup run starts while a catch-up is pending | The catch-up is dropped; next run is one interval after that run |
+| A manual, queued, or startup run starts | Next run is one interval after that run; any pending catch-up is dropped |
+| An overdue job is rescheduled again before its catch-up | It keeps its existing catch-up time |
 | Interval changed | Recomputed from the last run; overdue results catch up as above |
 | Settings saved with the interval and enabled state unchanged | Unchanged |
 

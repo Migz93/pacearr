@@ -19,7 +19,7 @@ type ScheduledJob = {
   // The next run is due one interval after this (the last run start or scheduled
   // tick), so restarts and settings saves cannot keep postponing a long interval.
   anchorMs: number | null;
-  catchUpPending: boolean;
+  catchUpAtMs: number | null;
   intervalMs: number;
   task: (context: JobRunContext) => Promise<void>;
 };
@@ -68,7 +68,7 @@ export class JobScheduler {
       pendingManualRun: false,
       timeout: null,
       anchorMs: Number.isFinite(lastRunMs) ? lastRunMs : null,
-      catchUpPending: false,
+      catchUpAtMs: null,
       intervalMs: options.intervalMs,
       task: options.task,
     };
@@ -140,7 +140,8 @@ export class JobScheduler {
   private reschedule(job: ScheduledJob) {
     if (job.timeout) clearTimeout(job.timeout);
     job.timeout = null;
-    job.catchUpPending = false;
+    const pendingCatchUpMs = job.catchUpAtMs;
+    job.catchUpAtMs = null;
     if (!job.enabled) {
       job.nextRunAt = null;
       return;
@@ -150,9 +151,15 @@ export class JobScheduler {
     // moved backwards from delaying the job by more than a single interval.
     let targetMs = job.anchorMs === null ? now : Math.min(job.anchorMs + job.intervalMs, now + job.intervalMs);
     if (targetMs <= now) {
-      targetMs = Math.max(now + this.catchUpDelayMs, this.nextCatchUpSlotMs);
-      this.nextCatchUpSlotMs = targetMs + this.catchUpSpacingMs;
-      job.catchUpPending = true;
+      // Keep a still-pending catch-up's slot, so repeated edits cannot keep
+      // reserving later slots and push this job's catch-up further out.
+      if (pendingCatchUpMs !== null && pendingCatchUpMs > now) {
+        targetMs = pendingCatchUpMs;
+      } else {
+        targetMs = Math.max(now + this.catchUpDelayMs, this.nextCatchUpSlotMs);
+        this.nextCatchUpSlotMs = targetMs + this.catchUpSpacingMs;
+      }
+      job.catchUpAtMs = targetMs;
     }
     job.nextRunAt = new Date(targetMs).toISOString();
     this.waitUntil(job, targetMs);
@@ -184,10 +191,10 @@ export class JobScheduler {
     }
     job.activeRuns += 1;
     if (!scheduled) {
+      // A manual, queued, or startup run counts as the job's latest run, so the next
+      // scheduled run (including a pending catch-up) is a full interval after it.
       job.anchorMs = Date.now();
-      // A manual or startup run satisfies a pending catch-up, so it is not repeated
-      // moments later; otherwise the existing timer stays where it is.
-      if (job.catchUpPending) this.reschedule(job);
+      this.reschedule(job);
     }
     this.logger?.info("Scheduled job started", { id: job.id, scheduled, activeRuns: job.activeRuns });
     try {
