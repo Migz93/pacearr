@@ -1019,10 +1019,11 @@ test("scheduled reconciliation clears prefetch records when active progress reta
     assert.equal(result.ok, true);
     assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [2]);
     assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    // The season is promoted through the same expansion a live watch would use.
     assert.equal(db.listHistory(10).some((entry) => {
-      if (entry.action !== "cleanup.prefetch") return false;
+      if (entry.action !== "sonarr.expand_season") return false;
       const details = JSON.parse(entry.details);
-      return details.reason === "expanded-retention" && details.clearedPrefetchedEpisodes === 2 && JSON.stringify(details.seasonNumbers) === "[2]";
+      return details.source === "active-progress-reconcile" && details.seasonNumber === 2;
     }), true);
   } finally {
     restoreFetch();

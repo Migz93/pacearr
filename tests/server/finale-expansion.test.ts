@@ -244,7 +244,7 @@ test("the rolling reconcile expands the next season for a finale watched before 
     assert.equal(harness.seasonSearched(2), true);
     assert.deepEqual(harness.db.listPrefetchedEpisodes(harness.rollingShowId), []);
     const history = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.expand_season");
-    assert.deepEqual(history.map((entry) => JSON.parse(String(entry.details)).source), ["active-progress-finale-reconcile"]);
+    assert.deepEqual(history.map((entry) => JSON.parse(String(entry.details)).source), ["active-progress-reconcile-finale"]);
 
     await harness.services.reconcileRollingShows();
     assert.equal(harness.db.listHistory(50).filter((entry) => entry.action === "sonarr.expand_season").length, 1);
@@ -263,6 +263,69 @@ test("the rolling reconcile ignores a finale watched by a viewer outside the act
 
     assert.deepEqual(harness.expandedSeasons(), [1]);
     assert.equal(harness.seasonSearched(2), false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+/*
+ * Every job must reach the same actions from the same viewer position. These cover the
+ * paths that move progress without a fresh watch event reaching processWatchEvent.
+ */
+
+test("the rolling reconcile prefetches for a viewer whose progress reached the trigger without a processed watch event", async () => {
+  const harness = createHarness({ earlyPrefetchEnabled: true, earlyPrefetchTriggerEpisodesRemaining: 3, earlyPrefetchEpisodeCount: 2 });
+  try {
+    const user = harness.db.listUsers().find((item) => item.username === "gina")!;
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, user.id, 1, 8, new Date().toISOString());
+
+    await harness.services.reconcileRollingShows();
+
+    assert.deepEqual(harness.db.listPrefetchedEpisodes(harness.rollingShowId).map((row) => [row.seasonNumber, row.episodeNumber]), [[2, 2], [2, 3]]);
+    const prefetch = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.early_prefetch");
+    assert.deepEqual(prefetch.map((entry) => JSON.parse(String(entry.details)).source), ["active-progress-reconcile"]);
+
+    // Already prefetched, so a second sweep does nothing further.
+    await harness.services.reconcileRollingShows();
+    assert.equal(harness.db.listHistory(50).filter((entry) => entry.action === "sonarr.early_prefetch").length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("enrolment applies a stored finale watch the same way a live watch would", async () => {
+  const harness = createHarness({ expandNextSeasonOnFinaleEnabled: true }, { expandSeasonOne: false });
+  try {
+    const user = harness.db.listUsers().find((item) => item.username === "gina")!;
+    harness.db.deleteRollingShow(harness.rollingShowId);
+    harness.db.insertWatchEvent({
+      source: "plex-history", sourceEventId: "finale-before-enrolment", userId: user.id, plexAccountId: "42", username: "gina",
+      sonarrSeriesId: 71, showTitle: "9-1-1", seasonNumber: 1, episodeNumber: 10, watchedAt: new Date().toISOString(), rawPayload: {},
+    });
+
+    await harness.services.enrollShow(71, { applyBaseline: true, importHistory: false });
+
+    assert.deepEqual(harness.expandedSeasons(), [1, 2]);
+    assert.equal(harness.seasonSearched(2), true);
+    const sources = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.expand_season").map((entry) => JSON.parse(String(entry.details)).source);
+    assert.equal(sources.includes("enroll-finale"), true);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a first watch inside an unexpanded season expands it and still prefetches the next when near its end", async () => {
+  const episodes = [
+    episode(7101, 1, 1, { monitored: true, hasFile: true }),
+    ...Array.from({ length: 5 }, (_, index) => episode(7201 + index, 2, index + 1, { monitored: index === 0 })),
+    episode(7301, 3, 1, { monitored: true }), episode(7302, 3, 2), episode(7303, 3, 3),
+  ];
+  const harness = createHarness({ earlyPrefetchEnabled: true, earlyPrefetchTriggerEpisodesRemaining: 3, earlyPrefetchEpisodeCount: 2 }, { episodes });
+  try {
+    await harness.watch(2, 4);
+
+    assert.deepEqual(harness.expandedSeasons(), [1, 2]);
+    assert.deepEqual(harness.db.listPrefetchedEpisodes(harness.rollingShowId).map((row) => [row.seasonNumber, row.episodeNumber]), [[3, 2], [3, 3]]);
   } finally {
     harness.cleanup();
   }

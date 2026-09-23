@@ -31,6 +31,10 @@ event within the configured remaining-episode threshold monitors and searches
 E02 onward (up to the configured count) in the next real season. Sonarr only
 receives episodes that actually exist, so short seasons are naturally capped.
 
+Like expansion, prefetch is applied by every job, including the catch-up sweeps (see
+Same Actions From Every Job), so a viewer inside the trigger is prefetched for even if
+their watch was stored while prefetch was off.
+
 Prefetched episodes are stored separately from `expanded_seasons`, including the
 user and timestamp that triggered them. Reconciliation preserves those
 individual episode targets without treating the entire season as expanded. When
@@ -62,7 +66,7 @@ next real season (see Expansion), so it downloads while the finale is still play
 | Last episode | Exactly the highest episode number Sonarr lists for that season, aired or not — a season still airing only triggers on its announced finale, and a higher number than Sonarr lists never triggers |
 | Next season | Next real season in Sonarr, skipping gaps and season `0`; nothing happens if none exists yet or it is already expanded |
 | Trigger timing | Same as E01 expansion: the first live session poll that sees the episode playing, or a history import |
-| Catch-up | The rolling reconcile and routine history imports also expand the next season for any active viewer whose last watch is a finale, covering a finale stored before the setting was enabled, in dry run, or during a series lock. History source: `active-progress-finale-reconcile` |
+| Catch-up | The catch-up sweeps (see Same Actions From Every Job) also expand it for any active viewer whose stored progress is a finale, for example one watched before the setting was enabled |
 | One-episode season | Its E01 expands that season and then the next |
 | Early prefetch | A finale expansion replaces prefetching that season; its prefetch records are cleared |
 | Retention | The next season is held while any active viewer's last watched season is at or before it, so a viewer still on the finale keeps it |
@@ -99,15 +103,35 @@ Season `0` specials are ignored.
 
 ## Expansion
 
-Pacearr expands a season when an enabled user watches E01 of that season, or,
-with **Expand next season on finale** enabled, the last episode of the season
-before it.
+Pacearr expands a season when an enabled user watches any episode of it (normally
+E01), or, with **Expand next season on finale** enabled, the last episode of the
+season before it.
 
-The trigger can come from:
+### Same Actions From Every Job
 
-- Plex playback history import
-- Tautulli history import
-- Plex live session polling
+Every rolling action is derived from a viewer's position (season, episode), not from
+the job that noticed it. One routine, `applyViewerPositionActions`, applies them in
+this order:
+
+1. Expand the season the viewer is in, if not already expanded.
+2. If the position is that season's finale and the setting is on, expand the next season.
+3. Otherwise, if early prefetch is on and the position is inside the trigger, prefetch the next season.
+
+Each step is idempotent, so running it again for the same position does nothing.
+
+| Job | Positions applied | History `source` |
+|---|---|---|
+| Plex live session polling | The playing episode | `plex-session` |
+| Tautulli active session polling | The playing episode | `tautulli-active-session` |
+| Plex history import | Each newly imported watch that advances progress | `plex-history` |
+| Tautulli history import | Each newly imported watch that advances progress | `tautulli` |
+| Routine history import, catch-up | Every active viewer's stored progress | `active-progress-reconcile` |
+| Rolling reconcile (every 6 hours) | Every active viewer's stored progress, before planning | `active-progress-reconcile` |
+| Enrolment / auto-triage | Every active viewer's stored progress, after the baseline | `enroll` / `auto-triage-history` |
+
+Finale expansions append `-finale` to the source. The catch-up sweeps cover a watch
+that was stored while a setting was off, in dry run, or while another operation held
+the series. Stored events are never reprocessed, so without them that watch would never act.
 
 Expansion does this:
 
