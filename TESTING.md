@@ -222,6 +222,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | The rolling reconcile ignores a finale watched by a viewer outside the activity window | Catch-up only acts on active progress, so an old finale watch does not expand anything |
 | The rolling reconcile prefetches for a viewer whose progress reached the trigger without a processed watch event | Prefetch is applied from stored progress by the sweep (`active-progress-reconcile`), not only from live events, and a second sweep adds nothing |
 | Enrolment applies a stored finale watch the same way a live watch would | Enrolment's own history read skips the locked series, so enrolment applies viewer positions itself: the stored S1E10 expands S1 and S2 (`enroll-finale`) |
+| A dry-run rolling reconcile records one expansion for two viewers in the same unexpanded season | Dry run never persists an expansion, so the sweep's own dedup set must stop the second viewer from recording it again; callers that pass no set get a fresh one per show |
 | A first watch inside an unexpanded season expands it and still prefetches the next when near its end | Expanding the current season no longer suppresses prefetch from the same watch: S2E4 of 5 expands S2 and prefetches S3 E02–E03 |
 | Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
 

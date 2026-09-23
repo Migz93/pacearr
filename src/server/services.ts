@@ -1510,9 +1510,11 @@ export class PacearrServices {
    * setting was enabled, in dry run, or while the series was locked is never
    * reprocessed as an event, so sweeps act on stored progress instead.
    */
-  private async applyActiveViewerPositions(rolling: RollingShowRecord, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<number> {
+  private async applyActiveViewerPositions(rolling: RollingShowRecord, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons: Set<string> = new Set()): Promise<number> {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    // Dry run never persists an expansion, so the set is what stops a second viewer in
+    // the same season from recording it again within this sweep.
     // Newest first, so a season expanded here is dated by its most recent viewer.
     const activeProgress = this.getActiveProgress(rolling.id, cutoff)
       .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt));

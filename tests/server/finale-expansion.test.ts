@@ -330,3 +330,25 @@ test("a first watch inside an unexpanded season expands it and still prefetches 
     harness.cleanup();
   }
 });
+
+test("a dry-run rolling reconcile records one expansion for two viewers in the same unexpanded season", async () => {
+  const harness = createHarness({ dryRun: true, expandNextSeasonOnFinaleEnabled: true });
+  try {
+    harness.db.upsertUsers([
+      { plexUserId: "plex-ivy", plexAccountId: "43", tautulliUserId: null, username: "ivy", displayName: "Ivy", avatarUrl: null },
+    ]);
+    const gina = harness.db.listUsers().find((item) => item.username === "gina")!;
+    const ivy = harness.db.listUsers().find((item) => item.username === "ivy")!;
+    harness.db.updateUser(ivy.id, { enabled: true });
+    const now = new Date().toISOString();
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, gina.id, 2, 2, now);
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, ivy.id, 2, 3, now);
+
+    await harness.services.reconcileRollingShows();
+
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.equal(harness.db.listHistory(50).filter((entry) => entry.action === "dry_run.sonarr.expand_season").length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
