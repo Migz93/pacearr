@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
-import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
 import { isHistoryCategory } from "../shared/history.js";
 import { createSessionId, isValidSignature, signedValue } from "./auth.js";
@@ -15,6 +14,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
+import { createGlobalRateLimiter, createSignInRateLimiter } from "./rate-limit.js";
 import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes, scheduleIntervalValueInUnit } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
@@ -226,23 +226,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
     hsts: false,
   }));
-  app.use(rateLimit({
-    windowMs: 60_000,
-    limit: 600,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    skip: (req) => req.path.startsWith("/images/") || req.path.startsWith("/assets/") || req.path === "/favicon.ico",
-  }));
-  app.use("/api/auth/plex", rateLimit({
-    windowMs: 15 * 60_000,
-    limit: 10,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    handler: (_req, res) => {
-      logger.warn("Plex login rate limit exceeded");
-      res.status(429).json({ error: "Too many sign-in attempts. Please try again later." });
-    },
-  }));
+  // Applies to every route. Built assets, cached images and the favicon are
+  // exempt from the count (see rate-limit.ts); /images still requires a session.
+  app.use(createGlobalRateLimiter(logger));
   app.use(express.json({ limit: "2mb" }));
 
   app.use((req, _res, next) => {
@@ -283,7 +269,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ authenticated: Boolean(req.sessionUser), user: req.sessionUser ?? null });
   });
 
-  app.post("/api/auth/plex", asyncRoute(async (req, res) => {
+  app.post("/api/auth/plex", createSignInRateLimiter(logger), asyncRoute(async (req, res) => {
     const token = requiredString((req.body as { authToken?: string }).authToken, "authToken");
     const account = await PlexIntegration.fetchAccountByToken(token);
     const existingOwner = db.getPlexOwner();
@@ -541,12 +527,6 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   });
 
-  app.use("/api/settings/logs", rateLimit({
-    windowMs: 60_000,
-    limit: 60,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-  }));
   app.get("/api/settings/logs", requireAuth, (req, res) => {
     const rawPage = Number(req.query.page ?? 1);
     const rawPageSize = Number(req.query.pageSize ?? 25);

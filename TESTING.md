@@ -55,6 +55,19 @@ cookie or authenticated page data. The smoke
 tests also fail on unexpected browser console errors and page errors, using the
 selective client logging convention from #42.
 
+### Rate limiting
+
+The app's rate limits live in `src/server/rate-limit.ts`, which is shared
+unchanged across the Migz93 self-hosted apps. There are two limiters: 3,000
+requests per minute per client IP across the app, and 10 failed sign-in
+attempts per 15 minutes. Built assets (`/assets/`), cached images (`/images/`)
+and `/favicon.ico` don't count toward the global limit, so a full Playwright
+run stays well under it.
+
+If several unrelated pages suddenly fail together with "Too many requests",
+something is making far more requests than expected. Look for a polling loop
+or a new route that bypasses the exemptions rather than rerunning the suite.
+
 ---
 
 ## Test Suite
@@ -218,6 +231,14 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Session signature validation rejects malformed non-ASCII input safely | A visually 64-character but UTF-8-long signature returns false instead of reaching `timingSafeEqual` with mismatched byte lengths |
 | Plex, Sonarr, and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; successful connection checks plus Plex.tv account, discovery, friends, and token-ping requests pass `redirect: "error"` and an abort signal to `fetch` |
 | Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
+
+### `tests/server/rate-limit.test.ts` — Rate limiting
+
+| Test | What it checks |
+|---|---|
+| Exempt paths | `/assets/`, `/images/` and `/favicon.ico` are exempt from the global limit, while API and page routes are not |
+| Global limiter | The request after 3,000 in a minute gets a JSON 429 with draft-8 `RateLimit` headers, only the first rejection is logged, and exempt paths never use up the allowance |
+| Sign-in limiter | Successful sign-ins don't count, the attempt after 10 failures gets a JSON 429, and one warning is logged |
 
 ---
 
