@@ -225,3 +225,45 @@ test("scheduled reconciliation keeps a finale-expanded season while its viewer i
     harness.cleanup();
   }
 });
+
+test("the rolling reconcile expands the next season for a finale watched before the setting was enabled", async () => {
+  const harness = createHarness({ earlyPrefetchEnabled: true, earlyPrefetchTriggerEpisodesRemaining: 3, earlyPrefetchEpisodeCount: 2 });
+  try {
+    await harness.watch(1, 8);
+    await harness.watch(1, 10);
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.equal(harness.db.listPrefetchedEpisodes(harness.rollingShowId).length, 2);
+
+    // The stored finale event is never reprocessed, so only the sweep can catch it up.
+    harness.db.updateAppSettings({ expandNextSeasonOnFinaleEnabled: true });
+    await harness.watch(1, 10);
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    await harness.services.reconcileRollingShows();
+
+    assert.deepEqual(harness.expandedSeasons(), [1, 2]);
+    assert.equal(harness.seasonSearched(2), true);
+    assert.deepEqual(harness.db.listPrefetchedEpisodes(harness.rollingShowId), []);
+    const history = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.expand_season");
+    assert.deepEqual(history.map((entry) => JSON.parse(String(entry.details)).source), ["active-progress-finale-reconcile"]);
+
+    await harness.services.reconcileRollingShows();
+    assert.equal(harness.db.listHistory(50).filter((entry) => entry.action === "sonarr.expand_season").length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("the rolling reconcile ignores a finale watched by a viewer outside the activity window", async () => {
+  const harness = createHarness({ expandNextSeasonOnFinaleEnabled: true, viewerActivityWindowDays: 30 });
+  try {
+    const user = harness.db.listUsers().find((item) => item.username === "gina")!;
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, user.id, 1, 10, new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString());
+
+    await harness.services.reconcileRollingShows();
+
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.equal(harness.seasonSearched(2), false);
+  } finally {
+    harness.cleanup();
+  }
+});

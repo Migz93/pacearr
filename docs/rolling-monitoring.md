@@ -62,6 +62,7 @@ next real season (see Expansion), so it downloads while the finale is still play
 | Last episode | Exactly the highest episode number Sonarr lists for that season, aired or not — a season still airing only triggers on its announced finale, and a higher number than Sonarr lists never triggers |
 | Next season | Next real season in Sonarr, skipping gaps and season `0`; nothing happens if none exists yet or it is already expanded |
 | Trigger timing | Same as E01 expansion: the first live session poll that sees the episode playing, or a history import |
+| Catch-up | The rolling reconcile and routine history imports also expand the next season for any active viewer whose last watch is a finale, covering a finale stored before the setting was enabled, in dry run, or during a series lock. History source: `active-progress-finale-reconcile` |
 | One-episode season | Its E01 expands that season and then the next |
 | Early prefetch | A finale expansion replaces prefetching that season; its prefetch records are cleared |
 | Retention | The next season is held while any active viewer's last watched season is at or before it, so a viewer still on the finale keeps it |

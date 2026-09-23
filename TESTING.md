@@ -218,6 +218,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A finale expansion supersedes early prefetch of the same season | Earlier prefetch records for the next season are cleared by the expansion, and no second prefetch runs |
 | A one-episode season expands both itself and the next season from its only episode | E01 as finale still reaches the finale check after expanding its own season |
 | A dry-run finale records the expansion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, one `dry_run.sonarr.expand_season` entry, and a repeat poll of the same playback stays silent |
+| The rolling reconcile expands the next season for a finale watched before the setting was enabled | A stored finale event is never reprocessed, so the sweep catches up from active progress: season 2 expands (`active-progress-finale-reconcile`), its prefetch records clear, and a second sweep does not expand again |
+| The rolling reconcile ignores a finale watched by a viewer outside the activity window | Catch-up only acts on active progress, so an old finale watch does not expand anything |
 | Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
