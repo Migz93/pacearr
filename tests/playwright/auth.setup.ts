@@ -8,8 +8,15 @@ type StorageState = { cookies: Array<{ name: string; value: string; domain?: str
 
 function validateBaseUrl(value: string): URL {
   const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("BASE_URL must use HTTP or HTTPS.");
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error("BASE_URL must use HTTPS unless it targets a loopback host over HTTP.");
+  if (url.protocol === "http:" && !loopback) {
+    console.warn(
+      `\n  Warning: BASE_URL (${url.host}) is plain HTTP and not a loopback host.\n` +
+      "  The pacearr_session cookie will be sent in plaintext across the network.\n" +
+      "  Use HTTPS (e.g. behind a reverse proxy) if this instance is reachable by others.\n",
+    );
+  }
   return url;
 }
 
