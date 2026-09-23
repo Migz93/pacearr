@@ -21,6 +21,10 @@ function part(value: unknown): string {
  * Session.id is generated per playback and is the primary identity. sessionKey is a small
  * counter that starts over when Plex Media Server restarts, so without Session.id it is
  * only trusted alongside the viewer, the episode and the UTC day it was observed on.
+ * Plex and Tautulli both send Session.id today; the fallback accepts two known gaps
+ * rather than keeping cross-poll state: a playback spanning UTC midnight gets a second
+ * row, and a same-day replay of the same episode by the same viewer on a recycled key is
+ * treated as the first playback. Neither changes that viewer's progress.
  */
 export function liveSessionEventId(identity: LiveSessionIdentity): string {
   const ratingKey = part(identity.ratingKey);

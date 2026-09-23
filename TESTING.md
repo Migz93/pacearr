@@ -205,7 +205,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
-| A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — `session_id` separates plays after Plex recycles a session key, and each playback keeps one stable ID across polls |
+| A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — through `checkTautulliActiveSessions()`, a new `session_id` on a recycled session key stores a second row for the same episode, while repeated polls of each playback add nothing |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 

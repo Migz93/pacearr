@@ -6,7 +6,6 @@ import test from "node:test";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import { ImageCacheService } from "../../src/server/image-cache.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
-import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
 import { PacearrServices } from "../../src/server/services.js";
 import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
@@ -136,23 +135,30 @@ test("an active Tautulli session retries expansion after a series-operation coll
 });
 
 test("a reused Tautulli session key is a new playback event, while repeated polls of one playback are not", async () => {
+  const { db, services, cleanup } = createHarness();
   const originalFetch = globalThis.fetch;
   let sessionId = "first-playback";
-  globalThis.fetch = (async () => new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
-    media_type: "episode", session_key: "39", session_id: sessionId, user_id: "1", grandparent_title: "The Wire", rating_key: "101",
-    parent_media_index: 1, media_index: 10,
-  }] } } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
+      media_type: "episode", session_key: "39", session_id: sessionId, user_id: "1", grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: "101",
+      parent_media_index: 1, media_index: 10,
+    }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: [] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.pathname === "/api/v3/series") return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    throw new Error(`Unhandled fetch: ${url}`);
+  }) as typeof fetch;
   try {
-    const { db, cleanup } = createHarness();
-    try {
-      const integration = new TautulliIntegration(db.getTautulliSettings(), silentLogger());
-      const first = await integration.getActiveSessions();
-      const repeated = await integration.getActiveSessions();
-      assert.equal(first[0]!.referenceId, repeated[0]!.referenceId);
-      // Plex restarted and handed the same session key to a new playback.
-      sessionId = "second-playback";
-      const second = await integration.getActiveSessions();
-      assert.notEqual(first[0]!.referenceId, second[0]!.referenceId);
-    } finally { cleanup(); }
-  } finally { globalThis.fetch = originalFetch; }
+    await services.checkTautulliActiveSessions();
+    await services.checkTautulliActiveSessions();
+    assert.equal(db.countWatchEvents(), 1);
+    // Plex restarted and handed the same session key to a new playback of the same episode.
+    sessionId = "second-playback";
+    await services.checkTautulliActiveSessions();
+    await services.checkTautulliActiveSessions();
+    assert.equal(db.countWatchEvents(), 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
 });
