@@ -1,4 +1,4 @@
-import { test as setup } from "@playwright/test";
+import { test as setup, type APIResponse } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -20,6 +20,18 @@ function validateBaseUrl(value: string): URL {
   return url;
 }
 
+// A 429 means the rate limiter refused the check, not that the session is
+// invalid. Without this, a rate-limited run reports an expired session and
+// sends you off to fetch a fresh cookie for no reason.
+function throwIfRateLimited(response: APIResponse): void {
+  if (response.status() === 429) {
+    throw new Error(
+      "\n\n  The session check was rate-limited (HTTP 429), so the cookie was not tested.\n" +
+      "  Wait for the rate-limit window to reset (up to a minute) and re-run.\n",
+    );
+  }
+}
+
 setup("authenticate", async ({ request }) => {
   const baseUrl = validateBaseUrl(baseURL);
   const savedState = readStorageState();
@@ -29,6 +41,7 @@ setup("authenticate", async ({ request }) => {
     const savedCookie = savedState.cookies.find((cookie) => cookie.name === "pacearr_session");
     if (savedCookie?.domain === currentHost && savedCookie.secure === currentSecure) {
       const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader(savedState) } });
+      throwIfRateLimited(response);
       const session = await response.json() as { authenticated: boolean };
       if (session.authenticated) return;
     }
@@ -46,6 +59,7 @@ setup("authenticate", async ({ request }) => {
   const response = await request.get("/api/auth/session", {
     headers: { Cookie: `pacearr_session=${encodeURIComponent(cookie)}` },
   });
+  throwIfRateLimited(response);
   const session = await response.json() as { authenticated: boolean };
   if (!session.authenticated) {
     throw new Error("The SESSION_COOKIE value did not authenticate successfully.");
