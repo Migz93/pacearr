@@ -211,8 +211,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Finale selection finds the next real season only from a season's last known episode | The last episode is the highest one Sonarr lists (aired or not), the next season skips gaps and season `0`, and nothing is selected when no later season exists |
+| Finale selection finds the next real season only from a season's last known episode | The last episode is the highest one Sonarr lists (aired or not), an episode past it never matches, the next season skips gaps and season `0`, and nothing is selected when no later season exists |
 | Starting a season's last episode expands the whole next season, with early prefetch off | A live session on S1E10 of 10 monitors the rest of season 2, runs `SeasonSearch`, marks it expanded and records a `-finale` history source; the setting does not depend on `earlyPrefetchEnabled` |
+| A watch past the last episode Sonarr lists does not expand the next season | S1E11 against a Sonarr season ending at E10 means stale or mismatched numbering, so only an exact match to the last listed episode triggers |
 | With the setting off, the finale leaves early prefetch behaving as before | The finale only prefetches E02–E03, and season 2 is not expanded |
 | A finale expansion supersedes early prefetch of the same season | Earlier prefetch records for the next season are cleared by the expansion, and no second prefetch runs |
 | A one-episode season expands both itself and the next season from its only episode | E01 as finale still reaches the finale check after expanding its own season |

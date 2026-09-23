@@ -76,7 +76,9 @@ export function selectFinaleNextSeason(episodes: SonarrEpisode[], currentSeasonN
   const currentSeasonEpisodes = realEpisodes.filter((episode) => episode.seasonNumber === currentSeasonNumber);
   if (currentSeasonEpisodes.length === 0) return null;
   const lastEpisodeNumber = Math.max(...currentSeasonEpisodes.map((episode) => episode.episodeNumber));
-  if (currentEpisodeNumber < lastEpisodeNumber) return null;
+  // An episode beyond Sonarr's last means stale Sonarr data or mismatched numbering,
+  // neither of which proves the season has ended.
+  if (currentEpisodeNumber !== lastEpisodeNumber) return null;
   return findNextRealSeason(realEpisodes, currentSeasonNumber);
 }
 

@@ -100,6 +100,8 @@ test("finale selection finds the next real season only from a season's last know
   ];
   assert.equal(selectFinaleNextSeason(episodes, 1, 2), 3);
   assert.equal(selectFinaleNextSeason(episodes, 1, 1), null);
+  // An episode past the last one Sonarr lists is stale or mismatched data, not a finale.
+  assert.equal(selectFinaleNextSeason(episodes, 1, 3), null);
   // Every episode Sonarr lists counts, aired or not, so E03 is the finale here, not E02.
   assert.equal(selectFinaleNextSeason(episodes, 3, 2), null);
   // No later season exists in Sonarr yet.
@@ -124,6 +126,18 @@ test("starting a season's last episode expands the whole next season, with early
     const history = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.expand_season");
     assert.equal(history.length, 1);
     assert.deepEqual(JSON.parse(String(history[0]!.details)), { seasonNumber: 2, source: "plex-session-finale", monitoredEpisodes: 4, dryRun: false });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a watch past the last episode Sonarr lists does not expand the next season", async () => {
+  const harness = createHarness({ expandNextSeasonOnFinaleEnabled: true });
+  try {
+    await harness.watch(1, 11);
+
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.equal(harness.seasonSearched(2), false);
   } finally {
     harness.cleanup();
   }

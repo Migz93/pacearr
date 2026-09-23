@@ -59,7 +59,7 @@ next real season (see Expansion), so it downloads while the finale is still play
 
 | Rule | Behaviour |
 |---|---|
-| Last episode | Highest episode number Sonarr lists for that season, aired or not — a season still airing only triggers on its announced finale |
+| Last episode | Exactly the highest episode number Sonarr lists for that season, aired or not — a season still airing only triggers on its announced finale, and a higher number than Sonarr lists never triggers |
 | Next season | Next real season in Sonarr, skipping gaps and season `0`; nothing happens if none exists yet or it is already expanded |
 | Trigger timing | Same as E01 expansion: the first live session poll that sees the episode playing, or a history import |
 | One-episode season | Its E01 expands that season and then the next |
