@@ -819,7 +819,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.get("/api/health", (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
   const clientDir = path.resolve(process.cwd(), "dist/client");
-  app.use("/images", express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
+  app.use("/images", requireAuth, express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
   app.use("/images", (_req, res) => res.sendStatus(404));
   // Vite content-hashes every filename under /assets, so a build's output never collides
   // with a previous one — safe to cache for as long as a browser will keep it. Everything
