@@ -127,6 +127,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 | A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 
+### `tests/server/live-session-ids.test.ts` — Live session event identity
+
+| Test | What it checks |
+|---|---|
+| A Plex session key reused after a restart for the same episode numbers still stores the new playback | Regression for #169 — `INSERT OR IGNORE` silently dropped a new playback whose reused `sessionKey` and season/episode matched an old row. The new playback must be stored and advance progress, while repeated polls of it stay one event. A final playback that differs only by `Session.id` must also be stored |
+| Without a Plex Session.id, a reused session key is still separated by viewer | The fallback ID for sessions missing `Session.id` must still separate two viewers who get the same key for the same episode |
+
 ### `tests/server/plex-session-monitor.test.ts` — Live Plex playback trigger
 
 | Test | What it checks |
@@ -191,14 +198,14 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
-| `getActiveSessions` parses valid episode activity and uses an activity-only stable event key | Tautulli's `get_activity` rows preserve the episode/user fields Pacearr needs, reject malformed activity safely, and include the playback start in a prefixed key so it cannot collide with completed history or a reused session key |
+| `getActiveSessions` parses real `get_activity` rows, which carry no start time, and keys them by playback session | Regression for #168 — real `get_activity` rows have no `started`/`date`, and the old parser skipped every one, so the job never recorded an event. The fixture matches a live payload. Rows are keyed by `session_id` (or by a session key scoped to viewer, episode and day), dated when observed, and malformed rows are still rejected |
 
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 
 | Test | What it checks |
 |---|---|
 | An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
-| A reused Tautulli session key with a later start is a new playback event | The start time distinguishes separate plays when Tautulli recycles a session key |
+| A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — through `checkTautulliActiveSessions()`, a new `session_id` on a recycled session key stores a second row for the same episode, while repeated polls of each playback add nothing |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 

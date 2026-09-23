@@ -86,6 +86,15 @@ Imported rows are normalised into `watch_events`. Re-imports are idempotent by `
 
 The `session-check` job polls Plex `/status/sessions`. The optional `tautulli-session-check` job polls Tautulli `get_activity` at a separately configurable interval (15 minutes by default). Episode sessions are normalised into the same watch-event path used by history import.
 
+Live sessions are timestamped when Pacearr observes them (`get_activity` has no start time). Their `source_event_id` comes from `liveSessionEventId` in `src/server/integrations/live-session.ts`:
+
+| Available | `source_event_id` |
+|---|---|
+| Plex `Session.id` / Tautulli `session_id` | `session:<id>:<ratingKey>` |
+| Session key only | `key:<sessionKey>:<userId>:<ratingKey>:<UTC day>` |
+
+Fallback-form outcomes: a playback spanning UTC midnight gets a second row, and a same-day replay by the same viewer on a recycled key is stored once. The extra midnight row is processed like the same watch reported by a second source.
+
 Watching SxxE01 for an enrolled show expands that season.
 
 ### Sonarr orchestration

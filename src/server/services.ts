@@ -1427,6 +1427,11 @@ export class PacearrServices {
     const retryKey = `${input.source}:${input.sourceEventId}`;
     let repaired = false;
     if (!stored.inserted) {
+      // Live polls see an ongoing playback on every run, so a duplicate is normal there;
+      // logged so a collision between two real playbacks is visible rather than silent.
+      if (input.source === "plex-session" || input.source === "tautulli-session") {
+        this.logger.debug("Live watch event already stored; treating as the same playback", { source: input.source, sourceEventId: input.sourceEventId, showTitle: input.showTitle, seasonNumber: input.seasonNumber, episodeNumber: input.episodeNumber });
+      }
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
         repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
@@ -1787,7 +1792,7 @@ export class PacearrServices {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
       const result = await this.processWatchEvent({
         source: "plex-session",
-        sourceEventId: `${event.sourceEventId}:${event.seasonNumber}:${event.episodeNumber}`,
+        sourceEventId: event.sourceEventId,
         userId: user?.id ?? null,
         plexAccountId: event.plexAccountId,
         username: event.username,

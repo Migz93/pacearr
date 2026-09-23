@@ -3,6 +3,7 @@ import { parseStringPromise } from "xml2js";
 import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
 import { PLEX_USER_AGENT } from "../version.js";
+import { liveSessionEventId } from "./live-session.js";
 import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
@@ -105,19 +106,21 @@ function normalizeSessionVideo(video: any): PlexEpisodeActivity | null {
   const seasonNumber = Number(v.parentIndex ?? 0);
   const episodeNumber = Number(v.index ?? 0);
   const user = attr(first(video.User));
+  const session = attr(first(video.Session));
   if (!seasonNumber || !episodeNumber || !v.grandparentTitle) return null;
+  const observedAt = new Date();
   return {
-    sourceEventId: String(v.sessionKey ?? `${user.id ?? user.title ?? "unknown"}:${v.ratingKey}:${Date.now()}`),
+    sourceEventId: liveSessionEventId({ sessionId: session.id, sessionKey: v.sessionKey, userId: user.id ?? user.title, ratingKey: v.ratingKey, observedAt }),
     plexAccountId: user.id ? String(user.id) : null,
     username: user.title ?? null,
     showTitle: String(v.grandparentTitle),
     seasonNumber,
     episodeNumber,
-    watchedAt: new Date().toISOString(),
+    watchedAt: observedAt.toISOString(),
     ratingKey: v.ratingKey ? String(v.ratingKey) : null,
     grandparentRatingKey: v.grandparentRatingKey ? String(v.grandparentRatingKey) : null,
     librarySectionId: v.librarySectionID ? String(v.librarySectionID) : null,
-    raw: { ...v, user },
+    raw: { ...v, user, session },
   };
 }
 
