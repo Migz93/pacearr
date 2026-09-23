@@ -55,9 +55,10 @@ export class JobScheduler {
 
   registerRecurringJob(options: { id: string; intervalMs: number; enabled?: boolean; task: (context: JobRunContext) => Promise<void> }) {
     const persisted = this.loadPersistedState?.(options.id);
-    // lastRunAt only advances on success, so a job that failed before a restart
-    // is treated as overdue and retried shortly after boot.
-    const lastRunMs = persisted?.lastRunAt ? Date.parse(persisted.lastRunAt) : NaN;
+    // lastRunAt only advances on success, so it cannot say when a failed run
+    // happened. A job whose last run failed is treated as overdue and retried
+    // shortly after boot instead.
+    const lastRunMs = persisted?.lastRunAt && persisted.lastRunStatus !== "error" ? Date.parse(persisted.lastRunAt) : NaN;
     const job: ScheduledJob = {
       id: options.id,
       enabled: options.enabled ?? true,
@@ -144,9 +145,8 @@ export class JobScheduler {
   private reschedule(job: ScheduledJob) {
     if (job.timeout) clearTimeout(job.timeout);
     job.timeout = null;
-    const pendingCatchUpMs = job.catchUpAtMs;
-    job.catchUpAtMs = null;
     if (!job.enabled) {
+      job.catchUpAtMs = null;
       job.nextRunAt = null;
       return;
     }
@@ -155,10 +155,11 @@ export class JobScheduler {
     // moved backwards from delaying the job by more than a single interval.
     let targetMs = job.anchorMs === null ? now : Math.min(job.anchorMs + job.intervalMs, now + job.intervalMs);
     if (targetMs <= now) {
-      // Keep a still-pending catch-up's slot, so repeated edits cannot keep
-      // reserving later slots and push this job's catch-up further out.
-      if (pendingCatchUpMs !== null && pendingCatchUpMs > now) {
-        targetMs = pendingCatchUpMs;
+      // A catch-up slot stays reserved until the job runs or is disabled, even
+      // while an interval edit makes it temporarily not due, so repeated edits
+      // cannot keep reserving later slots and push this job's catch-up further out.
+      if (job.catchUpAtMs !== null && job.catchUpAtMs > now) {
+        targetMs = job.catchUpAtMs;
       } else {
         targetMs = Math.max(now + this.catchUpDelayMs, this.nextCatchUpSlotMs);
         this.nextCatchUpSlotMs = targetMs + this.catchUpSpacingMs;
@@ -187,6 +188,7 @@ export class JobScheduler {
     // single collision would leave a recurring job with no timer at all.
     if (scheduled) {
       job.anchorMs = Date.now();
+      job.catchUpAtMs = null;
       this.reschedule(job);
     }
     if (job.activeRuns > 0) {
@@ -198,6 +200,7 @@ export class JobScheduler {
       // A manual, queued, or startup run counts as the job's latest run, so the next
       // scheduled run (including a pending catch-up) is a full interval after it.
       job.anchorMs = Date.now();
+      job.catchUpAtMs = null;
       this.reschedule(job);
     }
     this.logger?.info("Scheduled job started", { id: job.id, scheduled, activeRuns: job.activeRuns });

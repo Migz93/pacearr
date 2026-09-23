@@ -137,6 +137,34 @@ test("repeated interval edits keep an overdue job's catch-up slot", () => {
   scheduler.updateJob("history-import", { enabled: false });
 });
 
+test("interval edits that make an overdue job temporarily not due keep its catch-up slot", () => {
+  const lastRunAt = new Date(Date.now() - 30 * HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun({ "history-import": lastRunAt }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.registerRecurringJob({ id: "history-import", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  const catchUpAt = nextRunMs(scheduler, "history-import");
+
+  for (let edit = 0; edit < 5; edit += 1) {
+    scheduler.updateJob("history-import", { intervalMs: 48 * HOUR_MS });
+    assert.equal(nextRunMs(scheduler, "history-import"), Date.parse(lastRunAt) + 48 * HOUR_MS);
+    scheduler.updateJob("history-import", { intervalMs: 24 * HOUR_MS });
+  }
+  assert.equal(nextRunMs(scheduler, "history-import"), catchUpAt);
+  scheduler.updateJob("history-import", { enabled: false });
+});
+
+test("a job whose last run failed before a restart catches up even when its last success is recent", () => {
+  const scheduler = new JobScheduler({ catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.setPersistence({
+    load: () => ({ lastRunAt: new Date(Date.now() - HOUR_MS).toISOString(), lastRunStatus: "error" }),
+    save: () => {},
+  });
+  const registeredAt = Date.now();
+  scheduler.registerRecurringJob({ id: "history-import", intervalMs: 24 * HOUR_MS, task: async () => {} });
+
+  assert.ok(nextRunMs(scheduler, "history-import") <= registeredAt + 2 * 60_000);
+  scheduler.updateJob("history-import", { enabled: false });
+});
+
 test("a failed catch-up run waits a full interval before retrying", async () => {
   const scheduler = schedulerWithLastRun(
     { "history-import": new Date(Date.now() - 30 * HOUR_MS).toISOString() },

@@ -162,6 +162,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A manual run moves a job's next scheduled run a full interval after it | A scheduled run cannot follow a manual run by less than one interval |
 | An event-driven run can leave the recurring schedule untouched | A Plex SSE playback event cannot postpone the session polling fallback if the live connection drops right after it |
 | Repeated interval edits keep an overdue job's catch-up slot | Editing an overdue job's interval back and forth cannot push its catch-up further out |
+| Interval edits that make an overdue job temporarily not due keep its catch-up slot | Toggling an overdue job's interval to a not-yet-due value and back cannot push its catch-up further out |
+| A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
