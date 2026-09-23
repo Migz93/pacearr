@@ -93,7 +93,7 @@ Live sessions are timestamped when Pacearr observes them (`get_activity` has no 
 | Plex `Session.id` / Tautulli `session_id` | `session:<id>:<ratingKey>` |
 | Session key only | `key:<sessionKey>:<userId>:<ratingKey>:<UTC day>` |
 
-Fallback-form outcomes: a playback spanning UTC midnight gets a second row, and a same-day replay by the same viewer on a recycled key is stored once. Neither moves a viewer's season/episode position or triggers Sonarr work.
+Fallback-form outcomes: a playback spanning UTC midnight gets a second row, and a same-day replay by the same viewer on a recycled key is stored once. The extra midnight row is processed like the same watch reported by a second source.
 
 Watching SxxE01 for an enrolled show expands that season.
 

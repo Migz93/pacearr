@@ -92,6 +92,11 @@ test("a Plex session key reused after a restart for the same episode numbers sti
     await services.checkSessions();
     await services.checkSessions();
     assert.equal(db.countWatchEvents(), 2);
+
+    // Only Session.id differs here: same key, viewer, episode and day as the playback above.
+    setSessions(sessionVideo({ sessionKey: "39", sessionId: "nine-one-one-replay", ratingKey: "421", grandparentRatingKey: "420", title: "9-1-1", userId: "42", username: "gina" }));
+    await services.checkSessions();
+    assert.equal(db.countWatchEvents(), 3);
   } finally {
     cleanup();
   }

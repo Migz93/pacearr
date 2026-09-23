@@ -131,7 +131,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| A Plex session key reused after a restart for the same episode numbers still stores the new playback | Regression for #169 — `INSERT OR IGNORE` silently dropped a new playback whose reused `sessionKey` and season/episode matched an old row. The new playback must be stored and advance progress, while repeated polls of it stay one event |
+| A Plex session key reused after a restart for the same episode numbers still stores the new playback | Regression for #169 — `INSERT OR IGNORE` silently dropped a new playback whose reused `sessionKey` and season/episode matched an old row. The new playback must be stored and advance progress, while repeated polls of it stay one event. A final playback that differs only by `Session.id` must also be stored |
 | Without a Plex Session.id, a reused session key is still separated by viewer | The fallback ID for sessions missing `Session.id` must still separate two viewers who get the same key for the same episode |
 
 ### `tests/server/plex-session-monitor.test.ts` — Live Plex playback trigger
