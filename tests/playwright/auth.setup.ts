@@ -12,7 +12,7 @@ function validateBaseUrl(value: string): URL {
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
   if (url.protocol === "http:" && !loopback) {
     console.warn(
-      `\n  Warning: BASE_URL (${value}) is plain HTTP and not a loopback host.\n` +
+      `\n  Warning: BASE_URL (${url.host}) is plain HTTP and not a loopback host.\n` +
       "  The pacearr_session cookie will be sent in plaintext across the network.\n" +
       "  Use HTTPS (e.g. behind a reverse proxy) if this instance is reachable by others.\n",
     );
