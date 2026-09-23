@@ -195,6 +195,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         trustProxy: form.trustProxy,
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
         ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
+        expandNextSeasonOnFinaleEnabled: form.expandNextSeasonOnFinaleEnabled,
         newShowTriageEnabled: form.newShowTriageEnabled,
         ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold } : {}),
       });
@@ -265,6 +266,12 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
             />
           </>
         )}
+        <ToggleField
+          label="Expand next season on finale"
+          hint="When someone starts the last episode of a season, download the whole next season instead of waiting for its first episode."
+          checked={form.expandNextSeasonOnFinaleEnabled}
+          onChange={(value) => setForm({ ...form, expandNextSeasonOnFinaleEnabled: value })}
+        />
         <ToggleField
           label="Auto-triage new Sonarr shows"
           hint="Automatically pace shows with more than the episode limit. Recommended: disable Search on Add in sources that add to Sonarr, so files are not downloaded only to be purged."

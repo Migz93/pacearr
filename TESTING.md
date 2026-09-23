@@ -207,6 +207,25 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
 | A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — through `checkTautulliActiveSessions()`, a new `session_id` on a recycled session key stores a second row for the same episode, while repeated polls of each playback add nothing |
 
+### `tests/server/finale-expansion.test.ts` — Expand next season on finale
+
+| Test | What it checks |
+|---|---|
+| Finale selection finds the next real season only from a season's last known episode | The last episode is the highest one Sonarr lists (aired or not), an episode past it never matches, the next season skips gaps and season `0`, and nothing is selected when no later season exists |
+| Starting a season's last episode expands the whole next season, with early prefetch off | A live session on S1E10 of 10 monitors the rest of season 2, runs `SeasonSearch`, marks it expanded and records a `-finale` history source; the setting does not depend on `earlyPrefetchEnabled` |
+| A watch past the last episode Sonarr lists does not expand the next season | S1E11 against a Sonarr season ending at E10 means stale or mismatched numbering, so only an exact match to the last listed episode triggers |
+| With the setting off, the finale leaves early prefetch behaving as before | The finale only prefetches E02–E03, and season 2 is not expanded |
+| A finale expansion supersedes early prefetch of the same season | Earlier prefetch records for the next season are cleared by the expansion, and no second prefetch runs |
+| A one-episode season expands both itself and the next season from its only episode | E01 as finale still reaches the finale check after expanding its own season |
+| A dry-run finale records the expansion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, one `dry_run.sonarr.expand_season` entry, and a repeat poll of the same playback stays silent |
+| The rolling reconcile expands the next season for a finale watched before the setting was enabled | A stored finale event is never reprocessed, so the sweep catches up from active progress: season 2 expands (`active-progress-reconcile-finale`), its prefetch records clear, and a second sweep does not expand again |
+| The rolling reconcile ignores a finale watched by a viewer outside the activity window | Catch-up only acts on active progress, so an old finale watch does not expand anything |
+| The rolling reconcile prefetches for a viewer whose progress reached the trigger without a processed watch event | Prefetch is applied from stored progress by the sweep (`active-progress-reconcile`), not only from live events, and a second sweep adds nothing |
+| Enrolment applies a stored finale watch the same way a live watch would | Enrolment's own history read skips the locked series, so enrolment applies viewer positions itself: the stored S1E10 expands S1 and S2 (`enroll-finale`) |
+| A dry-run rolling reconcile records one expansion for two viewers in the same unexpanded season | Dry run never persists an expansion, so the sweep's own dedup set must stop the second viewer from recording it again; callers that pass no set get a fresh one per show |
+| A first watch inside an unexpanded season expands it and still prefetches the next when near its end | Expanding the current season no longer suppresses prefetch from the same watch: S2E4 of 5 expands S2 and prefetches S3 E02–E03 |
+| Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
+
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |
@@ -274,7 +293,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
 | Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |
 | Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
-| Scheduled reconciliation clears prefetches promoted to a retained season | Existing per-episode prefetch records are removed and audited when active viewer progress makes their season fully retained, so the UI cannot display stale prefetch markers |
+| Scheduled reconciliation clears prefetches promoted to a retained season | When active viewer progress makes a prefetched season fully retained, the sweep expands it through the same `expandSeason` path a live watch uses (audited as `active-progress-reconcile`), which removes its per-episode prefetch records so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
 | Progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once | The complete cleanup batch is evaluated together, so one eligible season does not incorrectly protect a file needed only by another eligible season |
 

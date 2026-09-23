@@ -470,6 +470,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const count = Number(body.earlyPrefetchEpisodeCount);
       patch.earlyPrefetchEpisodeCount = Math.max(1, Math.floor(Number.isFinite(count) ? count : DEFAULT_APP_SETTINGS.earlyPrefetchEpisodeCount));
     }
+    if (body.expandNextSeasonOnFinaleEnabled !== undefined) {
+      if (typeof body.expandNextSeasonOnFinaleEnabled !== "boolean") {
+        res.status(400).json({ error: "expandNextSeasonOnFinaleEnabled must be a boolean." });
+        return;
+      }
+      patch.expandNextSeasonOnFinaleEnabled = body.expandNextSeasonOnFinaleEnabled;
+    }
     const previousSettings = db.getAppSettings();
     if (body.newShowTriageEnabled !== undefined) {
       if (typeof body.newShowTriageEnabled !== "boolean") {

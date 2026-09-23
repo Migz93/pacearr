@@ -97,6 +97,7 @@ export interface AppSettings {
   earlyPrefetchEnabled: boolean;
   earlyPrefetchTriggerEpisodesRemaining: number;
   earlyPrefetchEpisodeCount: number;
+  expandNextSeasonOnFinaleEnabled: boolean;
   newShowTriageEnabled: boolean;
   newShowTriageIntervalMinutes: number;
   newShowTriageEpisodeThreshold: number;
