@@ -32,6 +32,18 @@ leaves the next timer armed. A failure is logged with structured detail,
 persists an `error` status in `job_run_state`, and appears as the job's last
 result in Settings → Jobs. Jobs retry at their configured interval.
 
+The next run is one interval after the job's last run (its persisted
+`lastRunAt`, or the most recent run start while the process is up), not one
+interval after boot or a settings save:
+
+| Situation | Next run |
+|---|---|
+| Last run plus interval is still ahead | That time |
+| Overdue, never run, or last run failed before a restart | After a 30-second grace, staggered 30 seconds apart across jobs |
+| A manual or startup run starts while a catch-up is pending | The catch-up is dropped; next run is one interval after that run |
+| Interval changed | Recomputed from the last run; overdue results catch up as above |
+| Settings saved with the interval and enabled state unchanged | Unchanged |
+
 Plex playback normally arrives through a persistent SSE connection. Settings →
 Jobs shows whether this live connection is active or Pacearr is using its polling
 fallback. Playback notifications and scheduled/manual requests share the
