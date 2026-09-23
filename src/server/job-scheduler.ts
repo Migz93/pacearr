@@ -93,7 +93,11 @@ export class JobScheduler {
     this.logger?.info("Scheduled job updated", { id: job.id, intervalMs: job.intervalMs, enabled: job.enabled, nextRunAt: job.nextRunAt });
   }
 
-  runNow(id: string) {
+  /**
+   * keepSchedule leaves the recurring timer untouched. Event-driven triggers use it
+   * so they cannot postpone a polling fallback that must still fire on its cadence.
+   */
+  runNow(id: string, options: { keepSchedule?: boolean } = {}) {
     const job = this.jobs.get(id);
     if (!job || !job.enabled) return false;
     if (job.activeRuns > 0) {
@@ -101,7 +105,7 @@ export class JobScheduler {
       return false;
     }
     this.logger?.info("Scheduled job triggered manually", { id });
-    void this.execute(job, false);
+    void this.execute(job, false, options.keepSchedule);
     return true;
   }
 
@@ -178,7 +182,7 @@ export class JobScheduler {
     }, Math.min(remainingMs, MAX_TIMEOUT_MS));
   }
 
-  private async execute(job: ScheduledJob, scheduled: boolean) {
+  private async execute(job: ScheduledJob, scheduled: boolean, keepSchedule = false) {
     // Schedule the next tick before deciding whether this one overlaps. Otherwise a
     // single collision would leave a recurring job with no timer at all.
     if (scheduled) {
@@ -190,7 +194,7 @@ export class JobScheduler {
       return false;
     }
     job.activeRuns += 1;
-    if (!scheduled) {
+    if (!scheduled && !keepSchedule) {
       // A manual, queued, or startup run counts as the job's latest run, so the next
       // scheduled run (including a pending catch-up) is a full interval after it.
       job.anchorMs = Date.now();

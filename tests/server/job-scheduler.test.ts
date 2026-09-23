@@ -111,6 +111,18 @@ test("a manual run moves a job's next scheduled run a full interval after it", a
   scheduler.updateJob("sonarr-library-refresh", { enabled: false });
 });
 
+test("an event-driven run can leave the recurring schedule untouched", async () => {
+  const scheduler = schedulerWithLastRun({ "session-check": new Date(Date.now() - 10 * 60_000).toISOString() });
+  let runs = 0;
+  scheduler.registerRecurringJob({ id: "session-check", intervalMs: 15 * 60_000, task: async () => { runs += 1; } });
+  const before = scheduler.listJobs()[0].nextRunAt;
+
+  assert.equal(scheduler.runNow("session-check", { keepSchedule: true }), true);
+  await waitFor(() => runs === 1);
+  assert.equal(scheduler.listJobs()[0].nextRunAt, before);
+  scheduler.updateJob("session-check", { enabled: false });
+});
+
 test("repeated interval edits keep an overdue job's catch-up slot", () => {
   const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
   const scheduler = schedulerWithLastRun({ "history-import": longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });

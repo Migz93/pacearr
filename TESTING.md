@@ -160,6 +160,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Changing a job's interval measures the new interval from its last run | Switching an interval away and back leaves the original due time |
 | A manual run satisfies a pending catch-up | A startup `runNow` is not repeated by the catch-up moments later |
 | A manual run moves a job's next scheduled run a full interval after it | A scheduled run cannot follow a manual run by less than one interval |
+| An event-driven run can leave the recurring schedule untouched | A Plex SSE playback event cannot postpone the session polling fallback if the live connection drops right after it |
 | Repeated interval edits keep an overdue job's catch-up slot | Editing an overdue job's interval back and forth cannot push its catch-up further out |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
