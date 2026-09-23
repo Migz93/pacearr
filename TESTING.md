@@ -35,7 +35,10 @@ Plex OAuth.
 1. Install Chromium with `npx playwright install chromium`.
 2. Copy `.env.playwright.example` to `.env.playwright`.
 3. Set `BASE_URL` to the running Pacearr instance and paste the value of the
-   `pacearr_session` cookie from the browser into `SESSION_COOKIE`.
+   `pacearr_session` cookie from the browser into `SESSION_COOKIE`. A plain
+   `http://` LAN address works too — you'll get a console warning about the
+   session cookie travelling in plaintext instead of a hard failure. Only
+   `https://` or a loopback host (`localhost`/`127.0.0.1`/`::1`) stay silent.
 4. Run `npm run test:e2e`.
 
 The auth setup validates the cookie and saves it to
