@@ -19,8 +19,11 @@ Enrollment starts from an existing Sonarr series. Pacearr does not search for or
 When a show is enrolled:
 
 1. Pacearr creates or updates a `rolling_shows` row keyed by Sonarr series id.
-2. If baseline application is enabled, Pacearr immediately applies the all-season-pilot baseline using already stored active-viewer progress. Retained seasons remain fully monitored.
-3. If history import is enabled, Pacearr then performs a full verified Plex/Tautulli history read so older previously unmatched events can be repaired. It immediately corrects the enrolled show's monitoring for any newly found active progress, and only then deletes non-pilot files. A read that returns errors is treated as incomplete: Pacearr records a warning and corrects from stored progress but leaves files intact for this run. Automatic new-show triage uses the same deferred-cleanup and corrective-history behavior for its enrollment batch when Plex or enabled Tautulli history is configured.
+2. If baseline application is enabled, Pacearr immediately applies the all-season-pilot baseline using already stored active-viewer progress. Retained seasons remain fully monitored. This pass never deletes files.
+3. If history import is enabled, Pacearr then performs a full verified Plex/Tautulli history read so older previously unmatched events can be repaired.
+4. Pacearr applies every active viewer's position (season expansion, finale expansion, early prefetch), then runs the pass that corrects monitoring and deletes non-pilot files, retaining what those positions expanded or prefetched.
+
+A history read that returns errors is treated as incomplete: Pacearr records a warning and corrects monitoring from stored progress but leaves files intact for this run. Automatic new-show triage runs step 4 itself, once per enrollment batch after its own full history read, when Plex or enabled Tautulli history is configured.
 
 The current UI enroll action sends both `applyBaseline: true` and `importHistory: true`.
 
@@ -127,7 +130,7 @@ Each step is idempotent, so running it again for the same position does nothing.
 | Tautulli history import | Each newly imported watch that advances progress | `tautulli` |
 | Routine history import, catch-up | Every active viewer's stored progress | `active-progress-reconcile` |
 | Rolling reconcile (every 6 hours) | Every active viewer's stored progress, before planning | `active-progress-reconcile` |
-| Enrolment / auto-triage | Every active viewer's stored progress, after the baseline | `enroll` / `auto-triage-history` |
+| Enrolment / auto-triage | Every active viewer's stored progress, after the baseline and before the pass that deletes files | `enroll` / `auto-triage-history` |
 
 Finale expansions append `-finale` to the source. The catch-up sweeps cover a watch
 that was stored while a setting was off, in dry run, or while another operation held

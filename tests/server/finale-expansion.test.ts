@@ -314,6 +314,54 @@ test("enrolment applies a stored finale watch the same way a live watch would", 
   }
 });
 
+/*
+ * Enrolment applies viewer positions before the pass that deletes files. The other
+ * order deleted a season's files and then expanded or prefetched it straight back.
+ */
+
+// Season 2 fully downloaded, as it is when an existing library show is enrolled.
+function nineOneOneWithSeasonTwoFiles(): SonarrEpisode[] {
+  return nineOneOneEpisodes().map((item) => item.seasonNumber === 2 ? { ...item, monitored: true, hasFile: true, episodeFileId: item.id } : item);
+}
+
+async function enrollWithStoredProgress(settings: Partial<AppSettings>, episodeNumber: number) {
+  const harness = createHarness(settings, { episodes: nineOneOneWithSeasonTwoFiles(), expandSeasonOne: false });
+  const user = harness.db.listUsers().find((item) => item.username === "gina")!;
+  harness.db.deleteRollingShow(harness.rollingShowId);
+  harness.db.insertWatchEvent({
+    source: "plex-history", sourceEventId: `s1e${episodeNumber}-before-enrolment`, userId: user.id, plexAccountId: "42", username: "gina",
+    sonarrSeriesId: 71, showTitle: "9-1-1", seasonNumber: 1, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  await harness.services.enrollShow(71, { applyBaseline: true, importHistory: false });
+  const deletedFileIds = harness.requests
+    .filter((request) => request.method === "DELETE" && request.pathname.startsWith("/api/v3/episodefile/"))
+    .map((request) => Number(request.pathname.split("/").pop()));
+  return { harness, deletedFileIds };
+}
+
+test("enrolling a viewer on a finale keeps the next season's files that finale expansion needs", async () => {
+  const { harness, deletedFileIds } = await enrollWithStoredProgress({ expandNextSeasonOnFinaleEnabled: true }, 10);
+  try {
+    assert.deepEqual(harness.expandedSeasons(), [1, 2]);
+    assert.deepEqual(deletedFileIds, []);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("enrolling a viewer inside the prefetch trigger keeps only the prefetched next-season files", async () => {
+  const { harness, deletedFileIds } = await enrollWithStoredProgress({ earlyPrefetchEnabled: true, earlyPrefetchTriggerEpisodesRemaining: 3, earlyPrefetchEpisodeCount: 2 }, 8);
+  try {
+    // Re-enrolment creates a new rolling show row.
+    const rollingShowId = harness.db.getRollingShowBySeriesId(71)!.id;
+    assert.deepEqual(harness.db.listPrefetchedEpisodes(rollingShowId).map((row) => [row.seasonNumber, row.episodeNumber]), [[2, 2], [2, 3]]);
+    // E01 is the pilot and E02/E03 were prefetched; only E04/E05 are cleaned up.
+    assert.deepEqual(deletedFileIds.sort((a, b) => a - b), [7204, 7205]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("a first watch inside an unexpanded season expands it and still prefetches the next when near its end", async () => {
   const episodes = [
     episode(7101, 1, 1, { monitored: true, hasFile: true }),
