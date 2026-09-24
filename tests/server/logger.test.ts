@@ -68,6 +68,35 @@ test("close is idempotent", async () => {
   }
 });
 
+test("entries below the configured level don't push kept entries out of the in-memory logs", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pacearr-logger-"));
+  const previousLevel = process.env.LOG_LEVEL;
+  process.env.LOG_LEVEL = "warn";
+  const logger = new Logger(dataDir);
+  try {
+    logger.warn("warn entry");
+    logger.error("error entry");
+    for (let i = 0; i < 600; i++) {
+      logger.debug(`debug entry ${i}`);
+      logger.info(`info entry ${i}`);
+    }
+    await Promise.all([
+      waitForFileContent(logger.currentLogFilePath),
+      waitForFileContent(path.join(dataDir, "logs", "pacearr.log")),
+    ]);
+
+    assert.deepEqual(
+      logger.getRecentLogs(500).map((entry) => entry.message),
+      ["warn entry", "error entry"]
+    );
+  } finally {
+    if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = previousLevel;
+    await logger.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 function entry(overrides: Partial<LogEntry> = {}): LogEntry {
   return { timestamp: "2026-08-04T10:00:00.000Z", level: "info", message: "Message", ...overrides };
 }

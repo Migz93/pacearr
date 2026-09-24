@@ -30,10 +30,12 @@ deployment *is*, not how to drive it.
 
 ## Persistent Data
 
-Everything Pacearr keeps — config, SQLite database, artwork backups, and image cache — lives directly in `/config`,
-bind-mounted from `/opt/pacearr` on the host. Pacearr creates `/config/logs` for
-application logs; do not add other `config/` or `data/` subdirectories. Don't use
-named Docker volumes for this app; the user needs host-visible files.
+Everything Pacearr keeps — config, SQLite database, artwork backups, image cache, logs — lives in `/config`,
+bind-mounted from `/opt/pacearr` on the host. Keep it flat; don't add
+subdirectories such as `config/` or `data/`. The only subdirectories are `logs/`,
+`image-cache/` and `plex-artwork/`, which the app creates itself on startup — don't
+create them by hand. Don't use named Docker volumes for this app; the user needs
+host-visible files.
 
 ## Container User
 
@@ -45,15 +47,20 @@ unprivileged `node` user. `docker-entrypoint.sh` gets it there:
 2. Canonicalises `DATA_DIR` and refuses to start unless it resolves to exactly
    `/config`.
 3. Repairs ownership of `/config` via `docker-ownership-repair.py` before the
-   application starts.
-4. Drops privileges with `gosu node` before `exec`ing the real `CMD`.
+   application starts. An entry it isn't allowed to chown (for example on NFS
+   with root_squash, or a read-only mount) gets a warning and is skipped rather
+   than stopping startup.
+4. Checks, as `node`, that `/config` has write and search (`x`) permission,
+   and refuses to start with an error naming the UID if it doesn't. On mounts
+   where root can't chown, fix the ownership or permissions on the host.
+5. Drops privileges with `gosu node` before `exec`ing the real `CMD`.
 
 No host-side setup is needed. A brand-new empty bind mount (root-owned when
 Docker creates it) is repaired on first start, and an existing mount from an
 older root-run container is repaired on upgrade. `/app` stays root-owned, so
 `node` can read but not write application code.
 
-Steps 1–3 only run when the container starts as root. An unsupported non-root
+Steps 1–4 only run when the container starts as root. An unsupported non-root
 launch (`docker run --user`) skips straight to `exec` with whatever `DATA_DIR`
 and UID it was given, and none of the validation or repair applies.
 
