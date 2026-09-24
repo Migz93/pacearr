@@ -182,6 +182,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `close()` is idempotent | Concurrent and subsequent shutdown calls share one completion path without ending winston twice |
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
+| Entries below the configured level don't push kept entries out of the in-memory logs | The ring applies Winston's `LOG_LEVEL` filter, so a burst of suppressed debug/info entries can't evict the warnings and errors Settings → Logs falls back on |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
@@ -279,7 +280,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Exempt paths | `/assets/`, `/images/` and `/favicon.ico` are exempt from the global limit, while API and page routes are not |
+| Exempt paths | `/assets/`, `/images/` and `/favicon.ico` (with or without a trailing slash) are exempt from the global limit, while API and page routes are not |
 | Global limiter | The request after 3,000 in a minute gets a JSON 429 with draft-8 `RateLimit` headers, only the first rejection is logged, and exempt paths never use up the allowance |
 | Sign-in limiter | Successful sign-ins don't count, the attempt after 10 failures gets a JSON 429, and one warning is logged |
 
@@ -404,14 +405,13 @@ docker run -d \
   -v /opt/pacearr:/config \
   --restart unless-stopped \
   pacearr
-docker logs pacearr 2>&1 | tail -5
+timeout 90 sh -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" pacearr)" = healthy ]; do sleep 3; done' \
+  && echo healthy || { docker logs pacearr 2>&1 | tail -20; false; }
 ```
 
-Expected log line:
-
-```text
-Pacearr listening on port 9302
-```
+This waits for the HEALTHCHECK, which reads `starting` until its first check
+passes, and prints `healthy`. If it prints logs instead, look for the
+`Pacearr listening` startup line.
 
 Depending on DooD network behaviour, `curl http://127.0.0.1:9302/api/health`
 from inside the devcontainer may not reach the host-published port. Testing from
