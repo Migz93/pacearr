@@ -1439,3 +1439,39 @@ test("history import reads a changed Tautulli server in full instead of resuming
   assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
   assert.deepEqual(await importedFrom(undefined), { imported: 0, syncedConnection: "http://tautulli:8181" }, "state from before connections were recorded keeps its cursor");
 });
+
+test("discovering Plex users links history imported before they were known and refreshes their progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  const rolling = db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  // Imported while neither viewer existed: the friend by Plex.tv account ID, the owner
+  // by the server-local ID "1" that Plex's history endpoint reports.
+  const orphan = (sourceEventId: string, plexAccountId: string, seasonNumber: number, episodeNumber: number) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  orphan("friend-watch", "4242", 2, 3);
+  orphan("owner-watch", "1", 1, 5);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    assert.deepEqual(db.listUnmatchedWatchEvents(), []);
+    const users = db.listUsers();
+    const friend = users.find((user) => user.plexAccountId === "4242")!;
+    const owner = users.find((user) => user.plexUserId === "9001")!;
+    const progress = db.listProgressForShow(rolling.id).map((row) => [row.userId, row.lastWatchedSeason, row.lastWatchedEpisode]);
+    assert.deepEqual(progress.sort(), [[friend.id, 2, 3], [owner.id, 1, 5]].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});

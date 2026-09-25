@@ -314,19 +314,22 @@ export class PacearrServices {
     })));
     const storedUsers = this.db.upsertUsers(cachedUsers);
     this.logger.info("Plex users discovered", { users: storedUsers.length });
-    const ownerUser = storedUsers.find((user) => user.plexUserId === owner.plexId);
-    if (ownerUser) {
+    // Plex events imported before their viewer was discovered are stored without a
+    // user, and a later import ignores them as duplicates, so link them here.
+    const linkedUserIds: number[] = [];
+    for (const user of storedUsers) {
       // Plex's server-history endpoint reports the server owner as its local
       // account ID (normally "1"), not the Plex.tv account ID used elsewhere.
-      const linkedEvents = this.db.linkUnassignedWatchEventsByPlexAccount(ownerUser.id, "1");
+      const accountIds = [user.plexAccountId, user.plexUserId === owner.plexId ? "1" : null]
+        .filter((accountId): accountId is string => Boolean(accountId));
+      let linkedEvents = 0;
+      for (const accountId of new Set(accountIds)) linkedEvents += this.db.linkUnassignedWatchEventsByPlexAccount(user.id, accountId);
       if (linkedEvents > 0) {
-        for (const progress of this.db.listLatestWatchProgressForUser(ownerUser.id)) {
-          const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
-          if (rolling) this.db.upsertRollingUserProgress(rolling.id, ownerUser.id, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
-        }
-        this.logger.info("Linked Plex owner history using server-local account ID", { userId: ownerUser.id, linkedEvents });
+        linkedUserIds.push(user.id);
+        this.logger.info("Linked Plex history imported before the user was discovered", { userId: user.id, username: user.username, linkedEvents });
       }
     }
+    this.refreshRollingProgressForUsers(linkedUserIds);
     return storedUsers;
   }
 
