@@ -89,6 +89,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 | The split library refresh job inherits old combined-job state | An upgrade carries `recommendation-refresh` run status into `sonarr-library-refresh`, avoiding a misleading “never run” status while the existing cache is warm |
+| Migration 23 stamps history cursors with the connection configured at upgrade | A Plex cursor saved before connections were recorded gains the configured machine identifier; a cursor for a source no longer configured stays unstamped, so its next import is a full read |
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
@@ -166,6 +167,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Disabling an overdue job releases its catch-up slot for the next overdue job | Toggling an overdue job off and on repeatedly, then disabling it, leaves the next overdue job the first slot rather than one behind every released reservation |
 | A manual run releases the job's catch-up slot for the next overdue job | A manual run satisfies the catch-up, so a job that becomes overdue afterwards takes the first slot |
 | A released catch-up slot ahead of another reservation is reused | With `b` still reserved, freeing the two slots before it lets a job that becomes overdue afterwards take the first freed slot, still spaced from `b`, rather than queueing after `b` |
+| A run skipped while setup is incomplete is not recorded, and the job catches up once setup completes | A skipped catch-up persists nothing and leaves no next run; `resumeAfterSetup()` does nothing until ready, then the job runs once and its next run is a full interval later |
+| A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
@@ -205,6 +208,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
+| Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
+| Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
@@ -298,6 +303,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
 | A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
+| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different server or records no server; the same server still resumes incrementally |
+| Discovering Plex users links history imported before they were known and refreshes their progress | A friend's orphaned event (Plex.tv account ID) and the owner's (server-local ID `1`) are linked on discovery, and both viewers' rolling progress reflects them |
+| Discovering Plex users leaves history unlinked when its account ID belongs to more than one user | A friend whose Plex.tv ID is `1` (the owner's server-local ID) and two stored users sharing an account ID: neither event is linked, so no viewer's progress moves |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
 | History import continues with Tautulli when Plex is not configured | A Plex configuration error is reported and audited without preventing configured Tautulli history from importing |
 | History import rejects a non-unique Sonarr external ID | A duplicate TVDB/IMDb value in Sonarr leaves the event unmatched rather than selecting whichever series appeared first |

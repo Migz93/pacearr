@@ -202,6 +202,46 @@ test("a released catch-up slot ahead of another reservation is reused", (t) => {
   assert.ok(bAt - nextRunMs(scheduler, "c") >= 45_000, "c still keeps the spacing from b");
 });
 
+test("a run skipped while setup is incomplete is not recorded, and the job catches up once setup completes", async (t) => {
+  const saved: string[] = [];
+  const scheduler = disableJobsAfterTest(t, new JobScheduler({ catchUpDelayMs: 10, catchUpSpacingMs: 10 }));
+  scheduler.setPersistence({ load: () => null, save: (id) => { saved.push(id); } });
+  let ready = false;
+  scheduler.setReadiness(() => ready);
+  let runs = 0;
+  scheduler.registerRecurringJob({ id: "history-import", intervalMs: 24 * HOUR_MS, task: async () => { runs += 1; } });
+
+  await waitFor(() => scheduler.listJobs()[0]!.nextRunAt === null);
+  assert.equal(runs, 0);
+  assert.deepEqual(saved, [], "a skipped run is not persisted as the job's last run");
+
+  scheduler.resumeAfterSetup();
+  assert.equal(scheduler.listJobs()[0]!.nextRunAt, null, "resuming before setup completes does nothing");
+
+  ready = true;
+  scheduler.resumeAfterSetup();
+  await waitFor(() => runs === 1);
+  assert.deepEqual(saved, ["history-import"]);
+  assert.ok(nextRunMs(scheduler, "history-import") > Date.now() + 23 * HOUR_MS, "the following run is a full interval away");
+});
+
+test("a run requested before setup completes runs once setup does, even when not otherwise due", async (t) => {
+  const recent = new Date(Date.now() - HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun(t, { "history-import": recent }, { catchUpDelayMs: 10, catchUpSpacingMs: 10 });
+  let ready = false;
+  scheduler.setReadiness(() => ready);
+  let runs = 0;
+  scheduler.registerRecurringJob({ id: "history-import", intervalMs: 24 * HOUR_MS, task: async () => { runs += 1; } });
+
+  scheduler.runNowOrQueue("history-import");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runs, 0);
+
+  ready = true;
+  scheduler.resumeAfterSetup();
+  await waitFor(() => runs === 1);
+});
+
 test("a job whose last run failed before a restart catches up even when its last success is recent", (t) => {
   const scheduler = disableJobsAfterTest(t, new JobScheduler({ catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 }));
   scheduler.setPersistence({

@@ -352,9 +352,24 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.savePlexSettings(settings);
     services.invalidateSourceIdentityScope("plex");
-    if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
+    const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl
+      || previousSettings?.token !== settings.token
+      || previousSettings?.machineIdentifier !== settings.machineIdentifier;
+    if (connectionChanged) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
-    await services.discoverPlexUsers();
+    try {
+      await services.discoverPlexUsers();
+    } finally {
+      // Setup can be complete from this save. Resuming only once discovery settles
+      // lets a history-import catch-up attribute events to known users directly;
+      // discovery only re-links orphans whose account ID is unambiguous. A failed
+      // discovery still cannot leave waiting jobs without a timer.
+      scheduler?.resumeAfterSetup();
+    }
+    // A new server's history would otherwise wait for the next scheduled import.
+    // Queued only after discovery succeeds, for the same reason. Before setup
+    // completes, the run waits for it.
+    if (connectionChanged) scheduler?.runNowOrQueue("history-import");
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));
 
@@ -380,6 +395,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.saveSonarrSettings(settings);
     logger.info("Sonarr settings saved", { baseUrl: settings.baseUrl });
+    scheduler?.resumeAfterSetup();
     // An active refresh may still be using the old connection; retain one follow-up so
     // the saved credentials always produce a current library snapshot.
     scheduler?.runNowOrQueue("sonarr-library-refresh");
@@ -405,9 +421,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       apiKey: typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : existing.apiKey,
     };
     db.saveTautulliSettings(tautulliSettings);
-    scheduler?.updateJob("tautulli-session-check", { enabled: tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
+    const usable = tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey);
+    const wasUsable = existing.enabled && Boolean(existing.baseUrl && existing.apiKey);
+    scheduler?.updateJob("tautulli-session-check", { enabled: usable });
     services.invalidateSourceIdentityScope("tautulli");
     logger.info("Tautulli settings saved", { enabled: tautulliSettings.enabled, configured: Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
+    // Import a newly usable or changed Tautulli's history now rather than at the
+    // next scheduled import.
+    if (usable && (!wasUsable || existing.baseUrl !== tautulliSettings.baseUrl || existing.apiKey !== tautulliSettings.apiKey)) {
+      scheduler?.runNowOrQueue("history-import");
+    }
     res.json({ ok: true, tautulli: db.getTautulliSettingsView() });
   });
 

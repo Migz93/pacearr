@@ -1413,3 +1413,100 @@ test("Sonarr library refresh persists shows for synchronous cached listing", asy
     cleanup();
   }
 });
+
+test("history import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor", async () => {
+  // Watched well before the stored cursor, so an incremental read skips it.
+  const olderWatch = { reference_id: "new-server-older-watch", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" };
+  const cursor = new Date().toISOString();
+  const importedFrom = async (connection: string | undefined) => {
+    const { db, services, cleanup } = createHarness();
+    db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+    db.saveHistorySyncState({
+      plex: { backfillComplete: false, cursor: null },
+      tautulli: { backfillComplete: true, cursor, ...(connection === undefined ? {} : { connection }) },
+    });
+    const restoreFetch = installFetchStub({ tautulliHistory: [olderWatch], tautulliMetadata: { guids: [] } });
+    try {
+      await services.importHistory();
+      return { imported: db.listUnmatchedWatchEvents().length, syncedConnection: db.getHistorySyncState().tautulli.connection };
+    } finally {
+      restoreFetch();
+      cleanup();
+    }
+  };
+
+  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "http://tautulli:8181" });
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
+  // Migration 23 stamps cursors saved before connections were recorded, so one still
+  // unstamped is treated as belonging to another server.
+  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "http://tautulli:8181" }, "an unstamped cursor is read in full");
+});
+
+test("discovering Plex users links history imported before they were known and refreshes their progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  const rolling = db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  // Imported while neither viewer existed: the friend by Plex.tv account ID, the owner
+  // by the server-local ID "1" that Plex's history endpoint reports.
+  const orphan = (sourceEventId: string, plexAccountId: string, seasonNumber: number, episodeNumber: number) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  orphan("friend-watch", "4242", 2, 3);
+  orphan("owner-watch", "1", 1, 5);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    const users = db.listUsers();
+    const friend = users.find((user) => user.plexAccountId === "4242")!;
+    const owner = users.find((user) => user.plexUserId === "9001")!;
+    const progress = db.listProgressForShow(rolling.id).map((row) => [row.userId, row.lastWatchedSeason, row.lastWatchedEpisode]);
+    assert.deepEqual(progress.sort(), [[friend.id, 2, 3], [owner.id, 1, 5]].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+test("discovering Plex users leaves history unlinked when its account ID belongs to more than one user", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  // An older stored user sharing the friend's account ID, alongside the one about to be discovered.
+  db.upsertUsers([{ plexUserId: "legacy-4242", plexAccountId: "4242", tautulliUserId: null, username: "legacy", displayName: "Legacy", avatarUrl: null }]);
+  db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  const orphan = (sourceEventId: string, plexAccountId: string) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber: 1, episodeNumber: 2, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  // "1" is both the owner's server-local ID and, here, a friend's Plex.tv account ID.
+  orphan("server-local-one", "1");
+  orphan("shared-account", "4242");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="1" username="one" title="One" /><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    // Neither event is attributed to anyone, so no viewer's progress moves.
+    for (const user of db.listUsers()) assert.deepEqual(db.listLatestWatchProgressForUser(user.id), [], `${user.username} has no linked history`);
+    assert.equal(db.listUsers().length, 4);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
