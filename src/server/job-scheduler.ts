@@ -168,12 +168,17 @@ export class JobScheduler {
     this.waitUntil(job, targetMs);
   }
 
-  // Derived from the reservations still held rather than a running counter, so a
-  // slot released by a manual run or a disabled job no longer delays later jobs.
+  // The earliest time a spacing away from every catch-up still reserved. Derived from
+  // the reservations rather than a running counter, so a slot released by a manual
+  // run or a disabled job is reused instead of delaying later jobs.
   private nextCatchUpSlot(now: number): number {
+    const reserved = Array.from(this.jobs.values(), (job) => job.catchUpAtMs)
+      .filter((atMs): atMs is number => atMs !== null && atMs > now)
+      .sort((a, b) => a - b);
     let slotMs = now + this.catchUpDelayMs;
-    for (const job of this.jobs.values()) {
-      if (job.catchUpAtMs !== null && job.catchUpAtMs > now) slotMs = Math.max(slotMs, job.catchUpAtMs + this.catchUpSpacingMs);
+    for (const atMs of reserved) {
+      if (slotMs + this.catchUpSpacingMs <= atMs) break;
+      if (slotMs < atMs + this.catchUpSpacingMs) slotMs = atMs + this.catchUpSpacingMs;
     }
     return slotMs;
   }
