@@ -351,19 +351,24 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
-    // Setup can be complete from this save, so waiting jobs must not depend on the
-    // user discovery below succeeding.
-    scheduler?.resumeAfterSetup();
     services.invalidateSourceIdentityScope("plex");
     const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl
       || previousSettings?.token !== settings.token
       || previousSettings?.machineIdentifier !== settings.machineIdentifier;
     if (connectionChanged) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
-    await services.discoverPlexUsers();
+    try {
+      await services.discoverPlexUsers();
+    } finally {
+      // Setup can be complete from this save. Resuming only once discovery settles
+      // keeps a history-import catch-up from running before the users exist (Plex
+      // events stored without a user are not re-linked later, #188), while a failed
+      // discovery still cannot leave waiting jobs without a timer.
+      scheduler?.resumeAfterSetup();
+    }
     // A new server's history would otherwise wait for the next scheduled import. Only
-    // after discovery succeeds: Plex events imported before their user exists are not
-    // re-linked later. Before setup completes, the run waits for it.
+    // after discovery succeeds, for the same reason. Before setup completes, the run
+    // waits for it.
     if (connectionChanged) scheduler?.runNowOrQueue("history-import");
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));
