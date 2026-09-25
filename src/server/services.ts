@@ -550,8 +550,11 @@ export class PacearrServices {
         }
         try {
           this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
-          await this.applyActiveViewerPlan(seriesId, "auto-triage-history", false, historyReconciled ? undefined : false);
+          // Positions first, so the pass that deletes files keeps what they expanded
+          // or prefetched, as the rolling reconcile does.
           await this.applyActiveViewerPositions(rolling, "auto-triage-history");
+          const current = this.db.getRollingShow(rolling.id) ?? rolling;
+          await this.applyMonitoringPlan(seriesId, "auto-triage-history", this.getCleanupRetention(current).retainedSeasons, false, [], historyReconciled ? undefined : false);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           errors.push(`${rolling.title} history repair: ${message}`);
@@ -871,9 +874,10 @@ export class PacearrServices {
       // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
       if (options.applyBaseline) {
-        // The history read may reveal a currently active season missing from the
-        // local progress cache. Defer destructive cleanup until it completes.
-        changed += await this.applyActiveViewerPlan(series.id, "enroll", true, options.importHistory || options.deferFileDeletion ? false : undefined);
+        // Never deletes files: the history read may reveal an active season missing
+        // from the local progress cache, and viewer positions below may expand or
+        // prefetch a season this pass does not retain.
+        changed += await this.applyActiveViewerPlan(series.id, "enroll", true, false);
       }
       let historyReconciled = !options.importHistory;
       if (options.importHistory) {
@@ -893,18 +897,24 @@ export class PacearrServices {
           this.logger.warn("Full history reconciliation failed during enrollment; applying available viewer progress", { seriesId: series.id, title: rolling.title, error: message });
         }
         // This enrollment owns the series operation lock, so the reconciliation
-        // deliberately skips it. Re-seed and correct it here after the full read;
-        // pilots were already searched by the baseline, so only search a newly
-        // required season.
+        // deliberately skips it. Re-seed it here after the full read.
         this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
-        if (options.applyBaseline) {
-          changed += await this.applyActiveViewerPlan(series.id, "enroll-history", false, historyReconciled ? undefined : false);
-        }
       }
       // The full read above skips this locked series, so its viewers' positions are
-      // applied here, as any other job would apply them.
+      // applied here, as any other job would apply them. They run before the pass
+      // that deletes files, so it keeps what they expanded or prefetched, as the
+      // rolling reconcile does.
       changed += await this.applyActiveViewerPositions(rolling, "enroll");
-      const current = this.db.getRollingShow(rolling.id) ?? rolling;
+      let current = this.db.getRollingShow(rolling.id) ?? rolling;
+      // Auto-triage runs this pass itself, after its batch history repair.
+      if (options.applyBaseline && (options.importHistory || !options.deferFileDeletion)) {
+        // Pilots were already searched by the baseline, so only search a newly
+        // required season.
+        const { retainedSeasons } = this.getCleanupRetention(current);
+        const deleteFiles = historyReconciled && !options.deferFileDeletion ? undefined : false;
+        changed += await this.applyMonitoringPlan(series.id, options.importHistory ? "enroll-history" : "enroll-cleanup", retainedSeasons, false, [], deleteFiles);
+        current = this.db.getRollingShow(rolling.id) ?? current;
+      }
       await this.syncPlexArtwork(series, current, [...new Set([...current.expandedSeasons, ...this.getActiveRetainedSeasons(rolling.id)])]);
       return { ok: true, message: `Enrolled ${rolling.title}.`, changed };
     } finally {
