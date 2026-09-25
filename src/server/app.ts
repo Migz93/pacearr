@@ -361,14 +361,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       await services.discoverPlexUsers();
     } finally {
       // Setup can be complete from this save. Resuming only once discovery settles
-      // keeps a history-import catch-up from running before the users exist (Plex
-      // events stored without a user are not re-linked later, #188), while a failed
+      // lets a history-import catch-up attribute events to known users directly;
+      // discovery only re-links orphans whose account ID is unambiguous. A failed
       // discovery still cannot leave waiting jobs without a timer.
       scheduler?.resumeAfterSetup();
     }
-    // A new server's history would otherwise wait for the next scheduled import. Only
-    // after discovery succeeds, for the same reason. Before setup completes, the run
-    // waits for it.
+    // A new server's history would otherwise wait for the next scheduled import.
+    // Queued only after discovery succeeds, for the same reason. Before setup
+    // completes, the run waits for it.
     if (connectionChanged) scheduler?.runNowOrQueue("history-import");
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));

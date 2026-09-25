@@ -320,6 +320,8 @@ export class PacearrServices {
     // ID (normally "1"), not the Plex.tv account ID used elsewhere. Both share one
     // column, so an ID claimed by more than one user is left unlinked rather than
     // guessed: a wrong link would drive another viewer's progress and cleanup.
+    // Expansion or prefetch implied by the refreshed progress is left to the next
+    // rolling reconcile, as for other history repairs.
     const claims = new Map<string, Set<number>>();
     const claim = (accountId: string, userId: number) => claims.set(accountId, (claims.get(accountId) ?? new Set()).add(userId));
     for (const user of this.db.listUsers()) if (user.plexAccountId) claim(user.plexAccountId, user.id);
