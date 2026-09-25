@@ -15,6 +15,9 @@ type ScheduledJob = {
   lastRunStatus: "success" | "error" | null;
   activeRuns: number;
   pendingManualRun: boolean;
+  // Set when a run was skipped because setup is incomplete. Such a run is not
+  // recorded, and the job is rescheduled by resumeAfterSetup().
+  waitingForSetup: boolean;
   timeout: ReturnType<typeof setTimeout> | null;
   // The next run is due one interval after this (the last run start or scheduled
   // tick), so restarts and settings saves cannot keep postponing a long interval.
@@ -31,6 +34,7 @@ export class JobScheduler {
   private readonly catchUpDelayMs: number;
   private readonly catchUpSpacingMs: number;
   private logger?: Logger;
+  private isReady: () => boolean = () => true;
   private loadPersistedState?: (id: string) => { lastRunAt: string | null; lastRunStatus: "success" | "error" | null } | null | undefined;
   private savePersistedState?: (id: string, state: { lastRunAt: string | null; lastRunStatus: "success" | "error" | null }) => void;
 
@@ -52,6 +56,25 @@ export class JobScheduler {
     this.savePersistedState = options.save;
   }
 
+  /** Jobs only run once this reports setup as complete. */
+  setReadiness(isReady: () => boolean) {
+    this.isReady = isReady;
+  }
+
+  /**
+   * Reschedules every job skipped while setup was incomplete. Each catches up as
+   * an overdue job does, from its last recorded run.
+   */
+  resumeAfterSetup() {
+    if (!this.isReady()) return;
+    for (const job of this.jobs.values()) {
+      if (!job.waitingForSetup) continue;
+      job.waitingForSetup = false;
+      this.reschedule(job);
+      this.logger?.info("Scheduled job resumed after setup", { id: job.id, nextRunAt: job.nextRunAt });
+    }
+  }
+
   registerRecurringJob(options: { id: string; intervalMs: number; enabled?: boolean; task: (context: JobRunContext) => Promise<void> }) {
     const persisted = this.loadPersistedState?.(options.id);
     // lastRunAt only advances on success, so it cannot say when a failed run
@@ -66,6 +89,7 @@ export class JobScheduler {
       lastRunStatus: persisted?.lastRunStatus ?? null,
       activeRuns: 0,
       pendingManualRun: false,
+      waitingForSetup: false,
       timeout: null,
       anchorMs: Number.isFinite(lastRunMs) ? lastRunMs : null,
       catchUpAtMs: null,
@@ -197,6 +221,22 @@ export class JobScheduler {
   }
 
   private async execute(job: ScheduledJob, scheduled: boolean, keepSchedule = false) {
+    if (!this.isReady()) {
+      // Nothing ran, so nothing is recorded: counting this as the job's last run
+      // would postpone its first real run by a full interval once setup completes.
+      // A fired timer is not re-armed; resumeAfterSetup() reschedules the job.
+      if (scheduled) {
+        job.timeout = null;
+        job.catchUpAtMs = null;
+        job.nextRunAt = null;
+      }
+      // A requested run is still owed, so the job is due as soon as setup completes.
+      if (!scheduled && !keepSchedule) job.anchorMs = null;
+      job.waitingForSetup = true;
+      this.logger?.debug("Skipped job run; setup is incomplete", { id: job.id, scheduled });
+      return false;
+    }
+    job.waitingForSetup = false;
     // Schedule the next tick before deciding whether this one overlaps. Otherwise a
     // single collision would leave a recurring job with no timer at all.
     if (scheduled) {

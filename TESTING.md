@@ -166,6 +166,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Disabling an overdue job releases its catch-up slot for the next overdue job | Toggling an overdue job off and on repeatedly, then disabling it, leaves the next overdue job the first slot rather than one behind every released reservation |
 | A manual run releases the job's catch-up slot for the next overdue job | A manual run satisfies the catch-up, so a job that becomes overdue afterwards takes the first slot |
 | A released catch-up slot ahead of another reservation is reused | With `b` still reserved, a job that becomes overdue after `a` is disabled takes `a`'s slot, still spaced from `b`, rather than queueing after `b` |
+| A run skipped while setup is incomplete is not recorded, and the job catches up once setup completes | A skipped catch-up persists nothing and leaves no next run; `resumeAfterSetup()` does nothing until ready, then the job runs once and its next run is a full interval later |
+| A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
@@ -205,6 +207,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
+| Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
