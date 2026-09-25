@@ -351,15 +351,21 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       settings.machineIdentifier = result.message.match(/\(([^)]+)\)/)?.[1] ?? "";
     }
     db.savePlexSettings(settings);
+    // Setup can be complete from this save, so waiting jobs must not depend on the
+    // user discovery below succeeding.
+    scheduler?.resumeAfterSetup();
     services.invalidateSourceIdentityScope("plex");
     const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token;
     if (connectionChanged) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
-    await services.discoverPlexUsers();
-    scheduler?.resumeAfterSetup();
-    // A new server's history would otherwise wait for the next scheduled import.
-    // Before setup completes, the run waits for it rather than being dropped.
-    if (connectionChanged) scheduler?.runNowOrQueue("history-import");
+    try {
+      await services.discoverPlexUsers();
+    } finally {
+      // A new server's history would otherwise wait for the next scheduled import.
+      // Queued after discovery so its events can match the discovered users; before
+      // setup completes, the run waits for it rather than being dropped.
+      if (connectionChanged) scheduler?.runNowOrQueue("history-import");
+    }
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));
 

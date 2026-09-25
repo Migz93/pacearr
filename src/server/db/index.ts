@@ -110,9 +110,11 @@ function plexArtworkFromRow(row: any): PlexArtworkRecord {
   };
 }
 
+// `connection` identifies the server a cursor belongs to. It is absent on state
+// written before it was recorded, which is treated as the current connection.
 export interface HistorySyncState {
-  plex: { backfillComplete: boolean; cursor: string | null };
-  tautulli: { backfillComplete: boolean; cursor: string | null };
+  plex: { backfillComplete: boolean; cursor: string | null; connection?: string };
+  tautulli: { backfillComplete: boolean; cursor: string | null; connection?: string };
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {

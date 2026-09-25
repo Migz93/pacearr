@@ -119,7 +119,7 @@ Events are unique by `(source, source_event_id)` so re-imports are idempotent.
 
 ## History Synchronization
 
-Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent.
+Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent. Each cursor records the connection it came from (the Plex machine identifier, or the Tautulli URL); after the server changes, the next import backfills that source again rather than resuming from the old server's cursor.
 
 ## Full History Reconciliation
 

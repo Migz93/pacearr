@@ -1413,3 +1413,29 @@ test("Sonarr library refresh persists shows for synchronous cached listing", asy
     cleanup();
   }
 });
+
+test("history import reads a changed Tautulli server in full instead of resuming from the old server's cursor", async () => {
+  // Watched well before the stored cursor, so an incremental read skips it.
+  const olderWatch = { reference_id: "new-server-older-watch", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" };
+  const cursor = new Date().toISOString();
+  const importedFrom = async (connection: string | undefined) => {
+    const { db, services, cleanup } = createHarness();
+    db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+    db.saveHistorySyncState({
+      plex: { backfillComplete: false, cursor: null },
+      tautulli: { backfillComplete: true, cursor, ...(connection === undefined ? {} : { connection }) },
+    });
+    const restoreFetch = installFetchStub({ tautulliHistory: [olderWatch], tautulliMetadata: { guids: [] } });
+    try {
+      await services.importHistory();
+      return { imported: db.listUnmatchedWatchEvents().length, syncedConnection: db.getHistorySyncState().tautulli.connection };
+    } finally {
+      restoreFetch();
+      cleanup();
+    }
+  };
+
+  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "http://tautulli:8181" });
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
+  assert.deepEqual(await importedFrom(undefined), { imported: 0, syncedConnection: "http://tautulli:8181" }, "state from before connections were recorded keeps its cursor");
+});
