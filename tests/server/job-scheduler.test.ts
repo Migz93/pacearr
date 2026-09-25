@@ -182,14 +182,19 @@ test("a manual run releases the job's catch-up slot for the next overdue job", (
 
 test("a released catch-up slot ahead of another reservation is reused", (t) => {
   const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
-  const scheduler = schedulerWithLastRun(t, { a: longAgo, b: longAgo, c: longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  const scheduler = schedulerWithLastRun(t, { a: longAgo, x: longAgo, b: longAgo, c: longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
   scheduler.registerRecurringJob({ id: "a", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  scheduler.registerRecurringJob({ id: "x", intervalMs: 24 * HOUR_MS, task: async () => {} });
   scheduler.registerRecurringJob({ id: "b", intervalMs: 24 * HOUR_MS, task: async () => {} });
   scheduler.registerRecurringJob({ id: "c", intervalMs: 24 * HOUR_MS, enabled: false, task: async () => {} });
   const aAt = nextRunMs(scheduler, "a");
   const bAt = nextRunMs(scheduler, "b");
 
+  // Freeing two consecutive slots leaves a full spacing of slack before b. With only
+  // a's slot freed, c's earliest time (now + delay) would already sit a few
+  // milliseconds inside b's spacing, so it would correctly queue after b.
   scheduler.updateJob("a", { enabled: false });
+  scheduler.updateJob("x", { enabled: false });
   scheduler.updateJob("c", { enabled: true });
 
   assert.equal(nextRunMs(scheduler, "b"), bAt);
