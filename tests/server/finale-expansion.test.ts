@@ -332,7 +332,12 @@ async function enrollWithStoredProgress(settings: Partial<AppSettings>, episodeN
     source: "plex-history", sourceEventId: `s1e${episodeNumber}-before-enrolment`, userId: user.id, plexAccountId: "42", username: "gina",
     sonarrSeriesId: 71, showTitle: "9-1-1", seasonNumber: 1, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
   });
-  await harness.services.enrollShow(71, { applyBaseline: true, importHistory: false });
+  try {
+    await harness.services.enrollShow(71, { applyBaseline: true, importHistory: false });
+  } catch (error) {
+    harness.cleanup();
+    throw error;
+  }
   const deletedFileIds = harness.requests
     .filter((request) => request.method === "DELETE" && request.pathname.startsWith("/api/v3/episodefile/"))
     .map((request) => Number(request.pathname.split("/").pop()));

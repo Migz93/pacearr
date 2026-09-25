@@ -21,7 +21,7 @@ When a show is enrolled:
 1. Pacearr creates or updates a `rolling_shows` row keyed by Sonarr series id.
 2. If baseline application is enabled, Pacearr immediately applies the all-season-pilot baseline using already stored active-viewer progress. Retained seasons remain fully monitored. This pass never deletes files.
 3. If history import is enabled, Pacearr then performs a full verified Plex/Tautulli history read so older previously unmatched events can be repaired.
-4. Pacearr applies every active viewer's position (season expansion, finale expansion, early prefetch), then runs the pass that corrects monitoring and deletes non-pilot files, retaining what those positions expanded or prefetched.
+4. Pacearr applies every active viewer's position (season expansion, finale expansion, early prefetch). If baseline application is enabled, it then corrects monitoring and deletes non-pilot files, retaining what those positions expanded or prefetched.
 
 A history read that returns errors is treated as incomplete: Pacearr records a warning and corrects monitoring from stored progress but leaves files intact for this run. Automatic new-show triage runs step 4 itself, once per enrollment batch after its own full history read, when Plex or enabled Tautulli history is configured.
 
