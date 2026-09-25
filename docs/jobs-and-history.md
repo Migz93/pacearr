@@ -48,7 +48,7 @@ interval after boot or a settings save:
 | Settings saved with the interval and enabled state unchanged | Unchanged |
 | A run comes due before setup (Plex and Sonarr) is complete | Skipped and not recorded; the job has no next run until setup completes, then catches up as an overdue job |
 | A manual or queued run is requested before setup is complete | Runs as a catch-up once setup completes, even if the job was not otherwise due |
-| A Plex connection (server or token) is saved | `history-import` runs now, or is queued behind an active run |
+| A Plex connection (server, machine identifier or token) is saved and its users are discovered | `history-import` runs now, or is queued behind an active run |
 | Tautulli becomes enabled and configured, or its URL or API key changes | `history-import` runs now, or is queued behind an active run |
 
 Plex playback normally arrives through a persistent SSE connection. Settings →

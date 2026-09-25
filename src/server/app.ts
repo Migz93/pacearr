@@ -355,17 +355,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     // user discovery below succeeding.
     scheduler?.resumeAfterSetup();
     services.invalidateSourceIdentityScope("plex");
-    const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token;
+    const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl
+      || previousSettings?.token !== settings.token
+      || previousSettings?.machineIdentifier !== settings.machineIdentifier;
     if (connectionChanged) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
-    try {
-      await services.discoverPlexUsers();
-    } finally {
-      // A new server's history would otherwise wait for the next scheduled import.
-      // Queued after discovery so its events can match the discovered users; before
-      // setup completes, the run waits for it rather than being dropped.
-      if (connectionChanged) scheduler?.runNowOrQueue("history-import");
-    }
+    await services.discoverPlexUsers();
+    // A new server's history would otherwise wait for the next scheduled import. Only
+    // after discovery succeeds: Plex events imported before their user exists are not
+    // re-linked later. Before setup completes, the run waits for it.
+    if (connectionChanged) scheduler?.runNowOrQueue("history-import");
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));
 
