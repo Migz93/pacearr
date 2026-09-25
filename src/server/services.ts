@@ -316,17 +316,26 @@ export class PacearrServices {
     this.logger.info("Plex users discovered", { users: storedUsers.length });
     // Plex events imported before their viewer was discovered are stored without a
     // user, and a later import ignores them as duplicates, so link them here.
-    const linkedUserIds: number[] = [];
-    for (const user of storedUsers) {
-      // Plex's server-history endpoint reports the server owner as its local
-      // account ID (normally "1"), not the Plex.tv account ID used elsewhere.
-      const accountIds = [user.plexAccountId, user.plexUserId === owner.plexId ? "1" : null]
-        .filter((accountId): accountId is string => Boolean(accountId));
-      let linkedEvents = 0;
-      for (const accountId of new Set(accountIds)) linkedEvents += this.db.linkUnassignedWatchEventsByPlexAccount(user.id, accountId);
+    // Plex's server-history endpoint reports the server owner as its local account
+    // ID (normally "1"), not the Plex.tv account ID used elsewhere. Both share one
+    // column, so an ID claimed by more than one user is left unlinked rather than
+    // guessed: a wrong link would drive another viewer's progress and cleanup.
+    const claims = new Map<string, Set<number>>();
+    const claim = (accountId: string, userId: number) => claims.set(accountId, (claims.get(accountId) ?? new Set()).add(userId));
+    for (const user of this.db.listUsers()) if (user.plexAccountId) claim(user.plexAccountId, user.id);
+    const ownerUser = storedUsers.find((user) => user.plexUserId === owner.plexId);
+    if (ownerUser) claim("1", ownerUser.id);
+    const linkedUserIds = new Set<number>();
+    for (const [accountId, userIds] of claims) {
+      if (userIds.size !== 1) {
+        this.logger.warn("Skipped linking Plex history for an account ID claimed by several users", { plexAccountId: accountId, userIds: [...userIds] });
+        continue;
+      }
+      const [userId] = userIds;
+      const linkedEvents = this.db.linkUnassignedWatchEventsByPlexAccount(userId!, accountId);
       if (linkedEvents > 0) {
-        linkedUserIds.push(user.id);
-        this.logger.info("Linked Plex history imported before the user was discovered", { userId: user.id, username: user.username, linkedEvents });
+        linkedUserIds.add(userId!);
+        this.logger.info("Linked Plex history imported before the user was discovered", { userId, plexAccountId: accountId, linkedEvents });
       }
     }
     this.refreshRollingProgressForUsers(linkedUserIds);

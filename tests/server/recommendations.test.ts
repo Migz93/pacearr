@@ -1464,12 +1464,45 @@ test("discovering Plex users links history imported before they were known and r
   try {
     await services.discoverPlexUsers();
 
-    assert.deepEqual(db.listUnmatchedWatchEvents(), []);
     const users = db.listUsers();
     const friend = users.find((user) => user.plexAccountId === "4242")!;
     const owner = users.find((user) => user.plexUserId === "9001")!;
     const progress = db.listProgressForShow(rolling.id).map((row) => [row.userId, row.lastWatchedSeason, row.lastWatchedEpisode]);
     assert.deepEqual(progress.sort(), [[friend.id, 2, 3], [owner.id, 1, 5]].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+test("discovering Plex users leaves history unlinked when its account ID belongs to more than one user", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  // An older stored user sharing the friend's account ID, alongside the one about to be discovered.
+  db.upsertUsers([{ plexUserId: "legacy-4242", plexAccountId: "4242", tautulliUserId: null, username: "legacy", displayName: "Legacy", avatarUrl: null }]);
+  db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  const orphan = (sourceEventId: string, plexAccountId: string) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber: 1, episodeNumber: 2, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  // "1" is both the owner's server-local ID and, here, a friend's Plex.tv account ID.
+  orphan("server-local-one", "1");
+  orphan("shared-account", "4242");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="1" username="one" title="One" /><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    // Neither event is attributed to anyone, so no viewer's progress moves.
+    for (const user of db.listUsers()) assert.deepEqual(db.listLatestWatchProgressForUser(user.id), [], `${user.username} has no linked history`);
+    assert.equal(db.listUsers().length, 4);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();

@@ -169,7 +169,7 @@ Matching is case-insensitive and follows this order:
 
 A duplicate event (same `source_event_id`) that was previously imported with `user_id = NULL` is repaired in place once a later import resolves a match, and that user's rolling progress is refreshed — otherwise `INSERT OR IGNORE` would leave it orphaned forever.
 
-Plex history events have no such per-event repair. Instead, each Plex user discovery (saving Plex settings or refreshing users) links every stored Plex event with `user_id = NULL` to the discovered user with the same Plex.tv account ID. The owner also matches the server-local account ID `1` that Plex's history endpoint reports. Discovery then refreshes each linked user's rolling progress. Season expansion or prefetch that the refreshed progress implies runs on the next rolling reconcile.
+Plex history events have no such per-event repair. Instead, each Plex user discovery (saving Plex settings or refreshing users) links every stored Plex event with `user_id = NULL` to the discovered user with the same Plex.tv account ID. The owner also matches the server-local account ID `1` that Plex's history endpoint reports. An account ID claimed by more than one user (for example a friend whose Plex.tv ID is `1`) is left unlinked and logged as a warning, rather than guessed. Discovery then refreshes each linked user's rolling progress. Season expansion or prefetch that the refreshed progress implies runs on the next rolling reconcile.
 
 ## Failure Behaviour
 
