@@ -163,6 +163,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | An event-driven run can leave the recurring schedule untouched | A Plex SSE playback event cannot postpone the session polling fallback if the live connection drops right after it |
 | Repeated interval edits keep an overdue job's catch-up slot | Editing an overdue job's interval back and forth cannot push its catch-up further out |
 | Interval edits that make an overdue job temporarily not due keep its catch-up slot | Toggling an overdue job's interval to a not-yet-due value and back cannot push its catch-up further out |
+| Disabling an overdue job releases its catch-up slot for the next overdue job | Toggling an overdue job off and on repeatedly, then disabling it, leaves the next overdue job the first slot rather than one behind every released reservation |
+| A manual run releases the job's catch-up slot for the next overdue job | A manual run satisfies the catch-up, so a job that becomes overdue afterwards takes the first slot |
+| A released catch-up slot ahead of another reservation is reused | With `b` still reserved, a job that becomes overdue after `a` is disabled takes `a`'s slot, still spaced from `b`, rather than queueing after `b` |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 

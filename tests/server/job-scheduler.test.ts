@@ -152,6 +152,51 @@ test("interval edits that make an overdue job temporarily not due keep its catch
   assert.equal(nextRunMs(scheduler, "history-import"), catchUpAt);
 });
 
+test("disabling an overdue job releases its catch-up slot for the next overdue job", (t) => {
+  const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun(t, { a: longAgo, b: longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.registerRecurringJob({ id: "a", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  scheduler.registerRecurringJob({ id: "b", intervalMs: 24 * HOUR_MS, enabled: false, task: async () => {} });
+
+  for (let toggle = 0; toggle < 5; toggle += 1) {
+    scheduler.updateJob("a", { enabled: false });
+    scheduler.updateJob("a", { enabled: true });
+  }
+  scheduler.updateJob("a", { enabled: false });
+  scheduler.updateJob("b", { enabled: true });
+
+  assert.ok(nextRunMs(scheduler, "b") <= Date.now() + 60_000, "b takes the first slot, not one behind a's released reservations");
+});
+
+test("a manual run releases the job's catch-up slot for the next overdue job", (t) => {
+  const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun(t, { a: longAgo, b: longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.registerRecurringJob({ id: "a", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  scheduler.registerRecurringJob({ id: "b", intervalMs: 24 * HOUR_MS, enabled: false, task: async () => {} });
+
+  assert.equal(scheduler.runNow("a"), true);
+  scheduler.updateJob("b", { enabled: true });
+
+  assert.ok(nextRunMs(scheduler, "b") <= Date.now() + 60_000, "b takes the first slot, not the one after a's satisfied catch-up");
+});
+
+test("a released catch-up slot ahead of another reservation is reused", (t) => {
+  const longAgo = new Date(Date.now() - 30 * HOUR_MS).toISOString();
+  const scheduler = schedulerWithLastRun(t, { a: longAgo, b: longAgo, c: longAgo }, { catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 });
+  scheduler.registerRecurringJob({ id: "a", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  scheduler.registerRecurringJob({ id: "b", intervalMs: 24 * HOUR_MS, task: async () => {} });
+  scheduler.registerRecurringJob({ id: "c", intervalMs: 24 * HOUR_MS, enabled: false, task: async () => {} });
+  const aAt = nextRunMs(scheduler, "a");
+  const bAt = nextRunMs(scheduler, "b");
+
+  scheduler.updateJob("a", { enabled: false });
+  scheduler.updateJob("c", { enabled: true });
+
+  assert.equal(nextRunMs(scheduler, "b"), bAt);
+  assert.ok(nextRunMs(scheduler, "c") <= aAt + 1_000, "c takes a's released slot rather than queueing after b");
+  assert.ok(bAt - nextRunMs(scheduler, "c") >= 45_000, "c still keeps the spacing from b");
+});
+
 test("a job whose last run failed before a restart catches up even when its last success is recent", (t) => {
   const scheduler = disableJobsAfterTest(t, new JobScheduler({ catchUpDelayMs: 60_000, catchUpSpacingMs: 45_000 }));
   scheduler.setPersistence({

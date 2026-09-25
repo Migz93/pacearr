@@ -30,7 +30,6 @@ export class JobScheduler {
   private readonly jobs = new Map<string, ScheduledJob>();
   private readonly catchUpDelayMs: number;
   private readonly catchUpSpacingMs: number;
-  private nextCatchUpSlotMs = 0;
   private logger?: Logger;
   private loadPersistedState?: (id: string) => { lastRunAt: string | null; lastRunStatus: "success" | "error" | null } | null | undefined;
   private savePersistedState?: (id: string, state: { lastRunAt: string | null; lastRunStatus: "success" | "error" | null }) => void;
@@ -161,13 +160,27 @@ export class JobScheduler {
       if (job.catchUpAtMs !== null && job.catchUpAtMs > now) {
         targetMs = job.catchUpAtMs;
       } else {
-        targetMs = Math.max(now + this.catchUpDelayMs, this.nextCatchUpSlotMs);
-        this.nextCatchUpSlotMs = targetMs + this.catchUpSpacingMs;
+        targetMs = this.nextCatchUpSlot(now);
       }
       job.catchUpAtMs = targetMs;
     }
     job.nextRunAt = new Date(targetMs).toISOString();
     this.waitUntil(job, targetMs);
+  }
+
+  // The earliest time a spacing away from every catch-up still reserved. Derived from
+  // the reservations rather than a running counter, so a slot released by a manual
+  // run or a disabled job is reused instead of delaying later jobs.
+  private nextCatchUpSlot(now: number): number {
+    const reserved = Array.from(this.jobs.values(), (job) => job.catchUpAtMs)
+      .filter((atMs): atMs is number => atMs !== null && atMs > now)
+      .sort((a, b) => a - b);
+    let slotMs = now + this.catchUpDelayMs;
+    for (const atMs of reserved) {
+      if (slotMs + this.catchUpSpacingMs <= atMs) break;
+      if (slotMs < atMs + this.catchUpSpacingMs) slotMs = atMs + this.catchUpSpacingMs;
+    }
+    return slotMs;
   }
 
   private waitUntil(job: ScheduledJob, targetMs: number) {
