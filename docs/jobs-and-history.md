@@ -32,6 +32,25 @@ leaves the next timer armed. A failure is logged with structured detail,
 persists an `error` status in `job_run_state`, and appears as the job's last
 result in Settings → Jobs. Jobs retry at their configured interval.
 
+The next run is one interval after the job's last run (its persisted
+`lastRunAt`, or the most recent run start while the process is up), not one
+interval after boot or a settings save:
+
+| Situation | Next run |
+|---|---|
+| Last run plus interval is still ahead | That time |
+| Overdue, never run, or last run failed before a restart | After a 30-second grace, staggered 30 seconds apart across jobs |
+| A manual, queued, or startup run starts | Next run is one interval after that run; any pending catch-up is dropped and its slot freed for other jobs |
+| A Plex SSE playback event triggers `session-check` | Unchanged, so the polling fallback keeps its cadence |
+| An overdue job is rescheduled before its catch-up runs, even via a temporarily not-due interval | It keeps its reserved catch-up time |
+| An overdue job is disabled before its catch-up runs | Its reserved catch-up slot is freed for other jobs |
+| Interval changed | Recomputed from the last run; overdue results catch up as above |
+| Settings saved with the interval and enabled state unchanged | Unchanged |
+| A run comes due before setup (Plex and Sonarr) is complete | Skipped and not recorded; the job has no next run until setup completes, then catches up as an overdue job |
+| A manual or queued run is requested before setup is complete | Runs as a catch-up once setup completes, even if the job was not otherwise due |
+| A Plex connection (server, machine identifier or token) is saved and its users are discovered | `history-import` runs now, or is queued behind an active run |
+| Tautulli becomes enabled and configured, or its URL or API key changes | `history-import` runs now, or is queued behind an active run |
+
 Plex playback normally arrives through a persistent SSE connection. Settings →
 Jobs shows whether this live connection is active or Pacearr is using its polling
 fallback. Playback notifications and scheduled/manual requests share the
@@ -100,7 +119,7 @@ Events are unique by `(source, source_event_id)` so re-imports are idempotent.
 
 ## History Synchronization
 
-Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent.
+Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent. Each cursor records the connection it came from (the Plex machine identifier, or the Tautulli URL); after the server changes, the next import backfills that source again rather than resuming from the old server's cursor. Cursors saved before connections were recorded are stamped with the server configured at upgrade (migration 23); a cursor with no recorded connection is read in full.
 
 ## Full History Reconciliation
 

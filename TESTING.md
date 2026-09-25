@@ -35,7 +35,10 @@ Plex OAuth.
 1. Install Chromium with `npx playwright install chromium`.
 2. Copy `.env.playwright.example` to `.env.playwright`.
 3. Set `BASE_URL` to the running Pacearr instance and paste the value of the
-   `pacearr_session` cookie from the browser into `SESSION_COOKIE`.
+   `pacearr_session` cookie from the browser into `SESSION_COOKIE`. A plain
+   `http://` LAN address works too — you'll get a console warning about the
+   session cookie travelling in plaintext instead of a hard failure. Only
+   `https://` or a loopback host (`localhost`/`127.0.0.1`/`::1`) stay silent.
 4. Run `npm run test:e2e`.
 
 The auth setup validates the cookie and saves it to
@@ -51,6 +54,19 @@ all gitignored and must stay local because they contain the active session
 cookie or authenticated page data. The smoke
 tests also fail on unexpected browser console errors and page errors, using the
 selective client logging convention from #42.
+
+### Rate limiting
+
+The app's rate limits live in `src/server/rate-limit.ts`, which is shared
+unchanged across the Migz93 self-hosted apps. There are two limiters: 3,000
+requests per minute per client IP across the app, and 10 failed sign-in
+attempts per 15 minutes. Built assets (`/assets/`), cached images (`/images/`)
+and `/favicon.ico` don't count toward the global limit, so a full Playwright
+run stays well under it.
+
+If several unrelated pages suddenly fail together with "Too many requests",
+something is making far more requests than expected. Look for a polling loop
+or a new route that bypasses the exemptions rather than rerunning the suite.
 
 ---
 
@@ -73,6 +89,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Pruning history events does not crash or wipe every row on a NaN retention value | `Number.isFinite` is checked before the clamp, since `Math.min`/`Math.max` both propagate `NaN` rather than bounding it |
 | Dry-run defaults are safe | New and legacy/partial settings resolve to dry-run enabled |
 | The split library refresh job inherits old combined-job state | An upgrade carries `recommendation-refresh` run status into `sonarr-library-refresh`, avoiding a misleading “never run” status while the existing cache is warm |
+| Migration 23 stamps history cursors with the connection configured at upgrade | A Plex cursor saved before connections were recorded gains the configured machine identifier; a cursor for a source no longer configured stays unstamped, so its next import is a full read |
 | A history category filter matches an action and its dry-run twin | `?category=` filters on the fixed action set from `src/shared/history.ts`, includes `dry_run.` variants, excludes other categories, and stacks with the level filter |
 | Per-user activity windows the show count but not the last-watched timestamp | The Users page's "N shows active" respects the viewer activity window while "last watched" does not, so a quiet viewer shows when they were last seen rather than "never" |
 | A disabled user's recent watch does not count as an active show, but still counts as last watched | Only an enabled viewer's progress keeps a season expanded, so the active-show count excludes disabled users while the last-watched timestamp stays informational |
@@ -111,6 +128,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A rolling reconcile with nothing to change and no errors records no history event | Same rule for the six-hourly sweep |
 | A rolling reconcile that only flips series-level Sonarr monitoring, with no episode/season change, still records a history event | `changedSomething` used to check only episode/file/search counts, missing `plan.seriesMonitoringUpdate` and season-level monitoring toggles — a scheduled sweep that only mutated series-level monitoring skipped the `sonarr.baseline` entry despite genuinely changing something |
 
+### `tests/server/live-session-ids.test.ts` — Live session event identity
+
+| Test | What it checks |
+|---|---|
+| A Plex session key reused after a restart for the same episode numbers still stores the new playback | Regression for #169 — `INSERT OR IGNORE` silently dropped a new playback whose reused `sessionKey` and season/episode matched an old row. The new playback must be stored and advance progress, while repeated polls of it stay one event. A final playback that differs only by `Session.id` must also be stored |
+| Without a Plex Session.id, a reused session key is still separated by viewer | The fallback ID for sessions missing `Session.id` must still separate two viewers who get the same key for the same episode |
+
 ### `tests/server/plex-session-monitor.test.ts` — Live Plex playback trigger
 
 | Test | What it checks |
@@ -125,6 +149,28 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Disabled jobs cannot be manually run or queued | Settings and internal callers cannot override a job the administrator disabled |
 | Disabling a job cancels a queued manual follow-up | A job disabled while its active run has a coalesced manual follow-up cannot start that follow-up after the active run finishes |
 | A scheduled collision retains the following timer | Skipping an in-progress recurring run does not silently stop that job permanently |
+
+### `tests/server/job-scheduler.test.ts` — Scheduling from the last run
+
+| Test | What it checks |
+|---|---|
+| A job registered partway through its interval runs one interval after its last run | A restart does not restart a long job's countdown from boot |
+| An overdue job runs shortly after registration | A job whose interval elapsed while Pacearr was down runs after the catch-up grace, then waits a full interval |
+| Overdue jobs are staggered | Catch-up runs at boot are spaced apart rather than all starting together |
+| Updating a job without changing its interval or enabled state keeps its next run | Saving settings cannot postpone a job indefinitely |
+| Changing a job's interval measures the new interval from its last run | Switching an interval away and back leaves the original due time |
+| A manual run satisfies a pending catch-up | A startup `runNow` is not repeated by the catch-up moments later |
+| A manual run moves a job's next scheduled run a full interval after it | A scheduled run cannot follow a manual run by less than one interval |
+| An event-driven run can leave the recurring schedule untouched | A Plex SSE playback event cannot postpone the session polling fallback if the live connection drops right after it |
+| Repeated interval edits keep an overdue job's catch-up slot | Editing an overdue job's interval back and forth cannot push its catch-up further out |
+| Interval edits that make an overdue job temporarily not due keep its catch-up slot | Toggling an overdue job's interval to a not-yet-due value and back cannot push its catch-up further out |
+| Disabling an overdue job releases its catch-up slot for the next overdue job | Toggling an overdue job off and on repeatedly, then disabling it, leaves the next overdue job the first slot rather than one behind every released reservation |
+| A manual run releases the job's catch-up slot for the next overdue job | A manual run satisfies the catch-up, so a job that becomes overdue afterwards takes the first slot |
+| A released catch-up slot ahead of another reservation is reused | With `b` still reserved, freeing the two slots before it lets a job that becomes overdue afterwards take the first freed slot, still spaced from `b`, rather than queueing after `b` |
+| A run skipped while setup is incomplete is not recorded, and the job catches up once setup completes | A skipped catch-up persists nothing and leaves no next run; `resumeAfterSetup()` does nothing until ready, then the job runs once and its next run is a full interval later |
+| A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
+| A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
+| A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
 
@@ -142,6 +188,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `close()` is idempotent | Concurrent and subsequent shutdown calls share one completion path without ending winston twice |
 | `mergeLogEntries` drops exact duplicates but keeps same-millisecond entries that differ only in meta | The Logs merge key can't collapse distinct entries that share a timestamp and message (e.g. reconcileRollingShows's per-show skip log) |
 | `mergeLogEntries` sorts the combined result chronologically | Combining out-of-order sources still yields a chronological result |
+| Entries below the configured level don't push kept entries out of the in-memory logs | The ring applies Winston's `LOG_LEVEL` filter, so a burst of suppressed debug/info entries can't evict the warnings and errors Settings → Logs falls back on |
 | `readRecentLogEntries` combines today's log file with the in-memory ring | The Logs route sees history from both a prior restart (file) and this process's own activity (ring) |
 | Logged metadata survives the full write/read round trip through the persisted file | Winston's second log argument is wrapped so metadata is nested under `meta` in the serialized file, not spread onto top-level fields where `readTodaysLogEntries` couldn't see it |
 | The ring entry's timestamp matches the persisted file's timestamp for the same log call | `write()` supplies its own timestamp to winston instead of letting `format.timestamp()` generate an independent one, so `mergeLogEntries`' dedup key can't split one log call into two visible entries |
@@ -161,6 +208,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
+| Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
+| Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
@@ -175,14 +224,35 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
-| `getActiveSessions` parses valid episode activity and uses an activity-only stable event key | Tautulli's `get_activity` rows preserve the episode/user fields Pacearr needs, reject malformed activity safely, and include the playback start in a prefixed key so it cannot collide with completed history or a reused session key |
+| `getActiveSessions` parses real `get_activity` rows, which carry no start time, and keys them by playback session | Regression for #168 — real `get_activity` rows have no `started`/`date`, and the old parser skipped every one, so the job never recorded an event. The fixture matches a live payload. Rows are keyed by `session_id` (or by a session key scoped to viewer, episode and day), dated when observed, and malformed rows are still rejected |
 
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 
 | Test | What it checks |
 |---|---|
 | An active Tautulli session retries expansion after a series-operation collision and is then deduplicated | A missed Plex live event is recovered after a competing session job releases the series lock; identity repairs reach normal rolling work without repeating a dry-run prefetch; completed-history cursors stay isolated and later duplicate polls remain silent |
-| A reused Tautulli session key with a later start is a new playback event | The start time distinguishes separate plays when Tautulli recycles a session key |
+| A reused Tautulli session key is a new playback event, while repeated polls of one playback are not | Regression for #169 — through `checkTautulliActiveSessions()`, a new `session_id` on a recycled session key stores a second row for the same episode, while repeated polls of each playback add nothing |
+
+### `tests/server/finale-expansion.test.ts` — Expand next season on finale
+
+| Test | What it checks |
+|---|---|
+| Finale selection finds the next real season only from a season's last known episode | The last episode is the highest one Sonarr lists (aired or not), an episode past it never matches, the next season skips gaps and season `0`, and nothing is selected when no later season exists |
+| Starting a season's last episode expands the whole next season, with early prefetch off | A live session on S1E10 of 10 monitors the rest of season 2, runs `SeasonSearch`, marks it expanded and records a `-finale` history source; the setting does not depend on `earlyPrefetchEnabled` |
+| A watch past the last episode Sonarr lists does not expand the next season | S1E11 against a Sonarr season ending at E10 means stale or mismatched numbering, so only an exact match to the last listed episode triggers |
+| With the setting off, the finale leaves early prefetch behaving as before | The finale only prefetches E02–E03, and season 2 is not expanded |
+| A finale expansion supersedes early prefetch of the same season | Earlier prefetch records for the next season are cleared by the expansion, and no second prefetch runs |
+| A one-episode season expands both itself and the next season from its only episode | E01 as finale still reaches the finale check after expanding its own season |
+| A dry-run finale records the expansion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, one `dry_run.sonarr.expand_season` entry, and a repeat poll of the same playback stays silent |
+| The rolling reconcile expands the next season for a finale watched before the setting was enabled | A stored finale event is never reprocessed, so the sweep catches up from active progress: season 2 expands (`active-progress-reconcile-finale`), its prefetch records clear, and a second sweep does not expand again |
+| The rolling reconcile ignores a finale watched by a viewer outside the activity window | Catch-up only acts on active progress, so an old finale watch does not expand anything |
+| The rolling reconcile prefetches for a viewer whose progress reached the trigger without a processed watch event | Prefetch is applied from stored progress by the sweep (`active-progress-reconcile`), not only from live events, and a second sweep adds nothing |
+| Enrolment applies a stored finale watch the same way a live watch would | Enrolment's own history read skips the locked series, so enrolment applies viewer positions itself: the stored S1E10 expands S1 and S2 (`enroll-finale`) |
+| Enrolling a viewer on a finale keeps the next season's files that finale expansion needs | With S2 already downloaded and the viewer's stored progress on S1E10, enrolment expands S2 and sends no file `DELETE` — positions are applied before the pass that deletes files |
+| Enrolling a viewer inside the prefetch trigger keeps only the prefetched next-season files | With stored progress on S1E8 and S2 downloaded, E02–E03 are prefetched and kept; only E04–E05 files are deleted |
+| A dry-run rolling reconcile records one expansion for two viewers in the same unexpanded season | Dry run never persists an expansion, so the sweep's own dedup set must stop the second viewer from recording it again; callers that pass no set get a fresh one per show |
+| A first watch inside an unexpanded season expands it and still prefetches the next when near its end | Expanding the current season no longer suppresses prefetch from the same watch: S2E4 of 5 expands S2 and prefetches S3 E02–E03 |
+| Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
@@ -190,6 +260,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | Existing series are ignored while new series at or below the limit are searched | The activation timestamp excludes the existing library, and the strict “more than” comparison sends an 80-episode series to `SeriesSearch` |
 | Automatic enrollment history repair is coalesced | A batch of large new shows causes one full Plex history read after triage, rather than one whole-history read per enrolled series or duplicate pilot searches; it immediately applies pending active progress for existing enrolled shows |
+| Automatic enrollment defers cleanup until history repair is clean | A degraded shared history read preserves episode files, while a clean read allows the correction pass to delete unretained files |
+| Automatic enrollment uses Tautulli-only history repair | Enabled Tautulli without Plex still triggers the shared history read and defers file cleanup |
 | A series above the limit is enrolled onto the pilot baseline | The large-series path reuses enrollment rather than issuing a full series search |
 | Dry-run triage remains pending for live mode and a completed decision is not repeated | A dry-run never consumes an arrival; the first live run searches it and later polls do not repeat that command |
 | Dry-run does not persist a fallback baseline | An undated dry-run response cannot suppress that series if Sonarr later supplies a post-activation `added` time in live mode |
@@ -214,6 +286,14 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Plex, Sonarr, and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; successful connection checks plus Plex.tv account, discovery, friends, and token-ping requests pass `redirect: "error"` and an abort signal to `fetch` |
 | Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
 
+### `tests/server/rate-limit.test.ts` — Rate limiting
+
+| Test | What it checks |
+|---|---|
+| Exempt paths | `/assets/`, `/images/` and `/favicon.ico` (with or without a trailing slash) are exempt from the global limit, while API and page routes are not |
+| Global limiter | The request after 3,000 in a minute gets a JSON 429 with draft-8 `RateLimit` headers, only the first rejection is logged, and exempt paths never use up the allowance |
+| Sign-in limiter | Successful sign-ins don't count, the attempt after 10 failures gets a JSON 429, and one warning is logged |
+
 ---
 
 ### `tests/server/recommendations.test.ts` — Service and Sonarr workflow behavior
@@ -223,6 +303,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
 | A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
+| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different server or records no server; the same server still resumes incrementally |
+| Discovering Plex users links history imported before they were known and refreshes their progress | A friend's orphaned event (Plex.tv account ID) and the owner's (server-local ID `1`) are linked on discovery, and both viewers' rolling progress reflects them |
+| Discovering Plex users leaves history unlinked when its account ID belongs to more than one user | A friend whose Plex.tv ID is `1` (the owner's server-local ID) and two stored users sharing an account ID: neither event is linked, so no viewer's progress moves |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
 | History import continues with Tautulli when Plex is not configured | A Plex configuration error is reported and audited without preventing configured Tautulli history from importing |
 | History import rejects a non-unique Sonarr external ID | A duplicate TVDB/IMDb value in Sonarr leaves the event unmatched rather than selecting whichever series appeared first |
@@ -234,18 +317,22 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A full history reconciliation repairs a previously orphaned Tautulli event and refreshes rolling progress | Regression for #75 end to end — a full reconcile re-fetches an event that's a duplicate by `(source, source_event_id)`, so the fix has to repair it in place rather than rely on a fresh insert; also confirms `rolling_show_users`, not just the raw `watch_events` row, picks up the repaired progress |
 | A full history reconciliation refreshes rolling progress after repairing an orphaned Plex series link | A previously unmatched Plex event can be linked by verified metadata during a full reconciliation; its viewer progress must be refreshed immediately rather than waiting for the rolling-reconcile schedule |
 | Enrollment repairs and seeds previously unmatched history with a full verified source read | Enrolling after a source event was stored without a verified series link re-reads source history, repairs the exact event, and seeds viewer progress immediately; the read also applies pending active-progress expansion for other enrolled shows |
+| Manual enrollment applies its pilot baseline before its full history reconciliation | Existing progress is applied to Sonarr immediately, while the slower full source read remains a corrective pass for missed activity; non-pilot files are not deleted until that read succeeds |
+| Manual and automatic enrollment preserve files after a degraded history reconciliation | An integration read that returns errors (rather than throwing) must leave episode files intact while applying monitoring from whatever progress is available |
 | Manual Tautulli mapping refreshes rolling progress from relinked history | Assigning an unmatched Tautulli identity immediately rebuilds its enrolled-show progress from stored history, without waiting for the next import |
 | Reset clears prefetch targets before applying the pilot baseline | Reset removes persisted prefetch targets before reconciliation calculates which episodes to unmonitor and delete |
 | Dry-run reset projects prefetch cleanup without mutating state | Dry-run reset excludes prefetched episodes from the projected monitoring and deletion plan while retaining their records |
 | Dry-run expansion preserves prefetch targets | Reprocessing an already-expanded season in dry-run mode does not delete its persisted prefetch records |
 | Scheduled reconciliation reclaims stale prefetches | A prefetch with no active viewer need beyond the cleanup delay is cleared, unmonitored, and its file is deleted |
-| Scheduled reconciliation clears prefetches promoted to a retained season | Existing per-episode prefetch records are removed and audited when active viewer progress makes their season fully retained, so the UI cannot display stale prefetch markers |
+| Scheduled reconciliation clears prefetches promoted to a retained season | When active viewer progress makes a prefetched season fully retained, the sweep expands it through the same `expandSeason` path a live watch uses (audited as `active-progress-reconcile`), which removes its per-episode prefetch records so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
+| Progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once | The complete cleanup batch is evaluated together, so one eligible season does not incorrectly protect a file needed only by another eligible season |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
 
 | Early prefetch selection skips the pilot and caps the candidate count | Episodes selected from the next season start after E01 and respect the configured count |
 | Rolling plans preserve prefetched episodes individually | Prefetched episode targets remain monitored without retaining the entire season |
+| File cleanup protects multipart releases needed by a retained episode | Sonarr files shared with a pilot or another retained episode are not deleted; a file shared only by disposable episodes is deleted once, including when the retained link is in another season |
 
 ### `tests/playwright/pages.spec.ts` — Page smoke tests
 
@@ -331,14 +418,13 @@ docker run -d \
   -v /opt/pacearr:/config \
   --restart unless-stopped \
   pacearr
-docker logs pacearr 2>&1 | tail -5
+timeout 90 sh -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" pacearr)" = healthy ]; do sleep 3; done' \
+  && echo healthy || { docker logs pacearr 2>&1 | tail -20; false; }
 ```
 
-Expected log line:
-
-```text
-Pacearr listening on port 9302
-```
+This waits for the HEALTHCHECK, which reads `starting` until its first check
+passes, and prints `healthy`. If it prints logs instead, look for the
+`Pacearr listening` startup line.
 
 Depending on DooD network behaviour, `curl http://127.0.0.1:9302/api/health`
 from inside the devcontainer may not reach the host-published port. Testing from

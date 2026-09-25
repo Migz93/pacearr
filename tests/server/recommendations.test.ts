@@ -647,6 +647,42 @@ test("rolling reconciliation honours a custom delay and immediate cleanup at zer
   }
 });
 
+test("progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once", async () => {
+  const { db, services, cleanup } = createHarness();
+  const series: SonarrSeries = {
+    id: 904,
+    title: "Batch Cleanup Test",
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [1, 2].map((seasonNumber) => ({ seasonNumber, monitored: true })),
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 90401, seriesId: 904, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90401 },
+    { id: 90402, seriesId: 904, seasonNumber: 1, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90499 },
+    { id: 90411, seriesId: 904, seasonNumber: 2, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 90411 },
+    { id: 90412, seriesId: 904, seasonNumber: 2, episodeNumber: 2, monitored: true, hasFile: true, episodeFileId: 90499 },
+  ];
+  const requests: Array<{ method: string; pathname: string }> = [];
+  const restoreFetch = installFetchStub({ seriesById: { 904: series }, episodesBySeries: { 904: episodes }, episodeFilesBySeries: { 904: [] }, requests });
+  try {
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const rolling = db.upsertRollingShow({ id: 904, title: series.title });
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z");
+
+    await (services as unknown as { performProgressiveCleanup: (rollingShowId: number, currentSeason: number, observedAt: Date) => Promise<void> })
+      .performProgressiveCleanup(rolling.id, 3, new Date("2026-01-02T00:00:00.000Z"));
+
+    assert.deepEqual(
+      requests.filter((request) => request.method === "DELETE").map((request) => request.pathname),
+      ["/api/v3/episodefile/90499"],
+    );
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("a returning active viewer clears an inactive season's cleanup timer", async () => {
   const { db, services, cleanup } = createHarness();
   const series = rollingSeries(903);
@@ -727,6 +763,67 @@ test("enrolling a show seeds rolling progress from watch history that was alread
     assert.equal(progress[0]?.userId, user.id);
     assert.equal(progress[0]?.lastWatchedSeason, 2);
     assert.equal(progress[0]?.lastWatchedEpisode, 4);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("manual enrollment applies its pilot baseline before its full history reconciliation", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.updateAppSettings({ dryRun: false });
+  const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "bob", displayName: "Bob", avatarUrl: null }]);
+  db.updateUser(user.id, { enabled: true });
+  const series: SonarrSeries = { id: 804, title: "Immediate Baseline", tvdbId: 804, seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8041, seriesId: 804, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: false },
+    { id: 8042, seriesId: 804, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8042 },
+    { id: 8043, seriesId: 804, seasonNumber: 2, episodeNumber: 1, title: "Second season pilot", monitored: true },
+    { id: 8044, seriesId: 804, seasonNumber: 2, episodeNumber: 2, title: "Second season episode", monitored: true, hasFile: true, episodeFileId: 8044 },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const viewedAt = Math.floor(Date.now() / 1000);
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 804: series }, episodesBySeries: { 804: episodes }, requests,
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" historyKey="immediate-baseline-history" grandparentTitle="Immediate Baseline" parentIndex="2" index="2" viewedAt="${viewedAt}" grandparentRatingKey="immediate-baseline" accountID="1" user="bob"/></MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://804" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.enrollShow(804, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    const firstSonarrMutation = requests.findIndex((request) => request.pathname.startsWith("/api/v3/") && request.method !== "GET");
+    const historyRead = requests.findIndex((request) => request.pathname === "/status/sessions/history/all");
+    assert.ok(firstSonarrMutation >= 0);
+    assert.ok(historyRead >= 0);
+    assert.ok(firstSonarrMutation < historyRead, "the pilot baseline must reach Sonarr before the full history read");
+    const fileDeletes = requests.filter((request) => request.method === "DELETE" && request.pathname.startsWith("/api/v3/episodefile/"));
+    assert.deepEqual(fileDeletes.map((request) => request.pathname), ["/api/v3/episodefile/8042"]);
+    assert.ok(requests.indexOf(fileDeletes[0]!) > historyRead, "the provisional baseline must not delete episode files");
+    assert.deepEqual(db.getRollingShowBySeriesId(804)?.expandedSeasons, [2]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false });
+  const series: SonarrSeries = { id: 805, title: "Degraded History", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const episodes: SonarrEpisode[] = [
+    { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true, hasFile: true, episodeFileId: 8051 },
+    { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+  ];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ series: [series], seriesById: { 805: series }, episodesBySeries: { 805: episodes }, requests });
+  try {
+    const result = await services.enrollShow(805, { applyBaseline: true, importHistory: true });
+
+    assert.equal(result.ok, true);
+    assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
+    assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -922,10 +1019,11 @@ test("scheduled reconciliation clears prefetch records when active progress reta
     assert.equal(result.ok, true);
     assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [2]);
     assert.deepEqual(db.listPrefetchedEpisodes(rolling.id), []);
+    // The season is promoted through the same expansion a live watch would use.
     assert.equal(db.listHistory(10).some((entry) => {
-      if (entry.action !== "cleanup.prefetch") return false;
+      if (entry.action !== "sonarr.expand_season") return false;
       const details = JSON.parse(entry.details);
-      return details.reason === "expanded-retention" && details.clearedPrefetchedEpisodes === 2 && JSON.stringify(details.seasonNumbers) === "[2]";
+      return details.source === "active-progress-reconcile" && details.seasonNumber === 2;
     }), true);
   } finally {
     restoreFetch();
@@ -1312,6 +1410,103 @@ test("Sonarr library refresh persists shows for synchronous cached listing", asy
   } finally {
     // restoreFetch is idempotent enough for cleanup if the assertion above fails
     restoreFetch();
+    cleanup();
+  }
+});
+
+test("history import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor", async () => {
+  // Watched well before the stored cursor, so an incremental read skips it.
+  const olderWatch = { reference_id: "new-server-older-watch", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: 23, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" };
+  const cursor = new Date().toISOString();
+  const importedFrom = async (connection: string | undefined) => {
+    const { db, services, cleanup } = createHarness();
+    db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+    db.saveHistorySyncState({
+      plex: { backfillComplete: false, cursor: null },
+      tautulli: { backfillComplete: true, cursor, ...(connection === undefined ? {} : { connection }) },
+    });
+    const restoreFetch = installFetchStub({ tautulliHistory: [olderWatch], tautulliMetadata: { guids: [] } });
+    try {
+      await services.importHistory();
+      return { imported: db.listUnmatchedWatchEvents().length, syncedConnection: db.getHistorySyncState().tautulli.connection };
+    } finally {
+      restoreFetch();
+      cleanup();
+    }
+  };
+
+  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "http://tautulli:8181" });
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
+  // Migration 23 stamps cursors saved before connections were recorded, so one still
+  // unstamped is treated as belonging to another server.
+  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "http://tautulli:8181" }, "an unstamped cursor is read in full");
+});
+
+test("discovering Plex users links history imported before they were known and refreshes their progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  const rolling = db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  // Imported while neither viewer existed: the friend by Plex.tv account ID, the owner
+  // by the server-local ID "1" that Plex's history endpoint reports.
+  const orphan = (sourceEventId: string, plexAccountId: string, seasonNumber: number, episodeNumber: number) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  orphan("friend-watch", "4242", 2, 3);
+  orphan("owner-watch", "1", 1, 5);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    const users = db.listUsers();
+    const friend = users.find((user) => user.plexAccountId === "4242")!;
+    const owner = users.find((user) => user.plexUserId === "9001")!;
+    const progress = db.listProgressForShow(rolling.id).map((row) => [row.userId, row.lastWatchedSeason, row.lastWatchedEpisode]);
+    assert.deepEqual(progress.sort(), [[friend.id, 2, 3], [owner.id, 1, 5]].sort());
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+test("discovering Plex users leaves history unlinked when its account ID belongs to more than one user", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.savePlexOwner({ plexId: "9001", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "tok" });
+  // An older stored user sharing the friend's account ID, alongside the one about to be discovered.
+  db.upsertUsers([{ plexUserId: "legacy-4242", plexAccountId: "4242", tautulliUserId: null, username: "legacy", displayName: "Legacy", avatarUrl: null }]);
+  db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
+  const orphan = (sourceEventId: string, plexAccountId: string) => db.insertWatchEvent({
+    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    showTitle: "The Wire", seasonNumber: 1, episodeNumber: 2, watchedAt: new Date().toISOString(), rawPayload: {},
+  });
+  // "1" is both the owner's server-local ID and, here, a friend's Plex.tv account ID.
+  orphan("server-local-one", "1");
+  orphan("shared-account", "4242");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex.tv" && url.pathname === "/api/users") {
+      return new Response('<MediaContainer><User id="1" username="one" title="One" /><User id="4242" username="friend" title="Friend" /></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  try {
+    await services.discoverPlexUsers();
+
+    // Neither event is attributed to anyone, so no viewer's progress moves.
+    for (const user of db.listUsers()) assert.deepEqual(db.listLatestWatchProgressForUser(user.id), [], `${user.username} has no linked history`);
+    assert.equal(db.listUsers().length, 4);
+  } finally {
+    globalThis.fetch = originalFetch;
     cleanup();
   }
 });

@@ -11,7 +11,7 @@ test("discovering users returns the same per-user activity fields as the users l
   await openPage(page, "/users", "Users");
 
   const discovered = await page.request.post("/api/users/discover");
-  expect(discovered.ok()).toBeTruthy();
+  await expect(discovered).toBeOK();
   const { users } = (await discovered.json()) as { users: unknown[] };
   expect(users.length).toBeGreaterThan(0);
   for (const user of users) {
@@ -37,12 +37,12 @@ test("PATCH-ing a user with no enabled field in the body leaves their enabled st
 
   try {
     const patched = await page.request.patch(`/api/users/${user.id}`, { data: {} });
-    expect(patched.ok()).toBeTruthy();
+    await expect(patched).toBeOK();
     const { user: after } = (await patched.json()) as { user: { enabled: boolean } };
     expect(after.enabled).toBe(user.enabled);
   } finally {
     const restored = await page.request.patch(`/api/users/${user.id}`, { data: { enabled: user.enabled } });
-    expect.soft(restored.ok()).toBe(true);
+    await expect.soft(restored).toBeOK();
   }
 });
 

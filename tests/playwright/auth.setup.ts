@@ -1,4 +1,4 @@
-import { test as setup } from "@playwright/test";
+import { test as setup, type APIResponse } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -8,9 +8,28 @@ type StorageState = { cookies: Array<{ name: string; value: string; domain?: str
 
 function validateBaseUrl(value: string): URL {
   const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("BASE_URL must use HTTP or HTTPS.");
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) throw new Error("BASE_URL must use HTTPS unless it targets a loopback host over HTTP.");
+  if (url.protocol === "http:" && !loopback) {
+    console.warn(
+      `\n  Warning: BASE_URL (${url.host}) is plain HTTP and not a loopback host.\n` +
+      "  The pacearr_session cookie will be sent in plaintext across the network.\n" +
+      "  Use HTTPS (e.g. behind a reverse proxy) if this instance is reachable by others.\n",
+    );
+  }
   return url;
+}
+
+// A 429 means the rate limiter refused the check, not that the session is
+// invalid. Without this, a rate-limited run reports an expired session and
+// sends you off to fetch a fresh cookie for no reason.
+function throwIfRateLimited(response: APIResponse): void {
+  if (response.status() === 429) {
+    throw new Error(
+      "\n\n  The session check was rate-limited (HTTP 429), so the cookie was not tested.\n" +
+      "  Wait for the rate-limit window to reset (up to a minute) and re-run.\n",
+    );
+  }
 }
 
 setup("authenticate", async ({ request }) => {
@@ -22,6 +41,7 @@ setup("authenticate", async ({ request }) => {
     const savedCookie = savedState.cookies.find((cookie) => cookie.name === "pacearr_session");
     if (savedCookie?.domain === currentHost && savedCookie.secure === currentSecure) {
       const response = await request.get("/api/auth/session", { headers: { Cookie: buildCookieHeader(savedState) } });
+      throwIfRateLimited(response);
       const session = await response.json() as { authenticated: boolean };
       if (session.authenticated) return;
     }
@@ -39,6 +59,7 @@ setup("authenticate", async ({ request }) => {
   const response = await request.get("/api/auth/session", {
     headers: { Cookie: `pacearr_session=${encodeURIComponent(cookie)}` },
   });
+  throwIfRateLimited(response);
   const session = await response.json() as { authenticated: boolean };
   if (!session.authenticated) {
     throw new Error("The SESSION_COOKIE value did not authenticate successfully.");

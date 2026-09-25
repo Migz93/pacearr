@@ -144,8 +144,12 @@ export class Logger {
       ...(safeMeta !== undefined ? { meta: safeMeta } : {}),
     };
 
-    this.ring.push(entry);
-    if (this.ring.length > LOG_RING_SIZE) this.ring.shift();
+    // Match Winston's level so suppressed entries can't push kept ones out of
+    // the in-memory fallback.
+    if (this.logger.isLevelEnabled(level)) {
+      this.ring.push(entry);
+      if (this.ring.length > LOG_RING_SIZE) this.ring.shift();
+    }
 
     // Winston's second argument is spread onto the top-level log object, not nested -
     // passing meta directly (rather than wrapped) would serialize it as top-level fields

@@ -22,16 +22,13 @@ import crypto from "node:crypto";
 import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
+import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
 import { PlexSessionMonitor, type PlexSessionMonitorStatus } from "./plex-session-monitor.js";
-
-function normalizeTitle(title: string) {
-  return title.toLowerCase().replace(/\(\d{4}\)/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-}
 
 function isRealSeasonEpisode(episode: SonarrEpisode) {
   return episode.seasonNumber > 0 && episode.episodeNumber > 0;
@@ -52,12 +49,37 @@ type SeriesMatchIndex = {
   byImdbId: Map<string, SonarrSeries | null>;
 };
 
+/** Where a viewer is in a show, from a watch event or from their stored progress. */
+type ViewerPosition = { userId: number; seasonNumber: number; episodeNumber: number; watchedAt: string };
 type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
 type SourceIdentityFailures = Map<"plex" | "tautulli", number>;
 const SOURCE_IDENTITY_LOOKUP_INTERVAL_MS = 1_000;
 const SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT = 3;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+
+/** The next season with real episodes in Sonarr, skipping gaps and ignoring specials. */
+function findNextRealSeason(realEpisodes: SonarrEpisode[], currentSeasonNumber: number): number | null {
+  return [...new Set(realEpisodes.map((episode) => episode.seasonNumber))]
+    .filter((seasonNumber) => seasonNumber > currentSeasonNumber)
+    .sort((a, b) => a - b)[0] ?? null;
+}
+
+/**
+ * Returns the season to expand when the watched episode is the last one Sonarr lists
+ * for its season. Unaired episodes Sonarr already knows about count, so a season still
+ * airing only triggers on its announced finale, never its latest aired episode.
+ */
+export function selectFinaleNextSeason(episodes: SonarrEpisode[], currentSeasonNumber: number, currentEpisodeNumber: number): number | null {
+  const realEpisodes = episodes.filter(isRealSeasonEpisode);
+  const currentSeasonEpisodes = realEpisodes.filter((episode) => episode.seasonNumber === currentSeasonNumber);
+  if (currentSeasonEpisodes.length === 0) return null;
+  const lastEpisodeNumber = Math.max(...currentSeasonEpisodes.map((episode) => episode.episodeNumber));
+  // An episode beyond Sonarr's last means stale Sonarr data or mismatched numbering,
+  // neither of which proves the season has ended.
+  if (currentEpisodeNumber !== lastEpisodeNumber) return null;
+  return findNextRealSeason(realEpisodes, currentSeasonNumber);
+}
 
 export function selectEarlyPrefetchEpisodes(
   episodes: SonarrEpisode[],
@@ -70,9 +92,7 @@ export function selectEarlyPrefetchEpisodes(
   const currentSeasonEpisodes = realEpisodes.filter((episode) => episode.seasonNumber === currentSeasonNumber);
   const episodesRemaining = currentSeasonEpisodes.filter((episode) => episode.episodeNumber > currentEpisodeNumber).length;
   if (episodesRemaining > triggerEpisodesRemaining) return { episodesRemaining, nextSeasonNumber: null, episodes: [] };
-  const nextSeasonNumber = [...new Set(realEpisodes.map((episode) => episode.seasonNumber))]
-    .filter((seasonNumber) => seasonNumber > currentSeasonNumber)
-    .sort((a, b) => a - b)[0] ?? null;
+  const nextSeasonNumber = findNextRealSeason(realEpisodes, currentSeasonNumber);
   if (nextSeasonNumber === null) return { episodesRemaining, nextSeasonNumber: null, episodes: [] };
   return {
     episodesRemaining,
@@ -82,6 +102,22 @@ export function selectEarlyPrefetchEpisodes(
       .filter((episode) => episode.seasonNumber === nextSeasonNumber && episode.episodeNumber > 1 && episode.episodeNumber <= episodeCount + 1)
       .sort((a, b) => a.episodeNumber - b.episodeNumber),
   };
+}
+
+/**
+ * A Sonarr episode file can represent more than one episode. Deletion must be
+ * decided per file, not per episode, so a retained pilot protects its shared file.
+ */
+export function selectEpisodeFilesToDelete(episodes: SonarrEpisode[], shouldDeleteEpisode: (episode: SonarrEpisode) => boolean): number[] {
+  const deletionCandidates = new Set<number>();
+  const protectedFiles = new Set<number>();
+  for (const episode of episodes) {
+    const fileId = episode.episodeFileId;
+    if (!episode.hasFile || !fileId || fileId <= 0) continue;
+    if (shouldDeleteEpisode(episode)) deletionCandidates.add(fileId);
+    else protectedFiles.add(fileId);
+  }
+  return [...deletionCandidates].filter((fileId) => !protectedFiles.has(fileId));
 }
 
 export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = []) {
@@ -115,9 +151,7 @@ export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpiso
     pilotSearches,
     seasonSearches,
     filesToDelete: deleteFiles
-      ? realEpisodes.filter((episode) =>
-          !targetMonitored(episode) && episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0
-        ).map((episode) => episode.episodeFileId!)
+      ? selectEpisodeFilesToDelete(episodes, (episode) => isRealSeasonEpisode(episode) && !targetMonitored(episode))
       : [],
   };
 }
@@ -281,19 +315,33 @@ export class PacearrServices {
     })));
     const storedUsers = this.db.upsertUsers(cachedUsers);
     this.logger.info("Plex users discovered", { users: storedUsers.length });
+    // Plex events imported before their viewer was discovered are stored without a
+    // user, and a later import ignores them as duplicates, so link them here.
+    // Plex's server-history endpoint reports the server owner as its local account
+    // ID (normally "1"), not the Plex.tv account ID used elsewhere. Both share one
+    // column, so an ID claimed by more than one user is left unlinked rather than
+    // guessed: a wrong link would drive another viewer's progress and cleanup.
+    // Expansion or prefetch implied by the refreshed progress is left to the next
+    // rolling reconcile, as for other history repairs.
+    const claims = new Map<string, Set<number>>();
+    const claim = (accountId: string, userId: number) => claims.set(accountId, (claims.get(accountId) ?? new Set()).add(userId));
+    for (const user of this.db.listUsers()) if (user.plexAccountId) claim(user.plexAccountId, user.id);
     const ownerUser = storedUsers.find((user) => user.plexUserId === owner.plexId);
-    if (ownerUser) {
-      // Plex's server-history endpoint reports the server owner as its local
-      // account ID (normally "1"), not the Plex.tv account ID used elsewhere.
-      const linkedEvents = this.db.linkUnassignedWatchEventsByPlexAccount(ownerUser.id, "1");
+    if (ownerUser) claim("1", ownerUser.id);
+    const linkedUserIds = new Set<number>();
+    for (const [accountId, userIds] of claims) {
+      if (userIds.size !== 1) {
+        this.logger.warn("Skipped linking Plex history for an account ID claimed by several users", { plexAccountId: accountId, userIds: [...userIds] });
+        continue;
+      }
+      const [userId] = userIds;
+      const linkedEvents = this.db.linkUnassignedWatchEventsByPlexAccount(userId!, accountId);
       if (linkedEvents > 0) {
-        for (const progress of this.db.listLatestWatchProgressForUser(ownerUser.id)) {
-          const rolling = this.db.getRollingShowBySeriesId(progress.sonarrSeriesId);
-          if (rolling) this.db.upsertRollingUserProgress(rolling.id, ownerUser.id, progress.seasonNumber, progress.episodeNumber, progress.watchedAt);
-        }
-        this.logger.info("Linked Plex owner history using server-local account ID", { userId: ownerUser.id, linkedEvents });
+        linkedUserIds.add(userId!);
+        this.logger.info("Linked Plex history imported before the user was discovered", { userId, plexAccountId: accountId, linkedEvents });
       }
     }
+    this.refreshRollingProgressForUsers(linkedUserIds);
     return storedUsers;
   }
 
@@ -419,7 +467,11 @@ export class PacearrServices {
     }
 
     const errors: string[] = [];
-    const repairHistoryAfterTriage = Boolean(this.db.getPlexSettings()?.serverUrl);
+    const tautulliSettings = this.db.getTautulliSettings();
+    const repairHistoryAfterTriage = Boolean(
+      this.db.getPlexSettings()?.serverUrl
+      || (tautulliSettings.enabled && tautulliSettings.baseUrl && tautulliSettings.apiKey)
+    );
     const automaticallyEnrolledSeriesIds = new Set<number>();
     for (const item of candidates) {
       const episodeCount = item.statistics?.totalEpisodeCount ?? item.statistics?.episodeCount ?? 0;
@@ -445,7 +497,7 @@ export class PacearrServices {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
             if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
-              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false });
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
               this.db.completeNewShowTriageEnrollment(item.id);
             } else {
               // A rolling row that Pacearr did not mark pending belongs to a manual
@@ -458,10 +510,10 @@ export class PacearrServices {
             // beginEnrollment creates the rolling-show row synchronously after its
             // series read. Mark only that established row as automatic before the
             // subsequent Sonarr mutations can partially fail.
-            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false });
+            const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
             try {
               this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
               this.db.completeNewShowTriageEnrollment(item.id);
             } catch (error) {
               // completeEnrollment releases in its finally block; this also releases
@@ -489,31 +541,42 @@ export class PacearrServices {
       }
     }
     if (repairHistoryAfterTriage && automaticallyEnrolledSeriesIds.size > 0) {
+      let historyReconciled = false;
       try {
-        await this.reconcileFullHistory({ reconcileActiveProgress: true });
-        for (const seriesId of automaticallyEnrolledSeriesIds) {
-          const rolling = this.db.getRollingShowBySeriesId(seriesId);
-          if (!rolling) continue;
-          const operation = this.acquireSeriesOperation(seriesId);
-          if (operation === null) {
-            this.logger.info("Skipped automatic history repair while another show operation is running", { rollingShowId: rolling.id, seriesId, title: rolling.title });
-            continue;
-          }
-          try {
-            this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
-            await this.applyActiveViewerPlan(seriesId, "auto-triage-history", false);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            errors.push(`${rolling.title} history repair: ${message}`);
-            this.logger.error("New Sonarr show triage history repair failed for show", { rollingShowId: rolling.id, seriesId, title: rolling.title, error: message });
-          } finally {
-            this.releaseSeriesOperation(seriesId, operation);
-          }
+        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
+        historyReconciled = result.ok;
+        if (!result.ok) {
+          const message = result.errors?.join("; ") || "history reconciliation completed with errors";
+          errors.push(`history repair: ${message}`);
+          this.logger.warn("New Sonarr show triage history reconciliation completed with errors; preserving files", { enrolledShows: automaticallyEnrolledSeriesIds.size, errors: result.errors?.length ?? 0 });
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`history repair: ${message}`);
         this.logger.error("New Sonarr show triage history repair failed", { enrolledShows: automaticallyEnrolledSeriesIds.size, error: message });
+      }
+      for (const seriesId of automaticallyEnrolledSeriesIds) {
+        const rolling = this.db.getRollingShowBySeriesId(seriesId);
+        if (!rolling) continue;
+        const operation = this.acquireSeriesOperation(seriesId);
+        if (operation === null) {
+          this.logger.info("Skipped automatic history repair while another show operation is running", { rollingShowId: rolling.id, seriesId, title: rolling.title });
+          continue;
+        }
+        try {
+          this.seedRollingProgressFromWatchHistory(seriesId, rolling.id);
+          // Positions first, so the pass that deletes files keeps what they expanded
+          // or prefetched, as the rolling reconcile does.
+          await this.applyActiveViewerPositions(rolling, "auto-triage-history");
+          const current = this.db.getRollingShow(rolling.id) ?? rolling;
+          await this.applyMonitoringPlan(seriesId, "auto-triage-history", this.getCleanupRetention(current).retainedSeasons, false, [], historyReconciled ? undefined : false);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          errors.push(`${rolling.title} history repair: ${message}`);
+          this.logger.error("New Sonarr show triage history repair failed for show", { rollingShowId: rolling.id, seriesId, title: rolling.title, error: message });
+        } finally {
+          this.releaseSeriesOperation(seriesId, operation);
+        }
       }
     }
     if (errors.length > 0) {
@@ -800,7 +863,7 @@ export class PacearrServices {
     this.logger.info("Recommendation restored", { seriesId });
   }
 
-  async beginEnrollment(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean }) {
+  async beginEnrollment(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }) {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
@@ -818,30 +881,68 @@ export class PacearrServices {
     }
   }
 
-  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
     try {
       let changed = 0;
-      if (options.importHistory) {
-        const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
-        changed += result.changed ?? 0;
-      }
+      // Routine history imports already keep stored viewer progress current. Apply the
+      // pilot baseline from that state first so manual enrollment does not wait for a
+      // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
       if (options.applyBaseline) {
-        changed += await this.applyActiveViewerPlan(series.id, "enroll");
+        // Never deletes files: the history read may reveal an active season missing
+        // from the local progress cache, and viewer positions below may expand or
+        // prefetch a season this pass does not retain.
+        changed += await this.applyActiveViewerPlan(series.id, "enroll", true, false);
       }
-      await this.syncPlexArtwork(series, rolling, this.getActiveRetainedSeasons(rolling.id));
+      let historyReconciled = !options.importHistory;
+      if (options.importHistory) {
+        try {
+          const result = await this.reconcileFullHistory({ reconcileActiveProgress: true });
+          changed += result.changed ?? 0;
+          historyReconciled = result.ok;
+          if (!result.ok) {
+            this.logger.warn("Full history reconciliation completed with errors during enrollment; preserving files", { seriesId: series.id, title: rolling.title, errors: result.errors?.length ?? 0 });
+          }
+        } catch (error) {
+          // The immediate baseline is the primary enrollment operation. A failed
+          // corrective history read must not prevent us from applying whatever
+          // current progress is already available below.
+          const message = error instanceof Error ? error.message : String(error);
+          this.db.addHistory("warn", "history.full_reconcile", "Full history reconciliation", { reason: "enrollment", seriesId: series.id, error: message });
+          this.logger.warn("Full history reconciliation failed during enrollment; applying available viewer progress", { seriesId: series.id, title: rolling.title, error: message });
+        }
+        // This enrollment owns the series operation lock, so the reconciliation
+        // deliberately skips it. Re-seed it here after the full read.
+        this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
+      }
+      // The full read above skips this locked series, so its viewers' positions are
+      // applied here, as any other job would apply them. They run before the pass
+      // that deletes files, so it keeps what they expanded or prefetched, as the
+      // rolling reconcile does.
+      changed += await this.applyActiveViewerPositions(rolling, "enroll");
+      let current = this.db.getRollingShow(rolling.id) ?? rolling;
+      // Auto-triage runs this pass itself, after its batch history repair.
+      if (options.applyBaseline && (options.importHistory || !options.deferFileDeletion)) {
+        // Pilots were already searched by the baseline, so only search a newly
+        // required season.
+        const { retainedSeasons } = this.getCleanupRetention(current);
+        const deleteFiles = historyReconciled && !options.deferFileDeletion ? undefined : false;
+        changed += await this.applyMonitoringPlan(series.id, options.importHistory ? "enroll-history" : "enroll-cleanup", retainedSeasons, false, [], deleteFiles);
+        current = this.db.getRollingShow(rolling.id) ?? current;
+      }
+      await this.syncPlexArtwork(series, current, [...new Set([...current.expandedSeasons, ...this.getActiveRetainedSeasons(rolling.id)])]);
       return { ok: true, message: `Enrolled ${rolling.title}.`, changed };
     } finally {
       this.releaseSeriesOperation(series.id, operation);
     }
   }
 
-  async enrollShow(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+  async enrollShow(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
     const { series, rolling, operation } = await this.beginEnrollment(seriesId, options);
     return this.completeEnrollment(series, rolling, operation, options);
   }
 
-  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean }): Promise<RunResult> {
+  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
@@ -999,12 +1100,12 @@ export class PacearrServices {
     return { retainedSeasons: [...retained].sort((a, b) => a - b), eligibleForCleanup };
   }
 
-  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true): Promise<number> {
+  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true, deleteFiles?: boolean): Promise<number> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots);
+    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots, [], deleteFiles);
   }
 
-  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = []): Promise<number> {
+  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = [], deleteFiles?: boolean): Promise<number> {
     const settings = this.db.getAppSettings();
     const sonarr = this.getSonarr(settings.dryRun);
     const series = await sonarr.getSeriesById(seriesId);
@@ -1014,8 +1115,9 @@ export class PacearrServices {
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
       .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
     const prefetchedIds = new Set(prefetchedEpisodeIds);
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, settings.cleanupDeletesFiles, prefetchedEpisodeIds);
-    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
+    const fileDeletionEnabled = deleteFiles ?? settings.cleanupDeletesFiles;
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds);
+    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
       await sonarr.updateSeriesMonitoring(seriesId, { monitored: true, monitorNewItems: "none" });
@@ -1316,17 +1418,18 @@ export class PacearrServices {
     });
   }
 
-  private async prefetchNextSeason(input: NormalizedWatchEventInput & { sonarrSeriesId: number; userId: number }, rollingShowId: number, episodeCache?: EpisodeCache): Promise<boolean> {
+  private async prefetchNextSeason(rollingShowId: number, position: ViewerPosition, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<boolean> {
     const settings = this.db.getAppSettings();
-    if (!settings.earlyPrefetchEnabled || input.seasonNumber <= 0 || input.episodeNumber <= 0) return false;
+    if (!settings.earlyPrefetchEnabled || position.seasonNumber <= 0 || position.episodeNumber <= 0) return false;
+    const rolling = this.db.getRollingShow(rollingShowId);
+    if (!rolling) return false;
 
     const sonarr = this.getSonarr();
-    const episodes = (await this.getCachedEpisodes(input.sonarrSeriesId, episodeCache)).filter(isRealSeasonEpisode);
-    const selection = selectEarlyPrefetchEpisodes(episodes, input.seasonNumber, input.episodeNumber, settings.earlyPrefetchTriggerEpisodesRemaining, settings.earlyPrefetchEpisodeCount);
+    const episodes = (await this.getCachedEpisodes(rolling.sonarrSeriesId, episodeCache)).filter(isRealSeasonEpisode);
+    const selection = selectEarlyPrefetchEpisodes(episodes, position.seasonNumber, position.episodeNumber, settings.earlyPrefetchTriggerEpisodesRemaining, settings.earlyPrefetchEpisodeCount);
     const { episodesRemaining, nextSeasonNumber } = selection;
     if (nextSeasonNumber === null) return false;
-    const rolling = this.db.getRollingShow(rollingShowId);
-    if (!rolling || rolling.expandedSeasons.includes(nextSeasonNumber)) return false;
+    if (rolling.expandedSeasons.includes(nextSeasonNumber) || dryRunExpandedSeasons?.has(`${rollingShowId}:${nextSeasonNumber}`)) return false;
 
     const alreadyPrefetched = new Set(this.db.listPrefetchedEpisodes(rollingShowId)
       .filter((episode) => episode.seasonNumber === nextSeasonNumber)
@@ -1341,27 +1444,28 @@ export class PacearrServices {
       if (updates.length > 0) await sonarr.updateEpisodesMonitoring(updates);
       await sonarr.searchEpisodes(candidates.filter((episode) => !episode.hasFile).map((episode) => episode.id));
     } finally {
-      if (updates.length > 0) episodeCache?.delete(input.sonarrSeriesId);
+      if (updates.length > 0) episodeCache?.delete(rolling.sonarrSeriesId);
     }
 
     const dryRun = this.isDryRun();
-    if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, input.userId, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), input.watchedAt);
+    if (!dryRun) this.db.recordPrefetchedEpisodes(rollingShowId, position.userId, nextSeasonNumber, candidates.map((episode) => episode.episodeNumber), position.watchedAt);
     this.db.addHistory("info", dryRun ? "dry_run.sonarr.early_prefetch" : "sonarr.early_prefetch", rolling.title, {
-      source: input.source,
-      userId: input.userId,
-      triggerSeasonNumber: input.seasonNumber,
-      triggerEpisodeNumber: input.episodeNumber,
+      source,
+      userId: position.userId,
+      triggerSeasonNumber: position.seasonNumber,
+      triggerEpisodeNumber: position.episodeNumber,
       episodesRemaining,
       nextSeasonNumber,
       prefetchedEpisodes: candidates.map((episode) => episode.episodeNumber),
       dryRun,
     });
     this.logger.info("Next season episodes prefetched from watch activity", {
-      seriesId: input.sonarrSeriesId,
+      seriesId: rolling.sonarrSeriesId,
       title: rolling.title,
-      userId: input.userId,
-      triggerSeasonNumber: input.seasonNumber,
-      triggerEpisodeNumber: input.episodeNumber,
+      userId: position.userId,
+      source,
+      triggerSeasonNumber: position.seasonNumber,
+      triggerEpisodeNumber: position.episodeNumber,
       nextSeasonNumber,
       prefetchedEpisodes: candidates.map((episode) => episode.episodeNumber),
       dryRun,
@@ -1369,11 +1473,90 @@ export class PacearrServices {
     return true;
   }
 
+  /**
+   * Independent of early prefetch: reaching a season's last episode expands the whole
+   * next season, exactly as watching that season's E01 would.
+   */
+  private async expandNextSeasonOnFinale(rollingShowId: number, position: ViewerPosition, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<boolean> {
+    const settings = this.db.getAppSettings();
+    if (!settings.expandNextSeasonOnFinaleEnabled || position.seasonNumber <= 0 || position.episodeNumber <= 0) return false;
+    const rolling = this.db.getRollingShow(rollingShowId);
+    if (!rolling) return false;
+    const episodes = await this.getCachedEpisodes(rolling.sonarrSeriesId, episodeCache);
+    const nextSeasonNumber = selectFinaleNextSeason(episodes, position.seasonNumber, position.episodeNumber);
+    if (nextSeasonNumber === null) return false;
+    const expansionKey = `${rollingShowId}:${nextSeasonNumber}`;
+    if (rolling.expandedSeasons.includes(nextSeasonNumber) || dryRunExpandedSeasons?.has(expansionKey)) return false;
+    this.logger.info("Season finale watched; expanding next season", {
+      seriesId: rolling.sonarrSeriesId,
+      title: rolling.title,
+      userId: position.userId,
+      source,
+      triggerSeasonNumber: position.seasonNumber,
+      triggerEpisodeNumber: position.episodeNumber,
+      nextSeasonNumber,
+    });
+    const expanded = await this.expandSeason(rolling.sonarrSeriesId, nextSeasonNumber, position.watchedAt, `${source}-finale`, episodeCache);
+    if (expanded && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
+    return expanded;
+  }
+
+  /**
+   * Every rolling action a viewer's position implies: expanding the season they are in,
+   * then either expanding the next season from its finale or prefetching its opening
+   * episodes. Watch events and the catch-up sweeps both call this, so an action never
+   * depends on which job noticed the watch. Each step is idempotent.
+   */
+  private async applyViewerPositionActions(rollingShowId: number, position: ViewerPosition, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<boolean> {
+    const rolling = this.db.getRollingShow(rollingShowId);
+    if (!rolling || position.seasonNumber <= 0) return false;
+    let changed = false;
+    const expansionKey = `${rollingShowId}:${position.seasonNumber}`;
+    if (!rolling.expandedSeasons.includes(position.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
+      if (await this.expandSeason(rolling.sonarrSeriesId, position.seasonNumber, position.watchedAt, source, episodeCache)) {
+        if (this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
+        changed = true;
+      }
+    }
+    // Runs after the current season's own expansion so a one-episode season, whose
+    // E01 is also its finale, still expands the next one. A full expansion
+    // supersedes prefetching a few of its episodes.
+    if (await this.expandNextSeasonOnFinale(rollingShowId, position, source, episodeCache, dryRunExpandedSeasons)) changed = true;
+    else if (await this.prefetchNextSeason(rollingShowId, position, source, episodeCache, dryRunExpandedSeasons)) changed = true;
+    return changed;
+  }
+
+  /**
+   * Catch-up: applies each active viewer's current position. A watch stored before a
+   * setting was enabled, in dry run, or while the series was locked is never
+   * reprocessed as an event, so sweeps act on stored progress instead.
+   */
+  private async applyActiveViewerPositions(rolling: RollingShowRecord, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons: Set<string> = new Set()): Promise<number> {
+    const settings = this.db.getAppSettings();
+    const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
+    // Dry run never persists an expansion, so the set is what stops a second viewer in
+    // the same season from recording it again within this sweep.
+    // Newest first, so a season expanded here is dated by its most recent viewer.
+    const activeProgress = this.getActiveProgress(rolling.id, cutoff)
+      .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt));
+    let changed = 0;
+    for (const progress of activeProgress) {
+      const position = { userId: progress.userId, seasonNumber: progress.lastWatchedSeason, episodeNumber: progress.lastWatchedEpisode, watchedAt: progress.lastWatchedAt };
+      if (await this.applyViewerPositionActions(rolling.id, position, source, episodeCache, dryRunExpandedSeasons)) changed++;
+    }
+    return changed;
+  }
+
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     const retryKey = `${input.source}:${input.sourceEventId}`;
     let repaired = false;
     if (!stored.inserted) {
+      // Live polls see an ongoing playback on every run, so a duplicate is normal there;
+      // logged so a collision between two real playbacks is visible rather than silent.
+      if (input.source === "plex-session" || input.source === "tautulli-session") {
+        this.logger.debug("Live watch event already stored; treating as the same playback", { source: input.source, sourceEventId: input.sourceEventId, showTitle: input.showTitle, seasonNumber: input.seasonNumber, episodeNumber: input.episodeNumber });
+      }
       if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
         repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
@@ -1407,23 +1590,17 @@ export class PacearrServices {
     }
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
-      const expansionKey = `${rolling.id}:${input.seasonNumber}`;
-      let changed: boolean;
-      if (input.seasonNumber > 0 && !rolling.expandedSeasons.includes(input.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
-        changed = await this.expandSeason(input.sonarrSeriesId, input.seasonNumber, input.watchedAt, sourceLabel, episodeCache);
-        if (changed && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
-      } else changed = await this.prefetchNextSeason({ ...input, sonarrSeriesId: input.sonarrSeriesId, userId: input.userId }, rolling.id, episodeCache);
+      const position = { userId: user.id, seasonNumber: input.seasonNumber, episodeNumber: input.episodeNumber, watchedAt: input.watchedAt };
+      const changed = await this.applyViewerPositionActions(rolling.id, position, sourceLabel, episodeCache, dryRunExpandedSeasons);
       this.pendingRollingRetries.delete(retryKey);
       return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
-  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number): Promise<{ changed: number; reclaimedBytes: number }> {
-    const sonarr = this.getSonarr();
+  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number, sonarr: SonarrIntegration, seriesEpisodes: SonarrEpisode[], filesToDelete: number[]): Promise<{ changed: number; reclaimedBytes: number }> {
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return { changed: 0, reclaimedBytes: 0 };
-    const settings = this.db.getAppSettings();
-    const episodes = (await sonarr.getEpisodes(seriesId)).filter((episode) => episode.seasonNumber === seasonNumber);
+    const episodes = seriesEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
     const pilot = episodes.find((episode) => episode.episodeNumber === 1);
     const nonPilots = episodes.filter((episode) => episode.episodeNumber > 1);
     const updates = [
@@ -1434,9 +1611,6 @@ export class PacearrServices {
     // Disabling the season unmonitors all child episodes in Sonarr. Restore
     // the pilot only after that season-level update.
     await sonarr.updateEpisodesMonitoring(updates);
-    const filesToDelete = settings.cleanupDeletesFiles
-      ? nonPilots.filter((episode) => episode.hasFile && episode.episodeFileId && episode.episodeFileId > 0).map((episode) => episode.episodeFileId!)
-      : [];
     const reclaimedBytes = await this.deleteEpisodeFilesAndRecord({
       sonarr,
       seriesId,
@@ -1458,8 +1632,40 @@ export class PacearrServices {
     if (!rolling) return;
     const { eligibleForCleanup } = this.getCleanupRetention(rolling, observedAt);
     if (!settings.progressiveCleanupEnabled) return;
-    for (const season of eligibleForCleanup.filter((season) => season < currentSeason)) {
-      const result = await this.cleanupSeasonToPilot(rolling.sonarrSeriesId, rolling.id, season);
+    const cleanupSeasons = eligibleForCleanup.filter((season) => season < currentSeason);
+    if (cleanupSeasons.length === 0) return;
+
+    const sonarr = this.getSonarr();
+    const seriesEpisodes = await sonarr.getEpisodes(rolling.sonarrSeriesId);
+    const cleanupSeasonSet = new Set(cleanupSeasons);
+    // Select once for the complete cleanup batch. A multipart file shared only
+    // by non-pilots in two eligible seasons must be deleted, not protected by
+    // whichever season happens to be processed second.
+    const filesToDelete = settings.cleanupDeletesFiles
+      ? selectEpisodeFilesToDelete(seriesEpisodes, (episode) =>
+          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1
+        )
+      : [];
+    const filesToDeleteBySeason = new Map<number, number[]>();
+    for (const fileId of filesToDelete) {
+      const ownerSeason = seriesEpisodes
+        .filter((episode) => episode.episodeFileId === fileId && cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1)
+        .map((episode) => episode.seasonNumber)
+        .sort((a, b) => a - b)[0];
+      if (ownerSeason === undefined) continue;
+      const fileIds = filesToDeleteBySeason.get(ownerSeason) ?? [];
+      fileIds.push(fileId);
+      filesToDeleteBySeason.set(ownerSeason, fileIds);
+    }
+    for (const season of cleanupSeasons) {
+      const result = await this.cleanupSeasonToPilot(
+        rolling.sonarrSeriesId,
+        rolling.id,
+        season,
+        sonarr,
+        seriesEpisodes,
+        filesToDeleteBySeason.get(season) ?? [],
+      );
       this.db.addHistory("info", "cleanup.progressive", rolling.title, { seasonNumber: season, reason: "inactive-delay-elapsed", ...result });
     }
   }
@@ -1502,6 +1708,12 @@ export class PacearrServices {
     const overlap = 5 * 60 * 1000;
     const syncState = this.db.getHistorySyncState();
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
+    // A cursor from a different server says nothing about this one's history, so a
+    // changed connection reads its history in full before resuming incrementally.
+    // Migration 23 stamped cursors saved before connections were recorded, so an
+    // unknown connection is treated as a different server.
+    const resumeFrom = (state: { backfillComplete: boolean; cursor: string | null; connection?: string }, connection: string) =>
+      state.backfillComplete && state.connection === connection ? withOverlap(state.cursor) : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const episodeCache: EpisodeCache = new Map();
     const dryRunExpandedSeasons = new Set<string>();
@@ -1511,7 +1723,8 @@ export class PacearrServices {
       if (!plexSettings) throw new Error("Plex is not configured.");
       const plex = new PlexIntegration(plexSettings, this.logger);
       const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
-      const plexEvents = await plex.getPlaybackHistory(full ? undefined : syncState.plex.backfillComplete ? withOverlap(syncState.plex.cursor) : undefined);
+      const plexConnection = plexHistoryConnection(plexSettings);
+      const plexEvents = await plex.getPlaybackHistory(full ? undefined : resumeFrom(syncState.plex, plexConnection));
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
@@ -1552,7 +1765,7 @@ export class PacearrServices {
         if (result.changed) changed++;
       }
       if (!full) {
-        syncState.plex = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("plex-history") };
+        syncState.plex = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("plex-history"), connection: plexConnection };
         this.db.saveHistorySyncState(syncState);
       }
     } catch (error) {
@@ -1566,7 +1779,8 @@ export class PacearrServices {
       try {
         const tautulli = new TautulliIntegration(tautulliSettings, this.logger);
         const tautulliIdentityScope = this.sourceIdentityScope("tautulli", tautulliSettings.baseUrl, tautulliSettings.apiKey);
-        const tautulliEvents = await tautulli.getHistory(full ? undefined : syncState.tautulli.backfillComplete ? withOverlap(syncState.tautulli.cursor) : undefined);
+        const tautulliConnection = tautulliHistoryConnection(tautulliSettings);
+        const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliConnection));
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         const findTautulliUser = this.db.createTautulliUserResolver();
@@ -1629,7 +1843,7 @@ export class PacearrServices {
         // previously-orphaned Plex owner history.
         this.refreshRollingProgressForUsers(repairedUserIds);
         if (!full) {
-          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli") };
+          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli"), connection: tautulliConnection };
           this.db.saveHistorySyncState(syncState);
         }
       } catch (error) {
@@ -1646,18 +1860,7 @@ export class PacearrServices {
       const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
       if (operation === null) continue;
       try {
-        const retainedSeasons = this.getActiveRetainedSeasons(rolling.id);
-        for (const seasonNumber of retainedSeasons.filter((season) => !rolling.expandedSeasons.includes(season))) {
-          const expansionKey = `${rolling.id}:${seasonNumber}`;
-          if (this.isDryRun() && dryRunExpandedSeasons.has(expansionKey)) continue;
-          const progress = this.db.listProgressForShow(rolling.id)
-            .filter((item) => item.lastWatchedSeason === seasonNumber)
-            .sort((a, b) => b.lastWatchedAt.localeCompare(a.lastWatchedAt))[0];
-          if (await this.expandSeason(rolling.sonarrSeriesId, seasonNumber, progress?.lastWatchedAt ?? new Date().toISOString(), "active-progress-reconcile", episodeCache)) {
-            if (this.isDryRun()) dryRunExpandedSeasons.add(expansionKey);
-            changed++;
-          }
-        }
+        changed += await this.applyActiveViewerPositions(rolling, "active-progress-reconcile", episodeCache, dryRunExpandedSeasons);
       } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
     }
 
@@ -1707,7 +1910,7 @@ export class PacearrServices {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
       const result = await this.processWatchEvent({
         source: "plex-session",
-        sourceEventId: `${event.sourceEventId}:${event.seasonNumber}:${event.episodeNumber}`,
+        sourceEventId: event.sourceEventId,
         userId: user?.id ?? null,
         plexAccountId: event.plexAccountId,
         username: event.username,
@@ -1814,6 +2017,7 @@ export class PacearrServices {
     this.logger.info("Rolling monitoring reconciliation started", { viewerActivityWindowDays: settings.viewerActivityWindowDays });
     let changed = 0;
     const errors: string[] = [];
+    const episodeCache: EpisodeCache = new Map();
     for (const show of this.db.listRollingShows()) {
       const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
       if (operation === null) {
@@ -1828,8 +2032,12 @@ export class PacearrServices {
         // Refresh persisted progress before planning so historical data fixes
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
-        const { retainedSeasons, eligibleForCleanup } = this.getCleanupRetention(show);
-        const stalePrefetchedSeasons = this.getStalePrefetchedSeasons(show);
+        const positionChanges = await this.applyActiveViewerPositions(show, "active-progress-reconcile", episodeCache);
+        changed += positionChanges;
+        // Retention and stale-prefetch checks must see what this sweep just expanded or prefetched.
+        const current = positionChanges > 0 ? this.db.getRollingShow(show.id) ?? show : show;
+        const { retainedSeasons, eligibleForCleanup } = this.getCleanupRetention(current);
+        const stalePrefetchedSeasons = this.getStalePrefetchedSeasons(current);
         if (stalePrefetchedSeasons.length > 0) {
           if (!settings.dryRun) {
             for (const seasonNumber of stalePrefetchedSeasons) this.db.clearPrefetchedEpisodesForSeason(show.id, seasonNumber);

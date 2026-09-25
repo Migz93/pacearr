@@ -6,7 +6,6 @@ import test from "node:test";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import { ImageCacheService } from "../../src/server/image-cache.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
-import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
 import type { Logger } from "../../src/server/logger.js";
 import { PacearrServices } from "../../src/server/services.js";
 import type { SonarrEpisode, SonarrSeries } from "../../src/shared/types.js";
@@ -37,7 +36,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
     { id: 314, seriesId: 31, seasonNumber: 3, episodeNumber: 2, monitored: false, hasFile: false },
   ];
   const requests: Array<{ method: string; pathname: string; body?: string }> = [];
-  let sessionKey = "session-2";
+  let sessionId = "session-2";
   let seasonNumber = 2;
   let ratingKey = "101";
   let activityUserId = "tautulli-gina";
@@ -53,8 +52,8 @@ test("an active Tautulli session retries expansion after a series-operation coll
     if (url.hostname === "tautulli") {
       const command = url.searchParams.get("cmd");
       if (command === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
-        media_type: "episode", session_key: sessionKey, user_id: activityUserId, username: activityUsername, user: "Gina",
-        grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: ratingKey, parent_media_index: seasonNumber, media_index: 2, started: 1700000000,
+        media_type: "episode", session_key: "7", session_id: sessionId, user_id: activityUserId, username: activityUsername, user: "Gina",
+        grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: ratingKey, parent_media_index: seasonNumber, media_index: 2,
       }] } } }), { status: 200, headers: { "content-type": "application/json" } });
       if (command === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: ["tvdb://81189"] } } }), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -97,7 +96,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
     // A poll can repair both links at once. In dry-run mode, the repair must
     // not replay prefetch work after the series repair already completed it.
     db.updateAppSettings({ dryRun: true, earlyPrefetchEnabled: true });
-    sessionKey = "session-combined";
+    sessionId = "session-combined";
     ratingKey = "102";
     activityUserId = "tautulli-ivy";
     activityUsername = "not-yet-mapped";
@@ -115,13 +114,13 @@ test("an active Tautulli session retries expansion after a series-operation coll
 
     // An active event can arrive before its Tautulli identity is mapped. A later poll
     // repairs that row in place; it is a real job change, even though it is a duplicate.
-    sessionKey = "session-3";
+    sessionId = "session-3";
     seasonNumber = 3;
     ratingKey = "103";
     activityUserId = "tautulli-gina";
     activityUsername = "gina";
     db.insertWatchEvent({
-      source: "tautulli-session", sourceEventId: "activity:session-3:103:1700000000", userId: null,
+      source: "tautulli-session", sourceEventId: "session:session-3:103", userId: null,
       plexAccountId: null, username: "gina", sonarrSeriesId: 31, showTitle: "The Wire",
       seasonNumber: 3, episodeNumber: 2, watchedAt: "2023-11-14T22:13:20.000Z", rawPayload: {},
     });
@@ -135,21 +134,31 @@ test("an active Tautulli session retries expansion after a series-operation coll
   }
 });
 
-test("a reused Tautulli session key with a later start is a new playback event", async () => {
+test("a reused Tautulli session key is a new playback event, while repeated polls of one playback are not", async () => {
+  const { db, services, cleanup } = createHarness();
   const originalFetch = globalThis.fetch;
-  let started = 1700000000;
-  globalThis.fetch = (async () => new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
-    media_type: "episode", session_key: "reused-key", user_id: "1", grandparent_title: "The Wire", rating_key: "101",
-    parent_media_index: 1, media_index: 1, started,
-  }] } } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  let sessionId = "first-playback";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
+      media_type: "episode", session_key: "39", session_id: sessionId, user_id: "1", grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: "101",
+      parent_media_index: 1, media_index: 10,
+    }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: [] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.pathname === "/api/v3/series") return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    throw new Error(`Unhandled fetch: ${url}`);
+  }) as typeof fetch;
   try {
-    const { db, cleanup } = createHarness();
-    try {
-      const integration = new TautulliIntegration(db.getTautulliSettings(), silentLogger());
-      const first = await integration.getActiveSessions();
-      started += 3600;
-      const second = await integration.getActiveSessions();
-      assert.notEqual(first[0]!.referenceId, second[0]!.referenceId);
-    } finally { cleanup(); }
-  } finally { globalThis.fetch = originalFetch; }
+    await services.checkTautulliActiveSessions();
+    await services.checkTautulliActiveSessions();
+    assert.equal(db.countWatchEvents(), 1);
+    // Plex restarted and handed the same session key to a new playback of the same episode.
+    sessionId = "second-playback";
+    await services.checkTautulliActiveSessions();
+    await services.checkTautulliActiveSessions();
+    assert.equal(db.countWatchEvents(), 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
 });

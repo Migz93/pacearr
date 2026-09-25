@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
-import { rateLimit } from "express-rate-limit";
 import type { AppSettings, JobInfo, LogEntry, PlexConfigPayload, PlexConnectionOption, SessionUser, UserRecord } from "../shared/types.js";
 import { isHistoryCategory } from "../shared/history.js";
 import { createSessionId, isValidSignature, signedValue } from "./auth.js";
@@ -15,6 +14,7 @@ import { TautulliIntegration } from "./integrations/tautulli.js";
 import { ImageCacheService } from "./image-cache.js";
 import { JobScheduler } from "./job-scheduler.js";
 import { Logger } from "./logger.js";
+import { createGlobalRateLimiter, createSignInRateLimiter } from "./rate-limit.js";
 import { normaliseScheduleIntervalDays, normaliseScheduleIntervalHours, normaliseScheduleIntervalMinutes, parseScheduleIntervalMinutes, scheduleIntervalValueInUnit } from "./schedule-interval.js";
 import { PacearrServices } from "./services.js";
 import { APP_VERSION, BUILD_CHANNEL, BUILD_COMMIT } from "./version.js";
@@ -226,23 +226,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
     hsts: false,
   }));
-  app.use(rateLimit({
-    windowMs: 60_000,
-    limit: 600,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    skip: (req) => req.path.startsWith("/images/") || req.path.startsWith("/assets/") || req.path === "/favicon.ico",
-  }));
-  app.use("/api/auth/plex", rateLimit({
-    windowMs: 15 * 60_000,
-    limit: 10,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    handler: (_req, res) => {
-      logger.warn("Plex login rate limit exceeded");
-      res.status(429).json({ error: "Too many sign-in attempts. Please try again later." });
-    },
-  }));
+  // Applies to every route. Built assets, cached images and the favicon are
+  // exempt from the count (see rate-limit.ts); /images still requires a session.
+  app.use(createGlobalRateLimiter(logger));
   app.use(express.json({ limit: "2mb" }));
 
   app.use((req, _res, next) => {
@@ -283,7 +269,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ authenticated: Boolean(req.sessionUser), user: req.sessionUser ?? null });
   });
 
-  app.post("/api/auth/plex", asyncRoute(async (req, res) => {
+  app.post("/api/auth/plex", createSignInRateLimiter(logger), asyncRoute(async (req, res) => {
     const token = requiredString((req.body as { authToken?: string }).authToken, "authToken");
     const account = await PlexIntegration.fetchAccountByToken(token);
     const existingOwner = db.getPlexOwner();
@@ -366,9 +352,24 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.savePlexSettings(settings);
     services.invalidateSourceIdentityScope("plex");
-    if (previousSettings?.serverUrl !== settings.serverUrl || previousSettings?.token !== settings.token) services.restartPlexSessionMonitor();
+    const connectionChanged = previousSettings?.serverUrl !== settings.serverUrl
+      || previousSettings?.token !== settings.token
+      || previousSettings?.machineIdentifier !== settings.machineIdentifier;
+    if (connectionChanged) services.restartPlexSessionMonitor();
     logger.info("Plex settings saved", { serverUrl: settings.serverUrl, machineIdentifier: settings.machineIdentifier || null });
-    await services.discoverPlexUsers();
+    try {
+      await services.discoverPlexUsers();
+    } finally {
+      // Setup can be complete from this save. Resuming only once discovery settles
+      // lets a history-import catch-up attribute events to known users directly;
+      // discovery only re-links orphans whose account ID is unambiguous. A failed
+      // discovery still cannot leave waiting jobs without a timer.
+      scheduler?.resumeAfterSetup();
+    }
+    // A new server's history would otherwise wait for the next scheduled import.
+    // Queued only after discovery succeeds, for the same reason. Before setup
+    // completes, the run waits for it.
+    if (connectionChanged) scheduler?.runNowOrQueue("history-import");
     res.json({ ok: true, plex: db.getPlexSettingsView(), users: await services.listUsers() });
   }));
 
@@ -394,6 +395,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     db.saveSonarrSettings(settings);
     logger.info("Sonarr settings saved", { baseUrl: settings.baseUrl });
+    scheduler?.resumeAfterSetup();
     // An active refresh may still be using the old connection; retain one follow-up so
     // the saved credentials always produce a current library snapshot.
     scheduler?.runNowOrQueue("sonarr-library-refresh");
@@ -419,9 +421,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       apiKey: typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : existing.apiKey,
     };
     db.saveTautulliSettings(tautulliSettings);
-    scheduler?.updateJob("tautulli-session-check", { enabled: tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
+    const usable = tautulliSettings.enabled && Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey);
+    const wasUsable = existing.enabled && Boolean(existing.baseUrl && existing.apiKey);
+    scheduler?.updateJob("tautulli-session-check", { enabled: usable });
     services.invalidateSourceIdentityScope("tautulli");
     logger.info("Tautulli settings saved", { enabled: tautulliSettings.enabled, configured: Boolean(tautulliSettings.baseUrl && tautulliSettings.apiKey) });
+    // Import a newly usable or changed Tautulli's history now rather than at the
+    // next scheduled import.
+    if (usable && (!wasUsable || existing.baseUrl !== tautulliSettings.baseUrl || existing.apiKey !== tautulliSettings.apiKey)) {
+      scheduler?.runNowOrQueue("history-import");
+    }
     res.json({ ok: true, tautulli: db.getTautulliSettingsView() });
   });
 
@@ -484,6 +493,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       const count = Number(body.earlyPrefetchEpisodeCount);
       patch.earlyPrefetchEpisodeCount = Math.max(1, Math.floor(Number.isFinite(count) ? count : DEFAULT_APP_SETTINGS.earlyPrefetchEpisodeCount));
     }
+    if (body.expandNextSeasonOnFinaleEnabled !== undefined) {
+      if (typeof body.expandNextSeasonOnFinaleEnabled !== "boolean") {
+        res.status(400).json({ error: "expandNextSeasonOnFinaleEnabled must be a boolean." });
+        return;
+      }
+      patch.expandNextSeasonOnFinaleEnabled = body.expandNextSeasonOnFinaleEnabled;
+    }
     const previousSettings = db.getAppSettings();
     if (body.newShowTriageEnabled !== undefined) {
       if (typeof body.newShowTriageEnabled !== "boolean") {
@@ -541,12 +557,6 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     });
   });
 
-  app.use("/api/settings/logs", rateLimit({
-    windowMs: 60_000,
-    limit: 60,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-  }));
   app.get("/api/settings/logs", requireAuth, (req, res) => {
     const rawPage = Number(req.query.page ?? 1);
     const rawPageSize = Number(req.query.pageSize ?? 25);
@@ -832,7 +842,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.get("/api/health", (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
   const clientDir = path.resolve(process.cwd(), "dist/client");
-  app.use("/images", express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
+  app.use("/images", requireAuth, express.static(imageCache.publicDir, { maxAge: "30d", immutable: true }));
   app.use("/images", (_req, res) => res.sendStatus(404));
   // Vite content-hashes every filename under /assets, so a build's output never collides
   // with a previous one — safe to cache for as long as a browser will keep it. Everything

@@ -83,8 +83,8 @@ jobs:
           timeout: 10m
 
       - name: Upload AMD64 Trivy results to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        if: always() && hashFiles('trivy-results-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: trivy-results-amd64.sarif
           category: trivy-linux-amd64
@@ -106,8 +106,8 @@ jobs:
           skip-setup-trivy: true
 
       - name: Upload ARM64 Trivy results to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        if: always() && hashFiles('trivy-results-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: trivy-results-arm64.sarif
           category: trivy-linux-arm64

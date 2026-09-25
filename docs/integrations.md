@@ -169,6 +169,12 @@ Matching is case-insensitive and follows this order:
 
 A duplicate event (same `source_event_id`) that was previously imported with `user_id = NULL` is repaired in place once a later import resolves a match, and that user's rolling progress is refreshed — otherwise `INSERT OR IGNORE` would leave it orphaned forever.
 
+Plex events stored with `user_id = NULL` are linked on each Plex user discovery (saving Plex settings or refreshing users):
+
+1. Each is linked to the user with the same Plex.tv account ID. The owner also matches the server-local account ID `1`.
+2. An account ID claimed by more than one user is skipped and logged as a warning.
+3. Each linked user's rolling progress is refreshed. Expansion or prefetch follows on the next rolling reconcile.
+
 ## Failure Behaviour
 
 External API failures should:

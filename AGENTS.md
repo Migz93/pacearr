@@ -1,4 +1,4 @@
-<!-- shared: content — keep in sync across Migz93 self-hosted apps; only the Project Facts table differs -->
+<!-- shared: content — keep in sync across Migz93 self-hosted apps; only the Project Facts values differ -->
 
 # Agent Guidelines
 
@@ -6,7 +6,7 @@ Read this file before doing any work in this repo.
 
 Everything here is **always relevant** — environment, conventions, and the gates
 you have to stop at. Material that only matters at a particular moment (opening
-a PR, cutting a release, triaging a Snyk finding) lives in `docs/` instead, and
+a PR, cutting a release, triaging a security finding) lives in `docs/` instead, and
 the table below says when to go and read it.
 
 > If a `LOCAL.md` file exists in this directory, read it — it contains
@@ -15,9 +15,10 @@ the table below says when to go and read it.
 
 ## Project Facts
 
-Everything below this table is identical across pacearr, hubarr and shelfbridge.
-This table is the only place the projects differ — when a rule below refers to
-"the port" or "the version files", it means the value here.
+Everything below this table is identical across hubarr, pacearr and shelfbridge,
+apart from the app name, port and paths from this table written into the
+examples. This table is the only place the projects differ — when a rule below
+refers to "the port" or "the version files", it means the value here.
 
 | | |
 |---|---|
@@ -29,7 +30,7 @@ This table is the only place the projects differ — when a rule below refers to
 | Version files | `package.json` and `package-lock.json` (`src/server/version.ts` reads the version from `package.json` at runtime, so there is nothing else to update) |
 | Checks to run before closing out work | `npm run check` |
 | Test suite | Server tests — `npm test` and `npm run test:server`. Playwright — `npm run test:e2e` against a live instance (see `TESTING.md`). |
-| Integrations to flag in review | Plex, Sonarr, Tautulli |
+| Integrations to flag in review | Plex, Sonarr, Tautulli — plus cleanup/deletion behaviour |
 
 ## Before You Start — What To Read
 
@@ -40,7 +41,7 @@ Don't guess at these — they contain conventions you will otherwise get wrong.
 |---|---|
 | Open a PR, or write PR/issue text | [docs/workflow.md](docs/workflow.md) |
 | Cut a release or bump a version | [docs/workflow.md](docs/workflow.md) |
-| Act on a Snyk finding | [docs/workflow.md](docs/workflow.md) |
+| Act on a security finding (code scanning or Dependabot) | [docs/workflow.md](docs/workflow.md) |
 | Add logging or comments to new code | [docs/workflow.md](docs/workflow.md) |
 | Add or change tests | [TESTING.md](TESTING.md) |
 | Change the database schema | [docs/architecture.md](docs/architecture.md) |
@@ -115,8 +116,10 @@ Everything for Pacearr lives under a single directory on the host:
 ```
 
 All files the app needs — config, database, logs, whatever — go directly in
-there. Do not create subdirectories like `config/`, `data/`, or `logs/` unless
-the app itself requires a specific path inside the container. Keep it flat.
+there. Do not create subdirectories like `config/` or `data/` unless the app
+itself requires a specific path inside the container. Keep it flat. The
+exceptions are subdirectories the app creates itself on startup, such as
+`logs/` — don't create them by hand.
 
 ## Docker Naming Conventions
 
@@ -203,13 +206,17 @@ Keep the image and container name as `pacearr`, use bridge networking, and
 preserve the `/opt/pacearr:/config` bind mount so configuration, database, and
 logs remain intact while the container is recreated.
 
-After the container starts, confirm it is healthy with:
+After the container starts, wait for it to become healthy. The status reads
+`starting` until the image's HEALTHCHECK first passes, usually within a few
+seconds, so poll rather than checking once:
 
 ```bash
-docker logs pacearr 2>&1 | tail -5
+timeout 90 sh -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" pacearr)" = healthy ]; do sleep 3; done' \
+  && echo healthy || { docker logs pacearr 2>&1 | tail -20; false; }
 ```
 
-You should see: `Pacearr listening on port 9302`.
+This prints `healthy`, or the recent logs and a non-zero exit if it isn't
+healthy within 90 seconds. A good start logs a `Pacearr listening` line.
 
 This whole section needs Docker. On a machine where it is unavailable, say so
 rather than substituting a workspace check for a real rebuild.
@@ -219,8 +226,8 @@ rather than substituting a workspace check for a real rebuild.
 ## GitHub Workflow
 
 The gates below are mandatory and apply on every piece of work. The mechanical
-detail — PR body format, `gh` commands, release steps, Snyk handling — lives in
-[docs/workflow.md](docs/workflow.md).
+detail — PR body format, `gh` commands, release steps, security findings —
+lives in [docs/workflow.md](docs/workflow.md).
 
 ### Before Starting Any Work — Branch Check (Mandatory)
 
@@ -250,7 +257,8 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
 **Step by step:**
 
 1. **Start a new branch** from `develop` for every piece of work — features, bug
-   fixes, chores, CI changes, everything. Never commit new work directly to
+   fixes, chores, CI changes, everything — unless the branch check above found
+   you already on this work's branch. Never commit new work directly to
    `develop` or `main`.
    - Branch naming: `feat/short-description`, `fix/short-description`,
      `chore/short-description`, `ci/short-description`, `docs/short-description`
@@ -262,19 +270,24 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
    (`feat:`, `fix:`, `chore:`, etc.). Open it as a draft; see
    [docs/workflow.md](docs/workflow.md)'s Pull Request Conventions for when to
    mark it ready for review.
-5. **Merge the PR** into `develop`. Delete the branch after merging.
+5. **Merge an ordinary work PR** into `develop` with a squash merge
+   (`gh pr merge --squash --delete-branch`). Delete the branch after merging.
+   Use a merge commit for ancestry-reconciliation PRs; do not delete their
+   branch automatically.
 6. **Repeat** steps 1–5 for each piece of work. `develop` accumulates all the
    merged PRs.
 7. **When ready to release**, create a `chore/bump-version-X.Y.Z` branch from
-   `develop`, bump the version files, open a PR into `develop`, and merge it. A
-   version bump does not go through the review gate — see below.
+   `develop`, bump the version files, open a PR into `develop`, and squash-merge
+   it. A version bump does not go through the review gate — see below.
 8. **Open a PR** from `develop` into `main`. This one **does** go through the
    review gate first. Open it as a draft too, marking it ready per the same
    conventions once the review gate is satisfied and no further fixes are
-   pending. Merge it. This triggers the release-drafter to generate release
-   notes from all the PR titles since the last release.
-9. **Tag `main`** with `vX.Y.Z` and push the tag. This triggers the Docker build
-   workflow.
+   pending. Merge it with a merge commit (`gh pr merge --merge`),
+   never a squash merge. This preserves `develop` ancestry on `main` and avoids
+   future release conflicts. This triggers the release-drafter to generate
+   release notes from all the PR titles since the last release.
+9. **Tag the resulting release merge commit on `main`** with `vX.Y.Z` and push
+   the tag. This triggers the Docker build workflow.
 10. **Publish the GitHub release** — review the auto-generated draft and publish
     it.
 
@@ -474,7 +487,7 @@ without re-litigating, but say what you're doing.
 - Keep `docs/` files to operational facts — tables, short steps, commands.
   Detailed rationale belongs in code comments next to the code, not in prose
 - A doc whose first line carries a `shared: content` marker is kept identical
-  across hubarr and shelfbridge — change it in all of them, or not at all
+  across hubarr, pacearr and shelfbridge — change it in all of them, or not at all
 
 ---
 

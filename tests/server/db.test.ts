@@ -853,6 +853,32 @@ test("Tautulli username backfill uses a managed user's friendly name when their 
   }
 });
 
+test("migration 23 stamps history cursors with the connection configured at upgrade", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 22);
+    const stamp = "2026-09-01T09:00:00.000Z";
+    const save = raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)");
+    save.run("plex", JSON.stringify({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" }), stamp);
+    // Tautulli has a saved cursor but is no longer configured, so its server is unknown.
+    save.run("tautulli", JSON.stringify({ enabled: false, baseUrl: "", apiKey: "" }), stamp);
+    save.run("historySync", JSON.stringify({
+      plex: { backfillComplete: true, cursor: stamp },
+      tautulli: { backfillComplete: true, cursor: stamp },
+    }), stamp);
+
+    runMigrations(raw);
+
+    const sync = JSON.parse((raw.prepare("SELECT value FROM settings WHERE key = 'historySync'").get() as { value: string }).value);
+    assert.deepEqual(sync.plex, { backfillComplete: true, cursor: stamp, connection: "plex-id" });
+    assert.deepEqual(sync.tautulli, { backfillComplete: true, cursor: stamp }, "an unconfigured source stays unstamped, so its next import is a full read");
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("migration 17 retains one duplicate Tautulli identity before adding its unique index", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
   const raw = new Database(path.join(dir, "pacearr.db"));
