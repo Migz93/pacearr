@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
+import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
@@ -1709,8 +1710,10 @@ export class PacearrServices {
     const withOverlap = (cursor: string | null) => cursor ? new Date(new Date(cursor).getTime() - overlap).toISOString() : undefined;
     // A cursor from a different server says nothing about this one's history, so a
     // changed connection reads its history in full before resuming incrementally.
+    // Migration 23 stamped cursors saved before connections were recorded, so an
+    // unknown connection is treated as a different server.
     const resumeFrom = (state: { backfillComplete: boolean; cursor: string | null; connection?: string }, connection: string) =>
-      state.backfillComplete && (state.connection === undefined || state.connection === connection) ? withOverlap(state.cursor) : undefined;
+      state.backfillComplete && state.connection === connection ? withOverlap(state.cursor) : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const episodeCache: EpisodeCache = new Map();
     const dryRunExpandedSeasons = new Set<string>();
@@ -1720,7 +1723,7 @@ export class PacearrServices {
       if (!plexSettings) throw new Error("Plex is not configured.");
       const plex = new PlexIntegration(plexSettings, this.logger);
       const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
-      const plexConnection = plexSettings.machineIdentifier || plexSettings.serverUrl;
+      const plexConnection = plexHistoryConnection(plexSettings);
       const plexEvents = await plex.getPlaybackHistory(full ? undefined : resumeFrom(syncState.plex, plexConnection));
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
@@ -1776,7 +1779,8 @@ export class PacearrServices {
       try {
         const tautulli = new TautulliIntegration(tautulliSettings, this.logger);
         const tautulliIdentityScope = this.sourceIdentityScope("tautulli", tautulliSettings.baseUrl, tautulliSettings.apiKey);
-        const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliSettings.baseUrl));
+        const tautulliConnection = tautulliHistoryConnection(tautulliSettings);
+        const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliConnection));
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         const findTautulliUser = this.db.createTautulliUserResolver();
@@ -1839,7 +1843,7 @@ export class PacearrServices {
         // previously-orphaned Plex owner history.
         this.refreshRollingProgressForUsers(repairedUserIds);
         if (!full) {
-          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli"), connection: tautulliSettings.baseUrl };
+          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli"), connection: tautulliConnection };
           this.db.saveHistorySyncState(syncState);
         }
       } catch (error) {

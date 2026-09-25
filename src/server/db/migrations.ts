@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { Logger } from "../logger.js";
+import { plexHistoryConnection, tautulliHistoryConnection } from "../history-sync.js";
 
 interface Migration {
   version: number;
@@ -428,6 +429,32 @@ const migrations: Migration[] = [
         CREATE INDEX idx_watch_events_user_series_watched
           ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
       `);
+    },
+  },
+  {
+    // History cursors record the server they came from, so a changed server is read
+    // in full rather than resumed from another server's cursor. Stamp cursors saved
+    // before that with the server configured at upgrade, which is the server they
+    // came from; a cursor left unstamped is then read in full.
+    version: 23,
+    up(db) {
+      const read = <T>(key: string): T | null => {
+        const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+        if (!row) return null;
+        try { return JSON.parse(row.value) as T; } catch { return null; }
+      };
+      type Cursor = { connection?: string } | undefined;
+      const sync = read<{ plex?: Cursor; tautulli?: Cursor }>("historySync");
+      if (!sync) return;
+      const plex = read<{ serverUrl?: string; machineIdentifier?: string }>("plex");
+      const tautulli = read<{ baseUrl?: string }>("tautulli");
+      if (sync.plex && sync.plex.connection === undefined && plex?.serverUrl) {
+        sync.plex.connection = plexHistoryConnection({ serverUrl: plex.serverUrl, machineIdentifier: plex.machineIdentifier });
+      }
+      if (sync.tautulli && sync.tautulli.connection === undefined && tautulli?.baseUrl) {
+        sync.tautulli.connection = tautulliHistoryConnection({ baseUrl: tautulli.baseUrl });
+      }
+      db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
     },
   },
 ];
