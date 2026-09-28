@@ -321,7 +321,9 @@ export class PlexIntegration {
     // Plex's native TV agent resolves an external ID through an item's matches
     // endpoint. The resulting Plex GUID is then filtered directly in this
     // library section, avoiding both title matching and full-library scans.
-    const firstPage = await this.requestServerXml(`/library/sections/${encodeURIComponent(section.key)}/all?type=2&X-Plex-Container-Size=1`);
+    // Plex ignores X-Plex-Container-Size without X-Plex-Container-Start and
+    // returns the whole section, which times out on large libraries (#200).
+    const firstPage = await this.requestServerXml(`/library/sections/${encodeURIComponent(section.key)}/all?type=2&X-Plex-Container-Start=0&X-Plex-Container-Size=1`);
     const seed = toArray(firstPage?.MediaContainer?.Directory).map((item) => attr(item)).find((item) => item.ratingKey);
     if (!seed?.ratingKey) return [];
     const matches = await this.requestServerXml(`/library/metadata/${encodeURIComponent(String(seed.ratingKey))}/matches?manual=1&agent=${encodeURIComponent(section.agent)}&title=${encodeURIComponent(externalGuid.replace("://", "-"))}`);
