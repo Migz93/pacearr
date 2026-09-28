@@ -227,6 +227,12 @@ Runs against a temporary SQLite database. Safe to run any time.
 | `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
 | `getActiveSessions` parses real `get_activity` rows, which carry no start time, and keys them by playback session | Regression for #168 — real `get_activity` rows have no `started`/`date`, and the old parser skipped every one, so the job never recorded an event. The fixture matches a live payload. Rows are keyed by `session_id` (or by a session key scoped to viewer, episode and day), dated when observed, and malformed rows are still rejected |
 
+### `tests/server/plex-integration.test.ts` — Plex library requests
+
+| Test | What it checks |
+|---|---|
+| `findShowForArtwork` requests a single seed item per TV section | Regression for #200 — the seed request to `/library/sections/{key}/all`, which fetches one show so the lookup can call that show's `/matches` endpoint, sends both `X-Plex-Container-Start=0` and `X-Plex-Container-Size=1` as URL query parameters. Plex ignores the size without the start, so dropping it downloads the whole section per identifier and times out under load |
+
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 
 | Test | What it checks |
