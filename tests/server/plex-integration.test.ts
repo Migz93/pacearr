@@ -86,14 +86,16 @@ const SAME_SHOW_TWO_LIBRARIES: FakeSection[] = [
 const SAME_SHOW_IDS = { "tvdb-337907": ["plex://show/911"], "imdb-tt7235466": ["plex://show/911"] };
 
 test("findShowForArtwork picks the copy in Sonarr's folder when one show is in several libraries", async () => {
-  const show = await findWithFakePlex(SAME_SHOW_TWO_LIBRARIES, SAME_SHOW_IDS, {
-    tvdbId: 337907,
-    imdbId: "tt7235466",
-    // Differs only by a trailing separator, which is normalised away.
-    path: "/mnt/user/media/TV/TV/9-1-1 (2018) [imdb-tt7235466]/",
-  });
-  assert.equal(show?.ratingKey, "23828");
-  assert.deepEqual(show?.seasons.map((season) => season.ratingKey), ["2382801"]);
+  // Each path differs only by a trailing separator, which is normalised away.
+  for (const separator of ["/", "\\"]) {
+    const show = await findWithFakePlex(SAME_SHOW_TWO_LIBRARIES, SAME_SHOW_IDS, {
+      tvdbId: 337907,
+      imdbId: "tt7235466",
+      path: `/mnt/user/media/TV/TV/9-1-1 (2018) [imdb-tt7235466]${separator}`,
+    });
+    assert.equal(show?.ratingKey, "23828", `trailing ${separator}`);
+    assert.deepEqual(show?.seasons.map((season) => season.ratingKey), ["2382801"]);
+  }
 });
 
 test("findShowForArtwork skips a show in several libraries when none is in Sonarr's folder", async () => {
