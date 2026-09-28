@@ -254,6 +254,20 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A first watch inside an unexpanded season expands it and still prefetches the next when near its end | Expanding the current season no longer suppresses prefetch from the same watch: S2E4 of 5 expands S2 and prefetches S3 E02–E03 |
 | Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
 
+### `tests/server/exclusions.test.ts` — Season and episode exclusions
+
+| Test | What it checks |
+|---|---|
+| Rolling plan never monitors, searches or deletes the files of excluded items | An excluded season is dropped from retention and its flag disabled; excluded episodes are target-unmonitored, never pilot- or season-searched, and their files are protected while ordinary non-pilot files are still deleted |
+| Excluding an expanded season unmonitors all of it without searching or deleting files | The one-off Sonarr update unmonitors every episode, sends no search or `DELETE`, removes the season from `expanded_seasons` and records `show.season_excluded` |
+| Watching an excluded season does not expand it or trigger any Sonarr work | Live watches of E01 and the finale send nothing to Sonarr, and the rolling reconcile's catch-up of that stored position never monitors, searches or expands the season |
+| A finale does not expand, or prefetch into, an excluded next season | With finale expansion and early prefetch both on, a season 1 finale leaves the excluded season 2 untouched and stores no prefetch records |
+| Expanding a season keeps its excluded episode unmonitored and unsearched | Sonarr re-monitors every episode when a season is monitored, so the expansion unmonitors the excluded episode again afterwards |
+| Scheduled reconciliation keeps an excluded episode's file in a season being trimmed | Trimming a season back to its pilot deletes only the ordinary non-pilot file and never re-monitors the excluded episode |
+| Including a season restores only its pilot and searches it when missing | The season returns to the pilot-only baseline: `EpisodeSearch` for E01 only, no expansion |
+| Including an episode restores the monitoring its season implies | Monitored and searched in an expanded season; left unmonitored, with nothing sent, in a pilot-only season |
+| Dry run stores an exclusion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, the exclusion is stored and `dry_run.show.season_excluded` is recorded |
+
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |
