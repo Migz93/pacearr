@@ -147,6 +147,34 @@ Expansion does this:
 
 If the season is already expanded, Pacearr skips the Sonarr mutation and search.
 
+## Exclusions
+
+An enrolled show's seasons and individual episodes can be permanently excluded from
+the show detail page, for example seasons that cannot be sourced. They are stored in
+`rolling_excluded_seasons` and `rolling_excluded_episodes` and deleted on unenrolment.
+
+| Action | Sonarr change (once) | Pacearr state |
+|---|---|---|
+| Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records cleared (live only) |
+| Include season | E01 monitored and searched if missing (unless E01 is itself excluded) | Back on the pilot-only baseline |
+| Exclude episode | Episode unmonitored | Its prefetch record cleared (live only) |
+| Include episode | Monitored when its season is expanded or it is E01, otherwise unmonitored; searched if now monitored and missing | — |
+
+Excluding never deletes files, and the excluded episodes' files are never chosen for
+deletion by any cleanup. Afterwards every job treats excluded items as follows:
+
+| Rule | Behaviour |
+|---|---|
+| Reconcile, baseline, reset | Excluded items are target-unmonitored and never searched; an excluded season's flag stays off |
+| Expansion | An excluded season is never expanded; expanding a season re-unmonitors its excluded episodes |
+| Prefetch, finale | Nothing happens when the next season is excluded — Pacearr does not skip past it. Excluded episodes are never prefetched |
+| Watch activity | Watching an excluded season or episode still updates viewer progress but triggers no expansion, prefetch, cleanup, or retention of that season |
+| Artwork | An excluded season keeps its original Plex poster |
+| Dry run | The exclusion is stored and applied to every dry-run plan; Sonarr, expanded and prefetch state are not changed, and history records the `dry_run.` action. Reconciliation applies it once live |
+
+History records `show.season_excluded`, `show.season_included`, `show.episode_excluded`
+and `show.episode_included`. Unenrolling re-monitors everything, excluded items included.
+
 ## Per-User Progress
 
 Pacearr stores per-user progress in `rolling_show_users`.

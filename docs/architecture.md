@@ -146,3 +146,4 @@ It is designed as an operational admin surface rather than a public landing page
 - Duplicate imported watch events must not retrigger Sonarr actions.
 - Disabled users do not trigger expansion and should not block cleanup.
 - Destructive cleanup must be auditable through `history_events`.
+- Excluded seasons and episodes are never monitored, searched, expanded, or deleted by Pacearr.

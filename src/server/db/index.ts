@@ -7,6 +7,7 @@ import type {
   PlexOwnerRecord,
   PlexSettingsInput,
   PlexSettingsView,
+  RollingExclusions,
   RollingShowRecord,
   RollingShowUserRecord,
   SessionUser,
@@ -923,6 +924,41 @@ export class PacearrDatabase {
     this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
       .run(JSON.stringify(expanded), now(), rollingShowId);
     this.clearSeasonInactivity(rollingShowId, seasonNumber);
+  }
+
+  getRollingExclusions(rollingShowId: number): RollingExclusions {
+    const seasons = (this.db.prepare("SELECT season_number AS seasonNumber FROM rolling_excluded_seasons WHERE rolling_show_id = ? ORDER BY season_number")
+      .all(rollingShowId) as Array<{ seasonNumber: number }>).map((row) => row.seasonNumber);
+    const episodes = this.db.prepare(`
+      SELECT season_number AS seasonNumber, episode_number AS episodeNumber FROM rolling_excluded_episodes
+      WHERE rolling_show_id = ? ORDER BY season_number, episode_number
+    `).all(rollingShowId) as Array<{ seasonNumber: number; episodeNumber: number }>;
+    return { seasons, episodes };
+  }
+
+  excludeSeason(rollingShowId: number, seasonNumber: number): boolean {
+    return this.db.prepare("INSERT OR IGNORE INTO rolling_excluded_seasons (rolling_show_id, season_number, excluded_at) VALUES (?, ?, ?)")
+      .run(rollingShowId, seasonNumber, now()).changes > 0;
+  }
+
+  includeSeason(rollingShowId: number, seasonNumber: number): boolean {
+    return this.db.prepare("DELETE FROM rolling_excluded_seasons WHERE rolling_show_id = ? AND season_number = ?")
+      .run(rollingShowId, seasonNumber).changes > 0;
+  }
+
+  excludeEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): boolean {
+    return this.db.prepare("INSERT OR IGNORE INTO rolling_excluded_episodes (rolling_show_id, season_number, episode_number, excluded_at) VALUES (?, ?, ?, ?)")
+      .run(rollingShowId, seasonNumber, episodeNumber, now()).changes > 0;
+  }
+
+  clearPrefetchedEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): void {
+    this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ? AND episode_number = ?")
+      .run(rollingShowId, seasonNumber, episodeNumber);
+  }
+
+  includeEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): boolean {
+    return this.db.prepare("DELETE FROM rolling_excluded_episodes WHERE rolling_show_id = ? AND season_number = ? AND episode_number = ?")
+      .run(rollingShowId, seasonNumber, episodeNumber).changes > 0;
   }
 
   getSeasonInactiveSince(rollingShowId: number, seasonNumber: number): string | null {

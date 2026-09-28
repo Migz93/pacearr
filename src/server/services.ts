@@ -12,6 +12,7 @@ import type {
   SonarrEpisode,
   SonarrEpisodeFile,
   SonarrLibraryCacheItem,
+  RollingExclusions,
   RollingShowRecord,
   SonarrSeries,
   UserListItem,
@@ -43,6 +44,24 @@ function prefetchedEpisodeIdsForEpisodes(episodes: SonarrEpisode[], records: Arr
 }
 
 type EpisodeCache = Map<number, Promise<SonarrEpisode[]>>;
+
+const NO_EXCLUSIONS: RollingExclusions = { seasons: [], episodes: [] };
+
+/** Answers whether Pacearr must leave a season, or an episode, entirely alone. */
+export type ExclusionCheck = {
+  season(seasonNumber: number): boolean;
+  /** True for an excluded episode and for every episode of an excluded season. */
+  episode(seasonNumber: number, episodeNumber: number): boolean;
+};
+
+export function exclusionCheck(exclusions: RollingExclusions = NO_EXCLUSIONS): ExclusionCheck {
+  const seasons = new Set(exclusions.seasons);
+  const episodes = new Set(exclusions.episodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
+  return {
+    season: (seasonNumber) => seasons.has(seasonNumber),
+    episode: (seasonNumber, episodeNumber) => seasons.has(seasonNumber) || episodes.has(`${seasonNumber}:${episodeNumber}`),
+  };
+}
 
 type SeriesMatchIndex = {
   byTvdbId: Map<number, SonarrSeries | null>;
@@ -120,21 +139,24 @@ export function selectEpisodeFilesToDelete(episodes: SonarrEpisode[], shouldDele
   return [...deletionCandidates].filter((fileId) => !protectedFiles.has(fileId));
 }
 
-export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = []) {
-  const retained = new Set(retainedSeasons);
+export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpisode[], retainedSeasons: number[], deleteFiles: boolean, prefetchedEpisodeIds: number[] = [], exclusions: RollingExclusions = NO_EXCLUSIONS) {
+  const excluded = exclusionCheck(exclusions);
+  const retained = new Set(retainedSeasons.filter((seasonNumber) => !excluded.season(seasonNumber)));
   const prefetched = new Set(prefetchedEpisodeIds);
   const realEpisodes = episodes.filter(isRealSeasonEpisode);
-  const targetMonitored = (episode: SonarrEpisode) => episode.episodeNumber === 1 || retained.has(episode.seasonNumber) || prefetched.has(episode.id);
+  const isExcluded = (episode: SonarrEpisode) => excluded.episode(episode.seasonNumber, episode.episodeNumber);
+  const targetMonitored = (episode: SonarrEpisode) => !isExcluded(episode) &&
+    (episode.episodeNumber === 1 || retained.has(episode.seasonNumber) || prefetched.has(episode.id));
   const episodesToMonitor = realEpisodes.filter((episode) => targetMonitored(episode) && !episode.monitored);
   const episodesToUnmonitor = realEpisodes.filter((episode) => !targetMonitored(episode) && episode.monitored);
   // Sonarr search commands are only for files that are actually missing. A
   // monitored episode with a file needs no search, including during initial
   // enrolment of an already-complete series.
   const pilotSearches = realEpisodes.filter((episode) =>
-    episode.episodeNumber === 1 && !retained.has(episode.seasonNumber) && !episode.hasFile
+    episode.episodeNumber === 1 && !retained.has(episode.seasonNumber) && !episode.hasFile && targetMonitored(episode)
   );
   const seasonSearches = [...retained]
-    .filter((seasonNumber) => realEpisodes.some((episode) => episode.seasonNumber === seasonNumber && !episode.hasFile))
+    .filter((seasonNumber) => realEpisodes.some((episode) => episode.seasonNumber === seasonNumber && !episode.hasFile && targetMonitored(episode)))
     .sort((a, b) => a - b);
 
   return {
@@ -150,9 +172,11 @@ export function calculateRollingPlan(series: SonarrSeries, episodes: SonarrEpiso
     episodesToUnmonitor,
     pilotSearches,
     seasonSearches,
+    // Excluded episodes are only unmonitored; their existing files stay playable.
     filesToDelete: deleteFiles
-      ? selectEpisodeFilesToDelete(episodes, (episode) => isRealSeasonEpisode(episode) && !targetMonitored(episode))
+      ? selectEpisodeFilesToDelete(episodes, (episode) => isRealSeasonEpisode(episode) && !targetMonitored(episode) && !isExcluded(episode))
       : [],
+    isTargetMonitored: targetMonitored,
   };
 }
 
@@ -654,14 +678,20 @@ export class PacearrServices {
       episodesBySeason.set(episode.seasonNumber, [...(episodesBySeason.get(episode.seasonNumber) ?? []), episode]);
     }
 
-    const retainedSeasons = [...new Set(progress.filter((item) => item.enabled).map((item) => item.seasonNumber))]
+    const exclusions = rolling ? this.db.getRollingExclusions(rolling.id) : NO_EXCLUSIONS;
+    const excluded = exclusionCheck(exclusions);
+    // Mirrors getActiveRetainedSeasons: a viewer on an excluded item retains nothing.
+    const retainedSeasons = [...new Set(progress
+      .filter((item) => item.enabled && !excluded.episode(item.seasonNumber, item.episodeNumber))
+      .map((item) => item.seasonNumber))]
       .filter((seasonNumber) => seasonNumber > 0);
     const episodeKeys = new Set(realEpisodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
     const prefetchedWithUsers = rolling ? this.db.listPrefetchedEpisodesWithUsers(rolling.id)
       .filter((item) => episodeKeys.has(`${item.seasonNumber}:${item.episodeNumber}`)) : [];
     const prefetchedEpisodeIds = prefetchedEpisodeIdsForEpisodes(episodes, prefetchedWithUsers);
-    const prefetchedIds = new Set(prefetchedEpisodeIds);
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds);
+    const excludedSeasons = new Set(exclusions.seasons);
+    const excludedEpisodes = new Set(exclusions.episodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds, exclusions);
     const retained = new Set(plan.retainedSeasons);
 
     const seasons: ShowSeasonSummary[] = (series.seasons ?? [])
@@ -679,6 +709,7 @@ export class PacearrServices {
           watchedUsers: seasonStats?.watchedUsers ?? 0,
           latestWatchedAt: seasonStats?.latestWatchedAt ?? null,
           isExpanded: rolling?.expandedSeasons.includes(season.seasonNumber) ?? false,
+          excluded: excludedSeasons.has(season.seasonNumber),
           prefetchedEpisodes: rolling ? prefetchedWithUsers
             .filter((item) => item.seasonNumber === season.seasonNumber)
             .map((item) => ({ seasonNumber: item.seasonNumber, episodeNumber: item.episodeNumber, userId: item.userId, displayName: item.displayName, avatarUrl: item.avatarUrl, triggeredAt: item.triggeredAt })) : [],
@@ -697,7 +728,8 @@ export class PacearrServices {
           title: episode.title ?? null,
           airDate: episode.airDate ?? episode.airDateUtc ?? null,
           monitored: episode.monitored,
-          targetMonitored: episode.episodeNumber === 1 || retained.has(episode.seasonNumber) || prefetchedIds.has(episode.id),
+          targetMonitored: plan.isTargetMonitored(episode),
+          excluded: excludedEpisodes.has(`${episode.seasonNumber}:${episode.episodeNumber}`),
           hasFile: Boolean(episode.hasFile),
           watchedUsers: stats?.watchedUsers ?? 0,
           latestWatchedAt: stats?.latestWatchedAt ?? null,
@@ -1007,7 +1039,9 @@ export class PacearrServices {
     const settings = this.db.getAppSettings();
     if (settings.dryRun || !settings.artworkEnabled) return;
     try {
-      await this.plexArtwork.syncShow(this.getPlex(), rolling, series, retainedSeasons);
+      // An excluded season cannot be unlocked by watching its E01, so it keeps its original poster.
+      const excludedSeasons = this.db.getRollingExclusions(rolling.id).seasons;
+      await this.plexArtwork.syncShow(this.getPlex(), rolling, series, [...retainedSeasons, ...excludedSeasons]);
     } catch (error) {
       this.logger.warn("Plex artwork synchronization failed", { seriesId: series.id, title: series.title, error: error instanceof Error ? error.message : String(error) });
     }
@@ -1034,6 +1068,127 @@ export class PacearrServices {
     } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
   }
 
+  /**
+   * Excluding a season unmonitors all of it once and stops Pacearr expanding, prefetching
+   * or searching it. Files are never deleted. Including it restores the pilot-only
+   * baseline, from which normal rolling management resumes.
+   */
+  async setSeasonExcluded(rollingShowId: number, seasonNumber: number, exclude: boolean): Promise<RunResult> {
+    const show = this.db.getRollingShow(rollingShowId);
+    if (!show) return { ok: false, message: "Show is not enrolled." };
+    if (!Number.isInteger(seasonNumber) || seasonNumber <= 0) return { ok: false, message: "Only regular seasons can be excluded." };
+    const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
+    if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
+    try {
+      const dryRun = this.isDryRun();
+      const sonarr = this.getSonarr(dryRun);
+      const series = await sonarr.getSeriesById(show.sonarrSeriesId);
+      const season = series.seasons?.find((item) => item.seasonNumber === seasonNumber);
+      if (!season) return { ok: false, message: `Season ${seasonNumber} does not exist in Sonarr.` };
+      const episodes = (await sonarr.getEpisodes(show.sonarrSeriesId))
+        .filter((episode) => isRealSeasonEpisode(episode) && episode.seasonNumber === seasonNumber);
+      let monitored = 0;
+      let unmonitored = 0;
+      let searched = 0;
+      if (exclude) {
+        if (season.monitored) await sonarr.updateSeasonMonitoring(show.sonarrSeriesId, seasonNumber, false);
+        const updates = episodes.filter((episode) => episode.monitored).map((episode) => ({ id: episode.id, monitored: false }));
+        await sonarr.updateEpisodesMonitoring(updates);
+        unmonitored = updates.length;
+        this.db.transaction(() => {
+          this.db.excludeSeason(show.id, seasonNumber);
+          // An excluded season is no longer expanded or prefetched, so including it later
+          // starts from the pilot baseline. Dry run keeps this state, as it never claims
+          // Sonarr changed; reconciliation drops it once live.
+          if (!dryRun) {
+            this.db.removeExpandedSeason(show.id, seasonNumber);
+            this.db.clearPrefetchedEpisodesForSeason(show.id, seasonNumber);
+          }
+        });
+      } else {
+        const pilotExcluded = this.db.getRollingExclusions(show.id).episodes
+          .some((episode) => episode.seasonNumber === seasonNumber && episode.episodeNumber === 1);
+        const pilot = pilotExcluded ? undefined : episodes.find((episode) => episode.episodeNumber === 1);
+        if (pilot && !pilot.monitored) {
+          await sonarr.updateEpisodesMonitoring([{ id: pilot.id, monitored: true }]);
+          monitored = 1;
+        }
+        if (pilot && !pilot.hasFile) {
+          await sonarr.searchEpisodes([pilot.id]);
+          searched = 1;
+        }
+        this.db.includeSeason(show.id, seasonNumber);
+      }
+      const current = this.db.getRollingShow(show.id) ?? show;
+      await this.syncPlexArtwork(series, current, [...new Set([...current.expandedSeasons, ...this.getActiveRetainedSeasons(show.id)])]);
+      const action = exclude ? "show.season_excluded" : "show.season_included";
+      this.db.addHistory("info", dryRun ? `dry_run.${action}` : action, show.title, { seasonNumber, monitored, unmonitored, searched, dryRun });
+      this.logger.info(exclude ? "Season excluded from rolling management" : "Season included in rolling management", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, seasonNumber, monitored, unmonitored, searched, dryRun });
+      const verb = exclude ? "Excluded" : "Included";
+      return {
+        ok: true,
+        message: `${verb} season ${seasonNumber} of ${show.title}.${dryRun ? " Dry run: Sonarr was not changed." : ""}`,
+        changed: monitored + unmonitored + searched,
+      };
+    } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
+  }
+
+  /**
+   * Excluding an episode unmonitors it once and stops Pacearr monitoring or searching it,
+   * even if its season later expands. Including it restores the monitoring its season
+   * implies: monitored when expanded, otherwise only if it is the pilot.
+   */
+  async setEpisodeExcluded(rollingShowId: number, seasonNumber: number, episodeNumber: number, exclude: boolean): Promise<RunResult> {
+    const show = this.db.getRollingShow(rollingShowId);
+    if (!show) return { ok: false, message: "Show is not enrolled." };
+    if (!Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber) || seasonNumber <= 0 || episodeNumber <= 0) {
+      return { ok: false, message: "Only regular episodes can be excluded." };
+    }
+    const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
+    if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
+    try {
+      const dryRun = this.isDryRun();
+      const sonarr = this.getSonarr(dryRun);
+      const episode = (await sonarr.getEpisodes(show.sonarrSeriesId))
+        .find((item) => item.seasonNumber === seasonNumber && item.episodeNumber === episodeNumber);
+      if (!episode) return { ok: false, message: `Episode S${seasonNumber}E${episodeNumber} does not exist in Sonarr.` };
+      let monitored = 0;
+      let unmonitored = 0;
+      let searched = 0;
+      if (exclude) {
+        if (episode.monitored) {
+          await sonarr.updateEpisodesMonitoring([{ id: episode.id, monitored: false }]);
+          unmonitored = 1;
+        }
+        this.db.transaction(() => {
+          this.db.excludeEpisode(show.id, seasonNumber, episodeNumber);
+          if (!dryRun) this.db.clearPrefetchedEpisode(show.id, seasonNumber, episodeNumber);
+        });
+      } else {
+        const seasonExcluded = this.db.getRollingExclusions(show.id).seasons.includes(seasonNumber);
+        const target = !seasonExcluded && (episodeNumber === 1 || show.expandedSeasons.includes(seasonNumber));
+        if (target !== episode.monitored) {
+          await sonarr.updateEpisodesMonitoring([{ id: episode.id, monitored: target }]);
+          if (target) monitored = 1; else unmonitored = 1;
+        }
+        if (target && !episode.hasFile) {
+          await sonarr.searchEpisodes([episode.id]);
+          searched = 1;
+        }
+        this.db.includeEpisode(show.id, seasonNumber, episodeNumber);
+      }
+      const action = exclude ? "show.episode_excluded" : "show.episode_included";
+      this.db.addHistory("info", dryRun ? `dry_run.${action}` : action, show.title, { seasonNumber, episodeNumber, monitored, unmonitored, searched, dryRun });
+      this.logger.info(exclude ? "Episode excluded from rolling management" : "Episode included in rolling management", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, seasonNumber, episodeNumber, monitored, unmonitored, searched, dryRun });
+      const label = `S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`;
+      return {
+        ok: true,
+        message: `${exclude ? "Excluded" : "Included"} ${label} of ${show.title}.${dryRun ? " Dry run: Sonarr was not changed." : ""}`,
+        changed: monitored + unmonitored + searched,
+      };
+    } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
+  }
+
   async applyAllSeasonPilotBaseline(seriesId: number, reason: string, excludedPrefetchedSeasons: number[] = []): Promise<number> {
     return this.applyMonitoringPlan(seriesId, reason, [], true, excludedPrefetchedSeasons);
   }
@@ -1049,7 +1204,11 @@ export class PacearrServices {
   private getActiveRetainedSeasons(rollingShowId: number): number[] {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
-    return [...new Set(this.getActiveProgress(rollingShowId, cutoff).map((progress) => progress.lastWatchedSeason))]
+    // Watching an excluded season or episode must not make Pacearr monitor anything.
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rollingShowId));
+    return [...new Set(this.getActiveProgress(rollingShowId, cutoff)
+      .filter((progress) => !excluded.episode(progress.lastWatchedSeason, progress.lastWatchedEpisode))
+      .map((progress) => progress.lastWatchedSeason))]
       .sort((a, b) => a - b);
   }
 
@@ -1114,9 +1273,8 @@ export class PacearrServices {
     const excludedPrefetched = new Set(excludedPrefetchedSeasons);
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
       .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
-    const prefetchedIds = new Set(prefetchedEpisodeIds);
     const fileDeletionEnabled = deleteFiles ?? settings.cleanupDeletesFiles;
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds);
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds, rolling ? this.db.getRollingExclusions(rolling.id) : NO_EXCLUSIONS);
     this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
@@ -1140,7 +1298,7 @@ export class PacearrServices {
       // flag changes. Reassert the target state afterwards so E01 is kept.
       ...episodes
         .filter((episode) => isRealSeasonEpisode(episode) && seasonsWithMonitoringChanges.has(episode.seasonNumber))
-        .map((episode) => ({ id: episode.id, monitored: episode.episodeNumber === 1 || plan.retainedSeasons.includes(episode.seasonNumber) || prefetchedIds.has(episode.id) })),
+        .map((episode) => ({ id: episode.id, monitored: plan.isTargetMonitored(episode) })),
     ].reduce<Array<{ id: number; monitored: boolean }>>((deduplicated, update) => {
       const index = deduplicated.findIndex((item) => item.id === update.id);
       if (index === -1) deduplicated.push(update);
@@ -1243,20 +1401,29 @@ export class PacearrServices {
       if (!this.isDryRun()) this.db.clearPrefetchedEpisodesForSeason(rolling.id, seasonNumber);
       return false;
     }
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rolling.id));
+    if (excluded.season(seasonNumber)) return false;
     const sonarr = this.getSonarr();
     const episodes = (await this.getCachedEpisodes(seriesId, episodeCache)).filter((episode) => episode.seasonNumber === seasonNumber);
-    const updates = episodes.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
+    const included = episodes.filter((episode) => !excluded.episode(episode.seasonNumber, episode.episodeNumber));
+    const monitorUpdates = included.filter((episode) => !episode.monitored).map((episode) => ({ id: episode.id, monitored: true }));
+    const updates = [
+      ...monitorUpdates,
+      // Monitoring the season makes Sonarr monitor every episode in it, so excluded
+      // episodes are unmonitored again afterwards.
+      ...episodes.filter((episode) => excluded.episode(episode.seasonNumber, episode.episodeNumber)).map((episode) => ({ id: episode.id, monitored: false })),
+    ];
     try {
       await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
       await sonarr.updateEpisodesMonitoring(updates);
-      if (episodes.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
+      if (included.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
         await sonarr.searchSeason(seriesId, seasonNumber);
       }
       const dryRun = this.isDryRun();
       if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt);
       await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, [...rolling.expandedSeasons, seasonNumber]);
-      this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
-      this.logger.info("Season expanded from watch activity", { seriesId, title: rolling.title, seasonNumber, source, monitoredEpisodes: updates.length, dryRun });
+      this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, monitoredEpisodes: monitorUpdates.length, dryRun });
+      this.logger.info("Season expanded from watch activity", { seriesId, title: rolling.title, seasonNumber, source, monitoredEpisodes: monitorUpdates.length, dryRun });
       return true;
     } finally {
       episodeCache?.delete(seriesId);
@@ -1430,12 +1597,15 @@ export class PacearrServices {
     const { episodesRemaining, nextSeasonNumber } = selection;
     if (nextSeasonNumber === null) return false;
     if (rolling.expandedSeasons.includes(nextSeasonNumber) || dryRunExpandedSeasons?.has(`${rollingShowId}:${nextSeasonNumber}`)) return false;
+    // An excluded next season is not skipped over: the viewer may be watching it elsewhere.
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rollingShowId));
+    if (excluded.season(nextSeasonNumber)) return false;
 
     const alreadyPrefetched = new Set(this.db.listPrefetchedEpisodes(rollingShowId)
       .filter((episode) => episode.seasonNumber === nextSeasonNumber)
       .map((episode) => episode.episodeNumber));
     const candidates = selection.episodes
-      .filter((episode) => !alreadyPrefetched.has(episode.episodeNumber))
+      .filter((episode) => !alreadyPrefetched.has(episode.episodeNumber) && !excluded.episode(episode.seasonNumber, episode.episodeNumber))
       .sort((a, b) => a.episodeNumber - b.episodeNumber);
     if (candidates.length === 0) return false;
 
@@ -1487,6 +1657,7 @@ export class PacearrServices {
     if (nextSeasonNumber === null) return false;
     const expansionKey = `${rollingShowId}:${nextSeasonNumber}`;
     if (rolling.expandedSeasons.includes(nextSeasonNumber) || dryRunExpandedSeasons?.has(expansionKey)) return false;
+    if (exclusionCheck(this.db.getRollingExclusions(rollingShowId)).season(nextSeasonNumber)) return false;
     this.logger.info("Season finale watched; expanding next season", {
       seriesId: rolling.sonarrSeriesId,
       title: rolling.title,
@@ -1510,6 +1681,9 @@ export class PacearrServices {
   private async applyViewerPositionActions(rollingShowId: number, position: ViewerPosition, source: string, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>): Promise<boolean> {
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling || position.seasonNumber <= 0) return false;
+    // Watching an excluded season or episode is ignored: nothing is expanded, prefetched
+    // or included because of it.
+    if (exclusionCheck(this.db.getRollingExclusions(rollingShowId)).episode(position.seasonNumber, position.episodeNumber)) return false;
     let changed = false;
     const expansionKey = `${rollingShowId}:${position.seasonNumber}`;
     if (!rolling.expandedSeasons.includes(position.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
@@ -1581,6 +1755,11 @@ export class PacearrServices {
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
     if (!progressUpdated && stored.inserted) return { inserted: true, changed: repaired, progressUpdated: false };
+    // Progress still records where the viewer is, but an excluded item triggers no Sonarr work.
+    if (exclusionCheck(this.db.getRollingExclusions(rolling.id)).episode(input.seasonNumber, input.episodeNumber)) {
+      this.pendingRollingRetries.delete(retryKey);
+      return { inserted: stored.inserted, changed: repaired, progressUpdated };
+    }
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
@@ -1600,12 +1779,13 @@ export class PacearrServices {
   private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number, sonarr: SonarrIntegration, seriesEpisodes: SonarrEpisode[], filesToDelete: number[]): Promise<{ changed: number; reclaimedBytes: number }> {
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return { changed: 0, reclaimedBytes: 0 };
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rollingShowId));
     const episodes = seriesEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
-    const pilot = episodes.find((episode) => episode.episodeNumber === 1);
-    const nonPilots = episodes.filter((episode) => episode.episodeNumber > 1);
+    const pilot = episodes.find((episode) => episode.episodeNumber === 1 && !excluded.episode(seasonNumber, 1));
+    const others = episodes.filter((episode) => episode !== pilot);
     const updates = [
       ...(pilot ? [{ id: pilot.id, monitored: true }] : []),
-      ...nonPilots.filter((episode) => episode.monitored).map((episode) => ({ id: episode.id, monitored: false })),
+      ...others.filter((episode) => episode.monitored).map((episode) => ({ id: episode.id, monitored: false })),
     ];
     await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, false);
     // Disabling the season unmonitors all child episodes in Sonarr. Restore
@@ -1638,12 +1818,13 @@ export class PacearrServices {
     const sonarr = this.getSonarr();
     const seriesEpisodes = await sonarr.getEpisodes(rolling.sonarrSeriesId);
     const cleanupSeasonSet = new Set(cleanupSeasons);
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rolling.id));
     // Select once for the complete cleanup batch. A multipart file shared only
     // by non-pilots in two eligible seasons must be deleted, not protected by
     // whichever season happens to be processed second.
     const filesToDelete = settings.cleanupDeletesFiles
       ? selectEpisodeFilesToDelete(seriesEpisodes, (episode) =>
-          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1
+          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1 && !excluded.episode(episode.seasonNumber, episode.episodeNumber)
         )
       : [];
     const filesToDeleteBySeason = new Map<number, number[]>();

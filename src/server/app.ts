@@ -797,6 +797,18 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/rolling-shows/:id/reset", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.resetShow(Number(req.params.id)));
   }));
+  app.post("/api/rolling-shows/:id/seasons/:season/exclusion", requireAuth, asyncRoute(async (req, res) => {
+    res.json(await services.setSeasonExcluded(Number(req.params.id), Number(req.params.season), true));
+  }));
+  app.delete("/api/rolling-shows/:id/seasons/:season/exclusion", requireAuth, asyncRoute(async (req, res) => {
+    res.json(await services.setSeasonExcluded(Number(req.params.id), Number(req.params.season), false));
+  }));
+  app.post("/api/rolling-shows/:id/seasons/:season/episodes/:episode/exclusion", requireAuth, asyncRoute(async (req, res) => {
+    res.json(await services.setEpisodeExcluded(Number(req.params.id), Number(req.params.season), Number(req.params.episode), true));
+  }));
+  app.delete("/api/rolling-shows/:id/seasons/:season/episodes/:episode/exclusion", requireAuth, asyncRoute(async (req, res) => {
+    res.json(await services.setEpisodeExcluded(Number(req.params.id), Number(req.params.season), Number(req.params.episode), false));
+  }));
   app.delete("/api/rolling-shows/:id", requireAuth, asyncRoute(async (req, res) => {
     const result = await services.removeShow(Number(req.params.id));
     if (result.ok) runRecommendationRefreshNow();

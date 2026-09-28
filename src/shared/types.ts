@@ -272,6 +272,8 @@ export interface ShowSeasonSummary {
   watchedUsers: number;
   latestWatchedAt: string | null;
   isExpanded: boolean;
+  /** Permanently excluded from rolling management; never monitored or searched by Pacearr. */
+  excluded: boolean;
   prefetchedEpisodes: PrefetchedEpisodeSummary[];
 }
 
@@ -293,6 +295,12 @@ export interface PrefetchedEpisodeRecord {
   triggeredAt: string;
 }
 
+/** Seasons and episodes of one enrolled show that Pacearr must never monitor or search. */
+export interface RollingExclusions {
+  seasons: number[];
+  episodes: Array<{ seasonNumber: number; episodeNumber: number }>;
+}
+
 export interface ShowEpisodeSummary {
   id: number;
   seasonNumber: number;
@@ -301,6 +309,8 @@ export interface ShowEpisodeSummary {
   airDate: string | null;
   monitored: boolean;
   targetMonitored: boolean;
+  /** This episode itself is excluded; an excluded season is reported on the season. */
+  excluded: boolean;
   hasFile: boolean;
   watchedUsers: number;
   latestWatchedAt: string | null;

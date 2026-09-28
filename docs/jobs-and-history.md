@@ -169,7 +169,7 @@ puts it in a filter. An unmapped action still appears under "All types".
 
 | Category | Actions |
 |---|---|
-| Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch` |
+| Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch`, `show.season_excluded`, `show.season_included`, `show.episode_excluded`, `show.episode_included` |
 | Cleanup | `cleanup.progressive`, `cleanup.prefetch`, `show.reset` |
 | Shows | `show.enrolled`, `show.unenrolled`, `show.auto_triaged`, `show.auto_triage`, `recommendation.ignored` |
 | Sync | `history.import`, `history.full_reconcile`, `sessions.check`, `rolling.reconcile`, `watch_events.reconciled` (no longer written, kept mapped so existing rows stay visible) |
