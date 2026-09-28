@@ -1660,12 +1660,15 @@ test("An empty Sonarr series list or dry run never removes an enrolment", async 
     assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
     stub.restore();
 
-    // Removing an enrolment restores Plex artwork, so dry run only previews it.
-    const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404 });
+    // Removing an enrolment restores Plex artwork, so dry run only previews it. An
+    // ignore record needs no external call, so it is still removed.
+    const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 5: 404 });
+    services.ignoreRecommendation(5, "Series 5");
     db.updateAppSettings({ dryRun: true });
     try {
       await services.refreshSonarrLibrary();
       assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+      assert.deepEqual(db.listIgnoredRecommendationIds(), []);
     } finally {
       dryRunStub.restore();
     }
