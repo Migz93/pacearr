@@ -74,6 +74,12 @@ function unixToIso(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? new Date(parsed * 1000).toISOString() : new Date().toISOString();
 }
 
+// Sonarr and Plex paths are compared exactly; only a trailing separator is
+// ignored. Differing mount points are deliberately not mapped (#201).
+function normalizeFolder(folder: string) {
+  return folder.replace(/[\\/]+$/, "");
+}
+
 export function buildPlexServerUrl(serverUrl: string, pathname: string): URL {
   return buildIntegrationUrl(serverUrl, pathname);
 }
@@ -265,8 +271,12 @@ export class PlexIntegration {
     return ids.tvdbId || ids.imdbId ? { status: "resolved", ...ids } : { status: "missing", ...ids };
   }
 
-  /** Finds a show only by immutable external IDs. Artwork changes must never use a title match. */
-  async findShowForArtwork(ids: { tvdbId: number | null; imdbId: string | null }): Promise<PlexShowArtworkItem | null> {
+  /**
+   * Finds a show only by immutable external IDs. Artwork changes must never use a title match.
+   * `path` is Sonarr's folder for the series; it only breaks a tie between copies of the
+   * same Plex show in several libraries, and never overrides the ID match.
+   */
+  async findShowForArtwork(ids: { tvdbId: number | null; imdbId: string | null; path?: string | null }): Promise<PlexShowArtworkItem | null> {
     if (!ids.tvdbId && !ids.imdbId) return null;
     const sections = await this.requestServerXml("/library/sections");
     const tvSections = toArray(sections?.MediaContainer?.Directory)
@@ -282,7 +292,10 @@ export class PlexIntegration {
       matches: (await Promise.all(tvSections.map((section) => this.findArtworkGuidInSection(section, identifier)))).flat(),
     })));
     const nonEmpty = matchesByIdentifier.filter((result) => result.matches.length > 0);
-    if (nonEmpty.length === 0) return null;
+    if (nonEmpty.length === 0) {
+      this.logger.warn("Plex artwork lookup found no show by ID", { identifiers });
+      return null;
+    }
 
     // All supplied identifiers must resolve to the same Plex show. A bad
     // upstream match must never change an unrelated library item's poster.
@@ -293,20 +306,42 @@ export class PlexIntegration {
     const candidates = nonEmpty.flatMap((result) => result.matches).filter((match, index, matches) =>
       canonicalGuids.has(match.guid) && matches.findIndex((other) => other.sectionKey === match.sectionKey && other.ratingKey === match.ratingKey) === index
     );
-    if (candidates.length !== 1) {
-      this.logger.warn("Plex artwork lookup is missing or ambiguous", {
+    if (candidates.length === 0 || new Set(candidates.map((candidate) => candidate.guid)).size > 1) {
+      this.logger.warn("Plex artwork lookup matched different shows", {
         identifiers,
-        matches: candidates.map((candidate) => ({ section: candidate.sectionTitle, ratingKey: candidate.ratingKey, guid: candidate.guid })),
+        matches: nonEmpty.flatMap((result) => result.matches.map((match) => ({ identifier: result.identifier, section: match.sectionTitle, ratingKey: match.ratingKey, guid: match.guid }))),
       });
       return null;
     }
-    const item = candidates[0]!;
+    let item = candidates[0]!;
+    if (candidates.length > 1) {
+      // The same Plex show in several libraries. Only the copy in Sonarr's
+      // folder reflects the seasons Pacearr keeps, so only it gets artwork.
+      const tied = await Promise.all(candidates.map(async (candidate) => ({ ...candidate, folders: await this.getItemFolders(candidate.ratingKey) })));
+      const sonarrFolder = ids.path ? normalizeFolder(ids.path) : null;
+      const inSonarrFolder = sonarrFolder ? tied.filter((candidate) => candidate.folders.some((folder) => normalizeFolder(folder) === sonarrFolder)) : [];
+      if (inSonarrFolder.length !== 1) {
+        this.logger.warn("Plex artwork lookup found the same show in several libraries, but not exactly one in Sonarr's folder", {
+          identifiers,
+          sonarrPath: ids.path ?? null,
+          matches: tied.map((candidate) => ({ section: candidate.sectionTitle, ratingKey: candidate.ratingKey, folders: candidate.folders })),
+        });
+        return null;
+      }
+      item = inSonarrFolder[0]!;
+    }
     const children = await this.requestServerXml(`/library/metadata/${encodeURIComponent(item.ratingKey)}/children`);
     const seasons = toArray(children?.MediaContainer?.Directory)
       .map((season) => attr(season))
       .filter((season) => season.type === "season" && Number(season.index) > 0 && season.ratingKey && season.thumb)
       .map((season) => ({ ratingKey: String(season.ratingKey), seasonNumber: Number(season.index), thumb: String(season.thumb) }));
     return { ratingKey: item.ratingKey, thumb: String(item.thumb ?? ""), seasons };
+  }
+
+  private async getItemFolders(ratingKey: string): Promise<string[]> {
+    const data = await this.requestServerXml(`/library/metadata/${encodeURIComponent(ratingKey)}`);
+    const item = first(data?.MediaContainer?.Directory ?? data?.MediaContainer?.Metadata);
+    return toArray(item?.Location).map((location) => String(attr(location).path ?? "")).filter(Boolean);
   }
 
   async getSeasonPilotArtwork(season: PlexSeasonArtworkItem): Promise<PlexEpisodeArtworkItem | null> {

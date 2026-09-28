@@ -232,6 +232,11 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | `findShowForArtwork` requests a single seed item per TV section | Regression for #200 — the seed request to `/library/sections/{key}/all`, which fetches one show so the lookup can call that show's `/matches` endpoint, sends both `X-Plex-Container-Start=0` and `X-Plex-Container-Size=1` as URL query parameters. Plex ignores the size without the start, so dropping it downloads the whole section per identifier and times out under load |
+| `findShowForArtwork` picks the copy in Sonarr's folder when one show is in several libraries | Regression for #201 — when the ID match finds one Plex GUID in two TV sections, the copy whose `Location` folder equals Sonarr's `series.path` (ignoring a trailing `/` or `\`) gets the artwork, not the lookup being skipped as ambiguous |
+| `findShowForArtwork` skips a show in several libraries when none is in Sonarr's folder | The folder tie-break needs an exact match; with no copy in Sonarr's folder (for example differing mount points) the lookup still returns `null` rather than guessing a library |
+| `findShowForArtwork` skips a show in several libraries when more than one is in Sonarr's folder | The folder match must be unique; when two libraries point at the same folder, the lookup returns `null` instead of picking the first matching copy |
+| `findShowForArtwork` never lets Sonarr's folder pick between different shows | Candidates with different Plex GUIDs stay ambiguous even when one folder matches Sonarr's path, so a bad upstream ID match can never change an unrelated show's poster (#111) |
+| `findShowForArtwork` uses a single match whether or not its folder is Sonarr's | The folder is only a tie-break; a single ID match is used as before, including when no Sonarr path is supplied |
 
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 

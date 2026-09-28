@@ -195,6 +195,7 @@ export interface SonarrSeries {
   tvdbId?: number;
   imdbId?: string | null;
   year?: number;
+  path?: string;
   status?: string;
   added?: string;
   monitored?: boolean;
