@@ -487,6 +487,7 @@ export class PacearrServices {
       return;
     }
 
+    const dryRun = this.isDryRun();
     let removed = 0;
     for (const seriesId of candidateIds) {
       const rolling = rollingBySeries.get(seriesId) ?? null;
@@ -498,26 +499,29 @@ export class PacearrServices {
         } catch (error) {
           if (!isNotFoundError(error)) throw error;
         }
+        const details = { seriesId, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) };
+        if (dryRun) {
+          // Dry run changes nothing, Pacearr's own records included; it only previews.
+          this.db.addHistory("info", "dry_run.show.removed_from_sonarr", title, { ...details, dryRun });
+          this.logger.info("Dry run: would remove Pacearr records for a series deleted from Sonarr", { ...details, title });
+          continue;
+        }
         if (rolling && !(await this.removeEnrollmentOfDeletedSeries(rolling))) continue;
         this.db.unignoreRecommendation(seriesId);
         this.db.removeRecommendationFromCache(seriesId);
-        this.db.addHistory("info", "show.removed_from_sonarr", title, { seriesId, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) });
-        this.logger.info("Removed Pacearr records for a series deleted from Sonarr", { seriesId, title, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) });
+        this.db.addHistory("info", "show.removed_from_sonarr", title, { ...details, dryRun });
+        this.logger.info("Removed Pacearr records for a series deleted from Sonarr", { ...details, title });
         removed++;
       } catch (error) {
         // Kept for the next library refresh to retry.
         this.logger.warn("Skipped removing Pacearr records for a series missing from Sonarr", { seriesId, title, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    this.logger.info("Deleted-series check complete", { candidates: candidateIds.length, removed });
+    this.logger.info("Deleted-series check complete", { candidates: candidateIds.length, removed, dryRun });
   }
 
-  /** Returns false when the enrolment was kept (dry run or a busy show). */
+  /** Returns false when the enrolment was kept because another operation holds the show. */
   private async removeEnrollmentOfDeletedSeries(rolling: RollingShowRecord): Promise<boolean> {
-    if (this.isDryRun()) {
-      this.logger.info("Dry run: would remove the enrolment of a series deleted from Sonarr", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title });
-      return false;
-    }
     const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
     if (operation === null) {
       this.logger.info("Skipped removing a deleted series' enrolment while another show operation is running", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title });

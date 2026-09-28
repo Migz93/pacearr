@@ -31,8 +31,9 @@ list are checked and removed only when that is confirmed.
 |---|---|
 | Candidates | Enrolled or ignored series absent from the fetched list; an empty list is skipped entirely |
 | Confirmation | A direct `series/{id}` lookup must return 404; any other failure keeps the records |
-| Enrolment | Plex artwork is restored first (items Plex no longer has are skipped); a failed restore keeps the enrolment and its backups. Sonarr monitoring is not touched. Skipped in dry run and while another operation holds the show |
+| Enrolment | Plex artwork is restored first (items Plex no longer has are skipped); a failed restore keeps the enrolment and its backups. Sonarr monitoring is not touched. Skipped while another operation holds the show |
 | Ignore | Removed with no external calls |
+| Dry run | Nothing is removed; each removal is previewed as a `dry_run.show.removed_from_sonarr` history event |
 | Record | `show.removed_from_sonarr` history event; retried on the next refresh when kept |
 
 ## Data Retention

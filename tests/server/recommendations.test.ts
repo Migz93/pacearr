@@ -1649,7 +1649,7 @@ test("A library refresh removes Pacearr records only for series Sonarr confirms 
   }
 });
 
-test("An empty Sonarr series list or dry run never removes an enrolment", async () => {
+test("An empty Sonarr series list or dry run never removes Pacearr records", async () => {
   const { db, services, cleanup } = createHarness();
   const stub = installDeletedSeriesFetchStub([], { 2: 404 });
   try {
@@ -1660,15 +1660,17 @@ test("An empty Sonarr series list or dry run never removes an enrolment", async 
     assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
     stub.restore();
 
-    // Removing an enrolment restores Plex artwork, so dry run only previews it. An
-    // ignore record needs no external call, so it is still removed.
+    // Dry run changes nothing, Pacearr's own records included; it previews each removal.
     const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 5: 404 });
     services.ignoreRecommendation(5, "Series 5");
     db.updateAppSettings({ dryRun: true });
     try {
       await services.refreshSonarrLibrary();
       assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
-      assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+      assert.deepEqual(db.listIgnoredRecommendationIds(), [5]);
+      const history = db.listHistory(10);
+      assert.equal(history.some((entry) => entry.action === "show.removed_from_sonarr"), false);
+      assert.deepEqual(history.filter((entry) => entry.action === "dry_run.show.removed_from_sonarr").map((entry) => entry.title).sort(), ["Series 2", "Series 5"]);
     } finally {
       dryRunStub.restore();
     }
