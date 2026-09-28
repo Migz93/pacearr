@@ -89,7 +89,7 @@ test("findShowForArtwork picks the copy in Sonarr's folder when one show is in s
   const show = await findWithFakePlex(SAME_SHOW_TWO_LIBRARIES, SAME_SHOW_IDS, {
     tvdbId: 337907,
     imdbId: "tt7235466",
-    // A trailing slash is the only difference normalised away.
+    // Differs only by a trailing separator, which is normalised away.
     path: "/mnt/user/media/TV/TV/9-1-1 (2018) [imdb-tt7235466]/",
   });
   assert.equal(show?.ratingKey, "23828");

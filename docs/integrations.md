@@ -33,7 +33,7 @@ It never uses a title match for artwork changes.
 |---|---|
 | One Plex item | That item gets artwork |
 | Different Plex shows (different Plex GUIDs) | Skipped |
-| One Plex show in several TV libraries | Only the copy whose Plex folder (`Location` path) equals Sonarr's `series.path` gets artwork; skipped if not exactly one does. Paths are compared exactly apart from a trailing slash, so differing Sonarr/Plex mount points are skipped |
+| One Plex show in several TV libraries | Only the copy whose Plex folder (`Location` path) equals Sonarr's `series.path` gets artwork; skipped if not exactly one does. Paths are compared exactly apart from a trailing path separator (`/` or `\`), so differing Sonarr/Plex mount points are skipped |
 
 Pacearr saves each affected
 season's original poster under `/config/plex-artwork`, overlays `WATCH E01 TO
