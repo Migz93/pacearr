@@ -93,7 +93,9 @@ detect only newly appearing IDs by list comparison. A triage run that enrolls a
 show then starts a library refresh (and so a recommendation calculation) so the
 new show has its poster and Sonarr stats.
 
-The caches only enrich the Shows tabs; Pacearr's own records decide membership:
+The caches only enrich the Shows tabs; Pacearr's own records decide membership. A
+library refresh removes the records of a series Sonarr confirms deleted — see
+[maintenance.md](maintenance.md#series-deleted-from-sonarr).
 
 | Tab | Membership | Enrichment |
 |---|---|---|

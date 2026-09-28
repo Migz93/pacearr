@@ -24,6 +24,7 @@ import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
+import { isNotFoundError } from "./integrations/request.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
@@ -462,6 +463,78 @@ export class PacearrServices {
     }))));
     const generatedAt = this.db.saveSonarrLibraryCache(items);
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
+    await this.removeSeriesDeletedFromSonarr(series, sonarr);
+  }
+
+  /**
+   * Drops Pacearr's own records (an enrolment or an ignore) for a series Sonarr no longer
+   * has, so it cannot linger on the Enrolled or Ignored tab with no way to act on it.
+   * Absence from the series list is only a lead: each series is confirmed by a direct
+   * lookup, and only a 404 counts. An empty list is never trusted, so an empty or
+   * misconfigured Sonarr cannot wipe every enrolment.
+   */
+  private async removeSeriesDeletedFromSonarr(series: SonarrSeries[], sonarr: SonarrIntegration): Promise<void> {
+    if (series.length === 0) {
+      this.logger.debug("Skipped deleted-series check because Sonarr returned no series");
+      return;
+    }
+    const present = new Set(series.map((item) => item.id));
+    const rollingBySeries = new Map(this.db.listRollingShows().filter((show) => !present.has(show.sonarrSeriesId)).map((show) => [show.sonarrSeriesId, show]));
+    const ignoredBySeries = new Map(this.db.listIgnoredRecommendations().filter((record) => !present.has(record.sonarrSeriesId)).map((record) => [record.sonarrSeriesId, record]));
+    const candidateIds = [...new Set([...rollingBySeries.keys(), ...ignoredBySeries.keys()])];
+    if (candidateIds.length === 0) {
+      this.logger.debug("No Pacearr records reference a series missing from Sonarr");
+      return;
+    }
+
+    let removed = 0;
+    for (const seriesId of candidateIds) {
+      const rolling = rollingBySeries.get(seriesId) ?? null;
+      const title = rolling?.title ?? ignoredBySeries.get(seriesId)?.title ?? String(seriesId);
+      try {
+        try {
+          await sonarr.getSeriesById(seriesId);
+          continue; // Still in Sonarr; the list was a stale read.
+        } catch (error) {
+          if (!isNotFoundError(error)) throw error;
+        }
+        if (rolling && !(await this.removeEnrollmentOfDeletedSeries(rolling))) continue;
+        this.db.unignoreRecommendation(seriesId);
+        this.db.removeRecommendationFromCache(seriesId);
+        this.db.addHistory("info", "show.removed_from_sonarr", title, { seriesId, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) });
+        this.logger.info("Removed Pacearr records for a series deleted from Sonarr", { seriesId, title, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) });
+        removed++;
+      } catch (error) {
+        // Kept for the next library refresh to retry.
+        this.logger.warn("Skipped removing Pacearr records for a series missing from Sonarr", { seriesId, title, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    this.logger.info("Deleted-series check complete", { candidates: candidateIds.length, removed });
+  }
+
+  /** Returns false when the enrolment was kept (dry run or a busy show). */
+  private async removeEnrollmentOfDeletedSeries(rolling: RollingShowRecord): Promise<boolean> {
+    if (this.isDryRun()) {
+      this.logger.info("Dry run: would remove the enrolment of a series deleted from Sonarr", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title });
+      return false;
+    }
+    const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
+    if (operation === null) {
+      this.logger.info("Skipped removing a deleted series' enrolment while another show operation is running", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title });
+      return false;
+    }
+    try {
+      // Sonarr can delete its record while Plex keeps the show, still wearing Pacearr's
+      // overlays. Restore those first; a failure keeps the enrolment and its backups.
+      const artwork = this.db.listPlexArtwork(rolling.id);
+      if (artwork.length > 0) await this.plexArtwork.restoreAll(this.getPlex(), rolling.id, { skipMissingItems: true });
+      this.db.deleteRollingShow(rolling.id);
+      this.db.completeNewShowTriageEnrollment(rolling.sonarrSeriesId);
+      this.plexArtwork.removeBackups(artwork);
+      return true;
+    } finally {
+      this.releaseSeriesOperation(rolling.sonarrSeriesId, operation);
+    }
   }
 
   /** Returns how many shows were automatically enrolled. */

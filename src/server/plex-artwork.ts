@@ -5,6 +5,7 @@ import sharp from "sharp";
 import type { PlexArtworkRecord, RollingShowRecord, SonarrSeries } from "../shared/types.js";
 import type { PacearrDatabase } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeArtworkItem, type PlexSeasonArtworkItem } from "./integrations/plex.js";
+import { isNotFoundError } from "./integrations/request.js";
 import type { Logger } from "./logger.js";
 
 type ArtworkItem = { ratingKey: string; seasonNumber: number; thumb: string; episodeNumber?: number };
@@ -65,9 +66,19 @@ export class PlexArtworkService {
     }
   }
 
-  async restoreAll(plex: PlexIntegration, rollingShowId: number): Promise<void> {
+  /**
+   * `skipMissingItems` treats a Plex item that no longer exists as having nothing to
+   * restore, for a show whose series was deleted, rather than failing the whole restore.
+   */
+  async restoreAll(plex: PlexIntegration, rollingShowId: number, options: { skipMissingItems?: boolean } = {}): Promise<void> {
     for (const record of this.db.listPlexArtwork(rollingShowId).filter((item) => item.overlayApplied)) {
-      await plex.uploadPoster(record.plexItemRatingKey, fs.readFileSync(record.originalPosterPath));
+      try {
+        await plex.uploadPoster(record.plexItemRatingKey, fs.readFileSync(record.originalPosterPath));
+      } catch (error) {
+        if (!options.skipMissingItems || !isNotFoundError(error)) throw error;
+        this.logger.info("Plex item no longer exists; no rolling artwork to restore", { rollingShowId, itemType: record.itemType, seasonNumber: record.seasonNumber });
+        continue;
+      }
       this.db.setPlexArtworkOverlayApplied(record.id, false);
       this.logger.info("Plex rolling artwork restored", { rollingShowId, itemType: record.itemType, seasonNumber: record.seasonNumber });
     }

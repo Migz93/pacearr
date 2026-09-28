@@ -1,6 +1,6 @@
 import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeries, SonarrSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
 
 export class SonarrIntegration {
   constructor(private readonly settings: SonarrSettings, private readonly logger: Logger, private readonly dryRun = true) {}
@@ -55,7 +55,7 @@ export class SonarrIntegration {
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       this.logger.warn("Sonarr request failed", { method, pathname, status: response.status, statusText: response.statusText });
-      throw new Error(`Sonarr ${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+      throw new IntegrationHttpError(`Sonarr ${response.status} ${response.statusText}: ${body.slice(0, 300)}`, response.status);
     }
     if (response.status === 204) return undefined as T;
     // Sonarr commonly returns HTTP 200 with an empty body for a successful

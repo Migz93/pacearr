@@ -12,6 +12,7 @@ the jobs that own the relevant state.
 |---|---|
 | `rolling-reconcile` job | Brings enrolled shows back to the monitoring state implied by enabled viewers' progress; also prunes `history_events` past `historyRetentionDays` |
 | Watch-event processing | Progressive cleanup shrinks older expanded seasons back to pilot-only |
+| `sonarr-library-refresh` job | Removes the enrolment or ignore record of a series deleted from Sonarr (see below) |
 | `job_run_state` | Durable job state across restarts |
 | `history_events` | Audit history of what Pacearr did |
 
@@ -20,6 +21,19 @@ while processing watch events and can shrink older expanded seasons back to
 pilot-only when all enabled users have moved beyond them. See
 [rolling-monitoring.md](rolling-monitoring.md#progressive-cleanup) for the
 authoritative behaviour and safety boundary.
+
+### Series deleted from Sonarr
+
+After each library refresh, Pacearr records whose series is missing from Sonarr's
+list are checked and removed only when that is confirmed.
+
+| Step | Rule |
+|---|---|
+| Candidates | Enrolled or ignored series absent from the fetched list; an empty list is skipped entirely |
+| Confirmation | A direct `series/{id}` lookup must return 404; any other failure keeps the records |
+| Enrolment | Plex artwork is restored first (items Plex no longer has are skipped); a failed restore keeps the enrolment and its backups. Sonarr monitoring is not touched. Skipped in dry run and while another operation holds the show |
+| Ignore | Removed with no external calls |
+| Record | `show.removed_from_sonarr` history event; retried on the next refresh when kept |
 
 ## Data Retention
 

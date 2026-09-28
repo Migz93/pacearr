@@ -23,6 +23,21 @@ export function buildIntegrationUrl(baseUrl: string, pathname: string): URL {
 }
 
 /**
+ * An integration's non-OK HTTP response. The status is kept so a caller can tell a
+ * record that no longer exists (404) from an integration that is unreachable or failing.
+ */
+export class IntegrationHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "IntegrationHttpError";
+  }
+}
+
+export function isNotFoundError(error: unknown): boolean {
+  return error instanceof IntegrationHttpError && error.status === 404;
+}
+
+/**
  * API keys are attached to these requests. Refusing redirects prevents a configured
  * integration from forwarding that credential to a different origin.
  */

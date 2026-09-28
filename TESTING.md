@@ -349,6 +349,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Enrolled lists every enrolled show, including one the Sonarr library cache has not seen yet | Regression for #196 — membership comes from `rolling_shows`, so an enrolment between library refreshes is listed and searchable immediately with its placeholder Sonarr fields flagged as unknown, while cached shows keep their Sonarr enrichment and the Sonarr tab stays a library-cache view |
 | Ignored lists every ignore record, whatever the recommendation cache holds | An ignored show below the savings threshold keeps its cached details, one absent from every cache is listed by its stored title with its size and savings flagged as unknown, and restoring removes it and updates the count |
 | Enrolling a show clears its ignore, and an enrolled show cannot be ignored | Enrolment removes the ignore record, a later ignore is refused, and a stale cached recommendation for the enrolled show is not listed |
+| A library refresh removes Pacearr records only for series Sonarr confirms deleted | A series missing from the list loses its enrolment or ignore only when its direct lookup returns 404; a stale list read (lookup 200) or a failing lookup (500) keeps the records, and each removal is recorded in history |
+| An empty Sonarr series list or dry run never removes an enrolment | An empty list (misconfigured or reset Sonarr) is not treated as every series deleted, and dry run only previews the enrolment removal because it restores Plex artwork |
+| A deleted series keeps its enrolment and artwork backup until Plex artwork is restored or gone | A failed Plex poster restore keeps the enrolment and the only copy of the original poster; once Plex reports the item gone (404), the enrolment and backup are removed |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
 

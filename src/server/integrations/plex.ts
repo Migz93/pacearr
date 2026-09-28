@@ -4,7 +4,7 @@ import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types
 import type { Logger } from "../logger.js";
 import { PLEX_USER_AGENT } from "../version.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
 const PLEX_TV_RESOURCES_URL = "https://plex.tv/api/v2/resources";
@@ -135,7 +135,7 @@ export class PlexIntegration {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
     const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } }, timeoutMs);
-    if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new IntegrationHttpError(`Plex ${response.status} ${response.statusText}`, response.status);
     return parseStringPromise(await response.text(), { explicitArray: false, mergeAttrs: false });
   }
 
@@ -146,7 +146,7 @@ export class PlexIntegration {
       ...options,
       headers: { "User-Agent": PLEX_USER_AGENT, ...(options.headers ?? {}) },
     });
-    if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new IntegrationHttpError(`Plex ${response.status} ${response.statusText}`, response.status);
     return response;
   }
 
