@@ -51,8 +51,10 @@ function isSortMode(value: string | null): value is SortMode {
   return SORT_MODES.includes(value as SortMode);
 }
 
-function sizeOf(item: ShowBrowserItem): number {
-  return item.kind === "recommendation" ? item.data.projectedSavingsBytes : item.data.sizeOnDiskBytes;
+/** Null when the value is not known yet (see `sonarrDetailsUnavailable`/`savingsUnavailable`). */
+function sizeOf(item: ShowBrowserItem): number | null {
+  if (item.kind === "recommendation") return item.data.savingsUnavailable ? null : item.data.projectedSavingsBytes;
+  return item.data.sonarrDetailsUnavailable ? null : item.data.sizeOnDiskBytes;
 }
 
 function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): number {
@@ -60,7 +62,11 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
     const cmp = a.data.title.localeCompare(b.data.title);
     return sort === "title-asc" ? cmp : -cmp;
   }
-  const cmp = sizeOf(a) - sizeOf(b);
+  const sizeA = sizeOf(a);
+  const sizeB = sizeOf(b);
+  // Unknown sizes sort last in both directions rather than posing as the smallest.
+  if (sizeA === null || sizeB === null) return (sizeA === null ? 1 : 0) - (sizeB === null ? 1 : 0);
+  const cmp = sizeA - sizeB;
   return sort === "size-asc" ? cmp : -cmp;
 }
 
@@ -246,15 +252,15 @@ function ShowsBrowser() {
 
   const sorted = useMemo(() => [...filtered].sort((a, b) => compareItems(a, b, sort)), [filtered, sort]);
 
-  const totalSavingsBytes = useMemo(
-    () => items.reduce((sum, item) => sum + (item.kind === "recommendation" ? item.data.projectedSavingsBytes : 0), 0),
-    [items]
-  );
-
-  const totalSizeOnDiskBytes = useMemo(
-    () => items.reduce((sum, item) => sum + (item.kind === "library" ? item.data.sizeOnDiskBytes : 0), 0),
-    [items]
-  );
+  // Both summaries are the same measure the size sort uses for this tab.
+  const sizeTotal = useMemo(() => {
+    const sizes = items.map(sizeOf);
+    const known = sizes.filter((size): size is number => size !== null);
+    const total = formatBytes(known.reduce((sum, size) => sum + size, 0));
+    const unknown = sizes.length - known.length;
+    if (known.length === 0 && unknown > 0) return "Unknown";
+    return unknown > 0 ? `${total} + ${unknown} unknown` : total;
+  }, [items]);
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -316,14 +322,14 @@ function ShowsBrowser() {
       {!loading && items.length > 0 && (isRecommendationTab ? (
         <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
           <SummaryChip label="Candidates" value={items.length} />
-          <SummaryChip label="Potential savings" value={formatBytes(totalSavingsBytes)} />
+          <SummaryChip label="Potential savings" value={sizeTotal} />
         </div>
       ) : tab === "enrolled" && (
         // The tab people live on had no summary at all, while the two recommendation
         // tabs did. Both numbers are already in the list response.
         <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
           <SummaryChip label="Enrolled shows" value={items.length} />
-          <SummaryChip label="Size on disk" value={formatBytes(totalSizeOnDiskBytes)} />
+          <SummaryChip label="Size on disk" value={sizeTotal} />
         </div>
       ))}
       {loading ? (

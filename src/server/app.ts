@@ -787,7 +787,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
     if (!title) return res.status(400).json({ error: "A show title is required." });
-    services.ignoreRecommendation(Number(req.params.seriesId), title);
+    if (!services.ignoreRecommendation(Number(req.params.seriesId), title)) {
+      return res.status(409).json({ error: "An enrolled show cannot be ignored." });
+    }
     res.json({ ok: true });
   });
   app.delete("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {

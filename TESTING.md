@@ -116,6 +116,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 | Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
+| Migration 25 clears ignore records for shows that are already enrolled | A show can no longer be both enrolled and ignored; an upgrade removes overlaps earlier versions allowed and leaves other ignore records alone |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -345,6 +346,12 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Scheduled reconciliation clears prefetches promoted to a retained season | When active viewer progress makes a prefetched season fully retained, the sweep expands it through the same `expandSeason` path a live watch uses (audited as `active-progress-reconcile`), which removes its per-episode prefetch records so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
 | Progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once | The complete cleanup batch is evaluated together, so one eligible season does not incorrectly protect a file needed only by another eligible season |
+| Enrolled lists every enrolled show, including one the Sonarr library cache has not seen yet | Regression for #196 — membership comes from `rolling_shows`, so an enrolment between library refreshes is listed and searchable immediately with its placeholder Sonarr fields flagged as unknown, while cached shows keep their Sonarr enrichment and the Sonarr tab stays a library-cache view |
+| Ignored lists every ignore record, whatever the recommendation cache holds | An ignored show below the savings threshold keeps its cached details, one absent from every cache is listed by its stored title with its size and savings flagged as unknown, and restoring removes it and updates the count |
+| Enrolling a show clears its ignore, and an enrolled show cannot be ignored | Enrolment removes the ignore record, a later ignore is refused, and a stale cached recommendation for the enrolled show is not listed |
+| A library refresh removes Pacearr records only for series Sonarr confirms deleted | A series missing from the list loses its enrolment or ignore only when its direct lookup returns 404; a stale list read (lookup 200) or a failing lookup (500) keeps the records, and each removal is recorded in history |
+| An empty Sonarr series list or dry run never removes Pacearr records | An empty list (misconfigured or reset Sonarr) is not treated as every series deleted, and dry run keeps both the enrolment and the ignore record, recording a `dry_run.` history event for each instead |
+| A deleted series keeps its enrolment and artwork backup until Plex artwork is restored or gone | A failed Plex poster restore keeps the enrolment and the only copy of the original poster; once Plex reports the item gone (404), the enrolment and backup are removed |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
 

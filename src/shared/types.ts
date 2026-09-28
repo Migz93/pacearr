@@ -261,6 +261,8 @@ export interface ShowListItem {
   sizeOnDiskBytes: number;
   viewerCount: number;
   viewers: ShowUserProgress[];
+  /** Listed from Pacearr's own record before the library cache has the show: season, episode, size and status fields are placeholders, not Sonarr values. */
+  sonarrDetailsUnavailable?: boolean;
 }
 
 export interface ShowSeasonSummary {
@@ -369,6 +371,10 @@ export interface ShowRecommendation {
   viewers: ShowUserProgress[];
   projectedSavingsBytes: number;
   ignored: boolean;
+  /** An ignored show with no library cache entry: season, episode, size and status fields are placeholders. */
+  sonarrDetailsUnavailable?: boolean;
+  /** An ignored show with no calculated recommendation: savings and retained/dropped seasons are placeholders. */
+  savingsUnavailable?: boolean;
 }
 
 export interface RecommendationsResponse {

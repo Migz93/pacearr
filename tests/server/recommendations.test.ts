@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PacearrDatabase } from "../../src/server/db/index.js";
@@ -1507,6 +1507,221 @@ test("discovering Plex users leaves history unlinked when its account ID belongs
     assert.equal(db.listUsers().length, 4);
   } finally {
     globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+test("Enrolled lists every enrolled show, including one the Sonarr library cache has not seen yet", () => {
+  // Regression for #196: an automatic enrolment between six-hourly library refreshes
+  // was recorded but missing from Enrolled until someone pressed Refresh.
+  const { db, services, cleanup } = createHarness();
+  const cached: SonarrSeries = {
+    id: 1,
+    title: "Cached Show",
+    year: 2001,
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 3, sizeOnDisk: 5_000 } }],
+    statistics: { sizeOnDisk: 5_000 },
+  };
+  try {
+    db.saveSonarrLibraryCache([{ series: cached, posterUrl: "/images/cached.jpg" }]);
+    db.upsertRollingShow(cached);
+    db.upsertRollingShow({ id: 2, title: "The Graham Norton Show", year: 2007 });
+
+    const enrolled = services.listShows({ enrolledOnly: true });
+    assert.deepEqual(enrolled.map((show) => [show.sonarrSeriesId, show.enrolled]), [[1, true], [2, true]]);
+    // A cached show keeps its Sonarr enrichment; the uncached one uses Pacearr's record.
+    assert.equal(enrolled[0]?.posterUrl, "/images/cached.jpg");
+    assert.equal(enrolled[0]?.sizeOnDiskBytes, 5_000);
+    assert.equal(enrolled[0]?.sonarrDetailsUnavailable, undefined);
+    assert.equal(enrolled[1]?.year, 2007);
+    assert.equal(enrolled[1]?.posterUrl, null);
+    // Its zeroed Sonarr fields are flagged, so the client shows them as unknown.
+    assert.equal(enrolled[1]?.sonarrDetailsUnavailable, true);
+    assert.deepEqual(services.listShows({ enrolledOnly: true, query: "grah" }).map((show) => show.sonarrSeriesId), [2]);
+    // The Sonarr tab remains a view of the library cache.
+    assert.deepEqual(services.listShows().map((show) => show.sonarrSeriesId), [1]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Ignored lists every ignore record, whatever the recommendation cache holds", () => {
+  const { db, services, cleanup } = createHarness();
+  const candidate = {
+    sonarrSeriesId: 10, title: "Small Savings", year: 2010, posterUrl: null, status: "ended", seasonCount: 2, episodeCount: 20,
+    sizeOnDiskBytes: 500, retainedSeasons: [1], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 400, ignored: false,
+  };
+  try {
+    db.updateAppSettings({ recommendationMinimumSavingsGb: 1 });
+    db.saveRecommendationCache([candidate]);
+    services.ignoreRecommendation(10, "Small Savings");
+    services.ignoreRecommendation(11, "Not In Any Cache");
+
+    const result = services.listRecommendations(true);
+    const byId = new Map(result.candidates.map((item) => [item.sonarrSeriesId, item]));
+    assert.equal(result.ignoredCount, 2);
+    assert.deepEqual([...byId.keys()].sort(), [10, 11]);
+    // Below the savings threshold, the cached candidate still supplies its details.
+    assert.equal(byId.get(10)?.projectedSavingsBytes, 400);
+    assert.equal(byId.get(10)?.ignored, true);
+    assert.equal(byId.get(10)?.savingsUnavailable, undefined);
+    // With no cached data, the stored title keeps the record visible and restorable.
+    assert.equal(byId.get(11)?.title, "Not In Any Cache");
+    assert.equal(byId.get(11)?.ignored, true);
+    assert.equal(byId.get(11)?.savingsUnavailable, true);
+    assert.equal(byId.get(11)?.sonarrDetailsUnavailable, true);
+
+    services.unignoreRecommendation(11);
+    const restored = services.listRecommendations(true);
+    assert.deepEqual(restored.candidates.map((item) => item.sonarrSeriesId), [10]);
+    assert.equal(restored.ignoredCount, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Enrolling a show clears its ignore, and an enrolled show cannot be ignored", () => {
+  const { db, services, cleanup } = createHarness();
+  const candidate = {
+    sonarrSeriesId: 20, title: "Now Enrolled", year: null, posterUrl: null, status: null, seasonCount: 2, episodeCount: 4,
+    sizeOnDiskBytes: 100, retainedSeasons: [1], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 50, ignored: false,
+  };
+  try {
+    // A recommendation calculated before the enrolment must not keep listing the show.
+    db.saveRecommendationCache([candidate]);
+    assert.equal(services.ignoreRecommendation(20, "Now Enrolled"), true);
+    db.upsertRollingShow({ id: 20, title: "Now Enrolled" });
+
+    assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+    assert.equal(services.ignoreRecommendation(20, "Now Enrolled"), false);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+    const result = services.listRecommendations(true);
+    assert.deepEqual(result.candidates, []);
+    assert.equal(result.ignoredCount, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+/**
+ * Sonarr answers its series list with `listed` and each by-ID lookup with the status in
+ * `byIdStatus` (200 when absent); Plex answers poster uploads with `plexPosterStatus`.
+ */
+function installDeletedSeriesFetchStub(listed: SonarrSeries[], byIdStatus: Record<number, number>, plexPosterStatus = 200) {
+  const originalFetch = globalThis.fetch;
+  const posterUploads: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex" && url.pathname.endsWith("/posters")) {
+      posterUploads.push(url.pathname);
+      return new Response("", { status: plexPosterStatus });
+    }
+    if (url.pathname === "/api/v3/series") return jsonResponse(listed);
+    const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
+    if (byId) {
+      const id = Number(byId[1]);
+      const status = byIdStatus[id] ?? 200;
+      return status === 200 ? jsonResponse({ id, title: `Series ${id}` }) : new Response("{}", { status });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  return { posterUploads, restore: () => { globalThis.fetch = originalFetch; } };
+}
+
+test("A library refresh removes Pacearr records only for series Sonarr confirms deleted", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false });
+  // 2 and 5 are deleted (404); 3 is missing only from a stale list read; 4 and 6 fail to look up.
+  const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 4: 500, 5: 404, 6: 500 });
+  try {
+    for (const id of [1, 2, 3, 4]) db.upsertRollingShow({ id, title: `Series ${id}` });
+    services.ignoreRecommendation(5, "Series 5");
+    services.ignoreRecommendation(6, "Series 6");
+
+    await services.refreshSonarrLibrary();
+
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId).sort(), [1, 3, 4]);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), [6]);
+    assert.deepEqual(db.listHistory(10).filter((entry) => entry.action === "show.removed_from_sonarr").map((entry) => entry.title).sort(), ["Series 2", "Series 5"]);
+  } finally {
+    stub.restore();
+    cleanup();
+  }
+});
+
+test("An empty Sonarr series list or dry run never removes Pacearr records", async () => {
+  const { db, services, cleanup } = createHarness();
+  const stub = installDeletedSeriesFetchStub([], { 2: 404 });
+  try {
+    db.upsertRollingShow({ id: 2, title: "Series 2" });
+    db.updateAppSettings({ dryRun: false });
+    // An empty list could be a misconfigured or freshly reset Sonarr, not a deletion.
+    await services.refreshSonarrLibrary();
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    stub.restore();
+
+    // Dry run changes nothing, Pacearr's own records included; it previews each removal.
+    const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 5: 404 });
+    services.ignoreRecommendation(5, "Series 5");
+    db.updateAppSettings({ dryRun: true });
+    try {
+      await services.refreshSonarrLibrary();
+      assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+      assert.deepEqual(db.listIgnoredRecommendationIds(), [5]);
+      const history = db.listHistory(10);
+      assert.equal(history.some((entry) => entry.action === "show.removed_from_sonarr"), false);
+      assert.deepEqual(history.filter((entry) => entry.action === "dry_run.show.removed_from_sonarr").map((entry) => entry.title).sort(), ["Series 2", "Series 5"]);
+    } finally {
+      dryRunStub.restore();
+    }
+  } finally {
+    stub.restore();
+    cleanup();
+  }
+});
+
+test("A deleted series keeps its enrolment and artwork backup until Plex artwork is restored or gone", async () => {
+  const { db, services, cleanup } = createHarness();
+  const backupDir = mkdtempSync(path.join(os.tmpdir(), "pacearr-artwork-test-"));
+  const originalPosterPath = path.join(backupDir, "original.jpg");
+  writeFileSync(originalPosterPath, "original poster");
+  db.updateAppSettings({ dryRun: false });
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const rolling = db.upsertRollingShow({ id: 2, title: "Series 2" });
+  const artwork = db.createPlexArtwork({
+    rollingShowId: rolling.id,
+    plexShowRatingKey: "100",
+    plexItemRatingKey: "101",
+    itemType: "season",
+    seasonNumber: 1,
+    originalPosterPath,
+    overlayPosterPath: path.join(backupDir, "overlay.jpg"),
+    overlaySha256: "abc123",
+  });
+  db.setPlexArtworkOverlayApplied(artwork.id, true);
+  try {
+    // An unreachable Plex must not cost the only copy of the original poster.
+    const failing = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404 }, 500);
+    try {
+      await services.refreshSonarrLibrary();
+    } finally {
+      failing.restore();
+    }
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    assert.equal(existsSync(originalPosterPath), true);
+
+    // Plex no longer having the item leaves nothing to restore.
+    const gone = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404 }, 404);
+    try {
+      await services.refreshSonarrLibrary();
+      assert.deepEqual(gone.posterUploads, ["/library/metadata/101/posters"]);
+    } finally {
+      gone.restore();
+    }
+    assert.deepEqual(db.listRollingShows(), []);
+    assert.equal(existsSync(originalPosterPath), false);
+  } finally {
+    rmSync(backupDir, { recursive: true, force: true });
     cleanup();
   }
 });
