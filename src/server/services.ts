@@ -1135,8 +1135,9 @@ export class PacearrServices {
 
   /**
    * Excluding an episode unmonitors it once and stops Pacearr monitoring or searching it,
-   * even if its season later expands. Including it restores the monitoring its season
-   * implies: monitored when expanded, otherwise only if it is the pilot.
+   * even if its season later expands, until that season is trimmed back to its pilot.
+   * Including it restores the monitoring its season implies: monitored when expanded,
+   * otherwise only if it is the pilot.
    */
   async setEpisodeExcluded(rollingShowId: number, seasonNumber: number, episodeNumber: number, exclude: boolean): Promise<RunResult> {
     const show = this.db.getRollingShow(rollingShowId);
@@ -1274,7 +1275,15 @@ export class PacearrServices {
     const prefetchedEpisodeIds = rolling ? prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(rolling.id)
       .filter((prefetched) => !excludedPrefetched.has(prefetched.seasonNumber))) : [];
     const fileDeletionEnabled = deleteFiles ?? settings.cleanupDeletesFiles;
-    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds, rolling ? this.db.getRollingExclusions(rolling.id) : NO_EXCLUSIONS);
+    const storedExclusions = rolling ? this.db.getRollingExclusions(rolling.id) : NO_EXCLUSIONS;
+    // An expanded season this plan no longer retains is trimmed, which resets its episode
+    // exclusions (see clearExcludedEpisodesForSeasons). Plan it as already reset, so it
+    // reaches the ordinary pilot-only state in this pass.
+    const keptSeasons = new Set(retainedSeasons.filter((seasonNumber) => !storedExclusions.seasons.includes(seasonNumber)));
+    const trimmedSeasons = new Set(rolling?.expandedSeasons.filter((seasonNumber) => !keptSeasons.has(seasonNumber)) ?? []);
+    const resetExcludedEpisodes = storedExclusions.episodes.filter((episode) => trimmedSeasons.has(episode.seasonNumber));
+    const exclusions = { seasons: storedExclusions.seasons, episodes: storedExclusions.episodes.filter((episode) => !trimmedSeasons.has(episode.seasonNumber)) };
+    const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds, exclusions);
     this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
@@ -1375,7 +1384,8 @@ export class PacearrServices {
       plan.filesToDelete.length > 0 ||
       seasonSearches.length > 0 ||
       (searchAllPilots && plan.pilotSearches.length > 0) ||
-      clearedPrefetchedEpisodes > 0;
+      clearedPrefetchedEpisodes > 0 ||
+      resetExcludedEpisodes.length > 0;
     if (reason !== "scheduled-reconcile" || changedSomething) {
       this.db.addHistory("info", dryRun ? "dry_run.sonarr.baseline" : "sonarr.baseline", series.title, {
         reason,
@@ -1389,7 +1399,11 @@ export class PacearrServices {
         reclaimedBytes,
         cleanupEpisodes,
         clearedPrefetchedEpisodes,
+        resetExcludedEpisodes: resetExcludedEpisodes.length,
       });
+    }
+    if (resetExcludedEpisodes.length > 0) {
+      this.logger.info("Episode exclusions reset because their season is no longer expanded", { seriesId, title: series.title, reason, dryRun, episodes: resetExcludedEpisodes });
     }
     if (rolling) await this.syncPlexArtwork(series, rolling, plan.retainedSeasons);
     this.logger.info("Sonarr monitoring plan complete", { seriesId, title: series.title, reason, dryRun, changed: updates.length + plan.filesToDelete.length + clearedPrefetchedEpisodes });
@@ -1780,16 +1794,18 @@ export class PacearrServices {
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
-  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number, sonarr: SonarrIntegration, seriesEpisodes: SonarrEpisode[], filesToDelete: number[]): Promise<{ changed: number; reclaimedBytes: number }> {
+  private async cleanupSeasonToPilot(seriesId: number, rollingShowId: number, seasonNumber: number, sonarr: SonarrIntegration, seriesEpisodes: SonarrEpisode[], filesToDelete: number[]): Promise<{ changed: number; reclaimedBytes: number; resetExcludedEpisodes: number }> {
     const rolling = this.db.getRollingShow(rollingShowId);
-    if (!rolling) return { changed: 0, reclaimedBytes: 0 };
-    const excluded = exclusionCheck(this.db.getRollingExclusions(rollingShowId));
+    if (!rolling) return { changed: 0, reclaimedBytes: 0, resetExcludedEpisodes: 0 };
+    // Trimming ends the season's expansion, which resets its episode exclusions (see
+    // clearExcludedEpisodesForSeasons), so its pilot is restored like any other.
+    const resetExcludedEpisodes = this.db.getRollingExclusions(rollingShowId).episodes.filter((episode) => episode.seasonNumber === seasonNumber).length;
     const episodes = seriesEpisodes.filter((episode) => episode.seasonNumber === seasonNumber);
-    const pilot = episodes.find((episode) => episode.episodeNumber === 1 && !excluded.episode(seasonNumber, 1));
-    const others = episodes.filter((episode) => episode !== pilot);
+    const pilot = episodes.find((episode) => episode.episodeNumber === 1);
+    const nonPilots = episodes.filter((episode) => episode.episodeNumber > 1);
     const updates = [
       ...(pilot ? [{ id: pilot.id, monitored: true }] : []),
-      ...others.filter((episode) => episode.monitored).map((episode) => ({ id: episode.id, monitored: false })),
+      ...nonPilots.filter((episode) => episode.monitored).map((episode) => ({ id: episode.id, monitored: false })),
     ];
     await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, false);
     // Disabling the season unmonitors all child episodes in Sonarr. Restore
@@ -1807,7 +1823,7 @@ export class PacearrServices {
     if (reclaimedBytes > 0) this.logger.info("Progressive cleanup reclaimed storage", { seriesId, title: rolling.title, seasonNumber, reclaimedBytes });
     if (!this.isDryRun()) this.db.removeExpandedSeason(rollingShowId, seasonNumber);
     await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, rolling.expandedSeasons.filter((season) => season !== seasonNumber));
-    return { changed: updates.length + filesToDelete.length, reclaimedBytes };
+    return { changed: updates.length + filesToDelete.length, reclaimedBytes, resetExcludedEpisodes };
   }
 
   private async performProgressiveCleanup(rollingShowId: number, currentSeason: number, observedAt = new Date()): Promise<void> {
@@ -1822,13 +1838,12 @@ export class PacearrServices {
     const sonarr = this.getSonarr();
     const seriesEpisodes = await sonarr.getEpisodes(rolling.sonarrSeriesId);
     const cleanupSeasonSet = new Set(cleanupSeasons);
-    const excluded = exclusionCheck(this.db.getRollingExclusions(rolling.id));
     // Select once for the complete cleanup batch. A multipart file shared only
     // by non-pilots in two eligible seasons must be deleted, not protected by
     // whichever season happens to be processed second.
     const filesToDelete = settings.cleanupDeletesFiles
       ? selectEpisodeFilesToDelete(seriesEpisodes, (episode) =>
-          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1 && !excluded.episode(episode.seasonNumber, episode.episodeNumber)
+          cleanupSeasonSet.has(episode.seasonNumber) && episode.episodeNumber > 1
         )
       : [];
     const filesToDeleteBySeason = new Map<number, number[]>();

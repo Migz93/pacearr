@@ -263,7 +263,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Watching an excluded season does not expand it or trigger any Sonarr work | Live watches of E01 and the finale send nothing to Sonarr, and the rolling reconcile's catch-up of that stored position never monitors, searches or expands the season |
 | A finale does not expand, or prefetch into, an excluded next season | With finale expansion and early prefetch both on, a season 1 finale leaves the excluded season 2 untouched and stores no prefetch records |
 | Expanding a season keeps its excluded episode unmonitored and unsearched | Sonarr re-monitors every episode when a season is monitored, so the expansion unmonitors the excluded episode again afterwards |
-| Scheduled reconciliation keeps an excluded episode's file in a season being trimmed | Trimming a season back to its pilot deletes only the ordinary non-pilot file and never re-monitors the excluded episode |
+| Trimming an expanded season back to its pilot resets its episode exclusions | The scheduled reconcile trims an inactive expanded season in one pass: its excluded E01 is monitored again, the excluded non-pilot's file is deleted with the rest, `resetExcludedEpisodes` is recorded, and an exclusion in a never-expanded season is kept |
+| Progressive cleanup from a watch also resets the trimmed season's episode exclusions | The same reset through `cleanupSeasonToPilot`, triggered by a viewer moving on to the next season |
+| A dry-run trim keeps the season's episode exclusions | Dry run sends nothing to Sonarr and leaves expanded seasons and exclusions unchanged |
 | Including a season restores only its pilot and searches it when missing | The season returns to the pilot-only baseline: `EpisodeSearch` for E01 only, no expansion |
 | Including an episode restores the monitoring its season implies | Monitored and searched in an expanded season; left unmonitored, with nothing sent, in a pilot-only season |
 | Dry run stores an exclusion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, the exclusion is stored and `dry_run.show.season_excluded` is recorded |

@@ -155,18 +155,19 @@ the show detail page, for example seasons that cannot be sourced. They are store
 
 | Action | Sonarr change (once) | Pacearr state |
 |---|---|---|
-| Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records cleared (live only) |
+| Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records and episode exclusions cleared (live only) |
 | Include season | E01 monitored and searched if missing (unless E01 is itself excluded) | Back on the pilot-only baseline |
 | Exclude episode | Episode unmonitored | Its prefetch record cleared (live only) |
 | Include episode | Monitored when its season is expanded or it is E01, otherwise unmonitored; searched if now monitored and missing | — |
 
-Excluding never deletes files, and the excluded episodes' files are never chosen for
-deletion by any cleanup. Afterwards every job treats excluded items as follows:
+Excluding never deletes files, and an excluded episode's file is never chosen for
+deletion while it stays excluded. Afterwards every job treats excluded items as follows:
 
 | Rule | Behaviour |
 |---|---|
 | Reconcile, baseline, reset | Excluded items are target-unmonitored and never searched; an excluded season's flag stays off |
 | Expansion | An excluded season is never expanded; expanding a season re-unmonitors its excluded episodes |
+| Trimming | When an expanded season stops being expanded (progressive cleanup, reconcile, reset), its episode exclusions are reset in the same pass and it is trimmed like any other season: E01 monitored, other files deleted. Sonarr rejects a season pack containing an unmonitored episode, so exclusions carried into a later re-expansion would block its packs. Episode exclusions in a season that was never expanded, such as an excluded pilot, are kept. History records the count as `resetExcludedEpisodes` |
 | Prefetch, finale | Nothing happens when the next season is excluded — Pacearr does not skip past it. Excluded episodes are never prefetched |
 | Watch activity | Watching an excluded season or episode still updates viewer progress but triggers no expansion, prefetch, cleanup, or retention of that season |
 | Artwork | An excluded season keeps its original Plex poster |

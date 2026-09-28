@@ -211,18 +211,69 @@ test("expanding a season keeps its excluded episode unmonitored and unsearched",
   }
 });
 
-test("scheduled reconciliation keeps an excluded episode's file in a season being trimmed", async () => {
-  // Season 1 is no longer retained by anyone, so reconciliation trims it back to its
-  // pilot and deletes the non-pilot files, except the one belonging to the excluded S01E02.
-  const harness = createHarness({ progressiveCleanupDelayDays: 0 });
+// S01E01 and S01E02 are excluded while season 1 is expanded; S02E02 is excluded in the
+// pilot-only season 2. S01E01 is unmonitored, as its exclusion left it.
+function trimmedSeasonEpisodes(): SonarrEpisode[] {
+  return showEpisodes().map((item) => item.id === 8101 ? { ...item, monitored: false } : item);
+}
+
+function excludeForTrim(harness: ReturnType<typeof createHarness>) {
+  harness.db.excludeEpisode(harness.rollingShowId, 1, 1);
+  harness.db.excludeEpisode(harness.rollingShowId, 1, 2);
+  harness.db.excludeEpisode(harness.rollingShowId, 2, 2);
+}
+
+test("trimming an expanded season back to its pilot resets its episode exclusions", async () => {
+  // Nobody is watching season 1 and the cleanup delay is zero, so the scheduled
+  // reconciliation trims it. Carrying its exclusions into a later re-expansion would make
+  // Sonarr reject every season pack, so they are reset and the season is trimmed as normal.
+  const harness = createHarness({ progressiveCleanupDelayDays: 0 }, { episodes: trimmedSeasonEpisodes() });
   try {
-    harness.db.excludeEpisode(harness.rollingShowId, 1, 2);
-    harness.db.replaceExpandedSeasons(harness.rollingShowId, []);
+    excludeForTrim(harness);
 
     await harness.services.reconcileRollingShows();
 
-    assert.deepEqual(harness.fileDeletes().map((request) => request.pathname), ["/api/v3/episodefile/8103"]);
-    assert.equal(harness.episodeMonitorUpdates().some((update) => update.monitored && update.episodeIds.includes(8102)), false);
+    assert.deepEqual(harness.expandedSeasons(), []);
+    // Only the never-expanded season 2 keeps its exclusion.
+    assert.deepEqual(harness.db.getRollingExclusions(harness.rollingShowId).episodes, [{ seasonNumber: 2, episodeNumber: 2 }]);
+    assert.equal(harness.episodeMonitorUpdates().some((update) => update.monitored && update.episodeIds.includes(8101)), true);
+    assert.deepEqual(harness.fileDeletes().map((request) => request.pathname).sort(), ["/api/v3/episodefile/8102", "/api/v3/episodefile/8103"]);
+    const baseline = harness.db.listHistory(20).find((entry) => entry.action === "sonarr.baseline");
+    assert.equal(JSON.parse(String(baseline!.details)).resetExcludedEpisodes, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("progressive cleanup from a watch also resets the trimmed season's episode exclusions", async () => {
+  const harness = createHarness({ progressiveCleanupDelayDays: 0 }, { episodes: trimmedSeasonEpisodes() });
+  try {
+    excludeForTrim(harness);
+
+    // Moving on to season 2 leaves season 1 without an active viewer, so this watch trims it.
+    await harness.watch(2, 1);
+
+    assert.deepEqual(harness.expandedSeasons(), [2]);
+    assert.deepEqual(harness.db.getRollingExclusions(harness.rollingShowId).episodes, [{ seasonNumber: 2, episodeNumber: 2 }]);
+    assert.equal(harness.episodeMonitorUpdates().some((update) => update.monitored && update.episodeIds.includes(8101)), true);
+    assert.deepEqual(harness.fileDeletes().map((request) => request.pathname).sort(), ["/api/v3/episodefile/8102", "/api/v3/episodefile/8103"]);
+    const cleanup = harness.db.listHistory(20).find((entry) => entry.action === "cleanup.progressive");
+    assert.equal(JSON.parse(String(cleanup!.details)).resetExcludedEpisodes, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a dry-run trim keeps the season's episode exclusions", async () => {
+  const harness = createHarness({ dryRun: true, progressiveCleanupDelayDays: 0 }, { episodes: trimmedSeasonEpisodes() });
+  try {
+    excludeForTrim(harness);
+
+    await harness.services.reconcileRollingShows();
+
+    assert.deepEqual(harness.writes(), []);
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.equal(harness.db.getRollingExclusions(harness.rollingShowId).episodes.length, 3);
   } finally {
     harness.cleanup();
   }

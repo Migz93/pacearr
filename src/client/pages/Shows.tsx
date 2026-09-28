@@ -763,7 +763,7 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
                     ? "The whole season is excluded. Include the season first."
                     : episode.excluded
                       ? "Restore the monitoring this episode's season implies"
-                      : "Unmonitor this episode in Sonarr and stop Pacearr searching it, even if the season expands. Its file is not deleted."}
+                      : "Unmonitor this episode in Sonarr and stop Pacearr searching it. Its file is not deleted. The exclusion resets if the season is later trimmed back to its pilot."}
                   onClick={() => void onSetExcluded(`${exclusionBasePath}/episodes/${episode.episodeNumber}/exclusion`, !episode.excluded)}
                 >
                   <ExclusionLabel excluded={episode.excluded} />
