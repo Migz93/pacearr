@@ -98,7 +98,7 @@ The caches only enrich the Shows tabs; Pacearr's own records decide membership:
 | Tab | Membership | Enrichment |
 |---|---|---|
 | Enrolled | `rolling_shows` | Library cache; stored title/year when absent |
-| Ignored | `ignored_recommendations`, minus enrolled shows | Recommendation cache, then library cache, then stored title |
+| Ignored | `ignored_recommendations` (enrolling a show clears its ignore) | Recommendation cache, then library cache, then stored title |
 | Recommendations | Recommendation cache, minus enrolled and ignored shows | — |
 | Sonarr | Library cache | — |
 

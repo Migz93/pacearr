@@ -482,6 +482,14 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // A show is never both enrolled and ignored: enrolment now clears the ignore record.
+    // Remove the overlaps that earlier versions allowed.
+    version: 25,
+    up(db) {
+      db.exec("DELETE FROM ignored_recommendations WHERE sonarr_series_id IN (SELECT sonarr_series_id FROM rolling_shows)");
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

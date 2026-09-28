@@ -789,10 +789,9 @@ export class PacearrServices {
   listRecommendations(includeIgnored = false, refreshing = false): RecommendationsResponse {
     const appSettings = this.db.getAppSettings();
     // The cache is only as current as its last calculation; Pacearr's own enrolment and
-    // ignore records decide membership. An ignore record kept for an enrolled show is
-    // not listed (enrolled shows are not recommendations) but returns on unenrolment.
+    // ignore records decide membership. Enrolment clears an ignore, so they never overlap.
     const enrolledIds = new Set(this.db.listRollingShows().map((show) => show.sonarrSeriesId));
-    const ignoredRecords = this.db.listIgnoredRecommendations().filter((record) => !enrolledIds.has(record.sonarrSeriesId));
+    const ignoredRecords = this.db.listIgnoredRecommendations();
     const ignoredIds = new Set(ignoredRecords.map((record) => record.sonarrSeriesId));
     const cache = this.db.getRecommendationCache();
     const minimumSavingsBytes = appSettings.recommendationMinimumSavingsGb * 1024 ** 3;
@@ -948,10 +947,13 @@ export class PacearrServices {
     });
   }
 
-  ignoreRecommendation(seriesId: number, title: string): void {
+  /** Returns false for an enrolled show, which is not a recommendation and cannot be ignored. */
+  ignoreRecommendation(seriesId: number, title: string): boolean {
+    if (this.db.getRollingShowBySeriesId(seriesId)) return false;
     this.db.ignoreRecommendation(seriesId, title);
     this.db.addHistory("info", "recommendation.ignored", title, { seriesId });
     this.logger.info("Recommendation ignored", { seriesId, title });
+    return true;
   }
 
   unignoreRecommendation(seriesId: number): void {

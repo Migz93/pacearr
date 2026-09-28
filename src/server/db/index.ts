@@ -767,17 +767,21 @@ export class PacearrDatabase {
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {
     const stamp = now();
-    this.db.prepare(`
-      INSERT INTO rolling_shows (sonarr_series_id, title, tvdb_id, imdb_id, year, expanded_seasons, last_activity_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, '[]', NULL, ?, ?)
-      ON CONFLICT(sonarr_series_id) DO UPDATE SET
-        title = excluded.title,
-        tvdb_id = excluded.tvdb_id,
-        imdb_id = excluded.imdb_id,
-        year = excluded.year,
-        updated_at = excluded.updated_at
-    `).run(series.id, series.title, series.tvdbId ?? null, series.imdbId ?? null, series.year ?? null, stamp, stamp);
-    return this.getRollingShowBySeriesId(series.id)!;
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO rolling_shows (sonarr_series_id, title, tvdb_id, imdb_id, year, expanded_seasons, last_activity_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, '[]', NULL, ?, ?)
+        ON CONFLICT(sonarr_series_id) DO UPDATE SET
+          title = excluded.title,
+          tvdb_id = excluded.tvdb_id,
+          imdb_id = excluded.imdb_id,
+          year = excluded.year,
+          updated_at = excluded.updated_at
+      `).run(series.id, series.title, series.tvdbId ?? null, series.imdbId ?? null, series.year ?? null, stamp, stamp);
+      // An enrolled show is not a recommendation, so it cannot stay ignored.
+      this.unignoreRecommendation(series.id);
+      return this.getRollingShowBySeriesId(series.id)!;
+    });
   }
 
   deleteRollingShow(id: number): void {
