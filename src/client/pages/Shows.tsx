@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, ArrowUpDown, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+  ArrowLeft, ArrowRight, ArrowUpDown, Ban, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, Undo2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { compactGhostButtonClass, compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -632,6 +632,14 @@ function MonitorState({ current, target, dryRunEnabled }: { current: boolean; ta
   );
 }
 
+function ExclusionLabel({ excluded }: { excluded: boolean }) {
+  // Only the icon is tinted, reusing the danger-button red and the enrolled green, so the
+  // label keeps the quiet ghost styling.
+  return excluded
+    ? <><Undo2 size={14} className="text-success" /> Include</>
+    : <><Ban size={14} className="text-error" /> Exclude</>;
+}
+
 type ExclusionControl = {
   /** The season's API path; null when the show is not enrolled, which hides the controls. */
   exclusionBasePath: string | null;
@@ -673,14 +681,15 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
       {exclusionBasePath && (
         <button
           type="button"
-          className={`${compactSecondaryButtonClass} shrink-0`}
+          className={`${compactGhostButtonClass} shrink-0 max-[820px]:self-start`}
           disabled={busy}
+          aria-label={`${season.excluded ? "Include" : "Exclude"} season ${season.seasonNumber}`}
           title={season.excluded
             ? "Return this season to the pilot-only baseline so Pacearr manages it again"
             : "Unmonitor this whole season in Sonarr and stop Pacearr expanding or searching it. Files are not deleted."}
           onClick={() => void onSetExcluded(`${exclusionBasePath}/exclusion`, !season.excluded)}
         >
-          {season.excluded ? "Include season" : "Exclude season"}
+          <ExclusionLabel excluded={season.excluded} />
         </button>
       )}
       </div>
@@ -711,7 +720,7 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
 } & ExclusionControl) {
   const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
   const columns = exclusionBasePath
-    ? "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px_130px]"
+    ? "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px_90px]"
     : "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px]";
   return (
       <div id={id} className="overflow-hidden border-t border-outline-variant/30">
@@ -747,8 +756,9 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
               {exclusionBasePath && (
                 <button
                   type="button"
-                  className={`${compactSecondaryButtonClass} max-[820px]:justify-self-start`}
+                  className={`${compactGhostButtonClass} justify-self-end max-[820px]:justify-self-start`}
                   disabled={busy || seasonExcluded}
+                  aria-label={`${episode.excluded ? "Include" : "Exclude"} ${episodeLabel(episode.seasonNumber, episode.episodeNumber)}`}
                   title={seasonExcluded
                     ? "The whole season is excluded. Include the season first."
                     : episode.excluded
@@ -756,7 +766,7 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
                       : "Unmonitor this episode in Sonarr and stop Pacearr searching it, even if the season expands. Its file is not deleted."}
                   onClick={() => void onSetExcluded(`${exclusionBasePath}/episodes/${episode.episodeNumber}/exclusion`, !episode.excluded)}
                 >
-                  {episode.excluded ? "Include episode" : "Exclude episode"}
+                  <ExclusionLabel excluded={episode.excluded} />
                 </button>
               )}
             </div>
