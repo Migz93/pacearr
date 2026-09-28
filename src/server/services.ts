@@ -1334,6 +1334,8 @@ export class PacearrServices {
         plan.seasonMonitoringToEnable.some((season) => season.seasonNumber === seasonNumber) ||
         plan.episodesToMonitor.some((episode) => episode.seasonNumber === seasonNumber)
       );
+    // Runs after the monitoring updates above. SeasonSearch is monitored-only in Sonarr, so
+    // an excluded, unmonitored episode in a retained season is never grabbed.
     for (const seasonNumber of seasonSearches) {
       await sonarr.searchSeason(seriesId, seasonNumber);
     }
@@ -1416,6 +1418,8 @@ export class PacearrServices {
     try {
       await sonarr.updateSeasonMonitoring(seriesId, seasonNumber, true);
       await sonarr.updateEpisodesMonitoring(updates);
+      // Sonarr's SeasonSearch command is monitored-only and rejects any release containing
+      // an unmonitored episode, so the excluded episodes unmonitored above are never grabbed.
       if (included.some((episode) => isRealSeasonEpisode(episode) && !episode.hasFile)) {
         await sonarr.searchSeason(seriesId, seasonNumber);
       }
