@@ -107,6 +107,16 @@ test("findShowForArtwork skips a show in several libraries when none is in Sonar
   assert.equal(show, null);
 });
 
+test("findShowForArtwork skips a show in several libraries when more than one is in Sonarr's folder", async () => {
+  const folder = "/mnt/user/media/TV/TV/9-1-1 (2018) [imdb-tt7235466]";
+  const sections: FakeSection[] = [
+    { key: "2", title: "TV", shows: [{ ratingKey: "23828", guid: "plex://show/911", folder }] },
+    { key: "4", title: "TV Mirror", shows: [{ ratingKey: "320635", guid: "plex://show/911", folder }] },
+  ];
+  const show = await findWithFakePlex(sections, SAME_SHOW_IDS, { tvdbId: 337907, imdbId: "tt7235466", path: folder });
+  assert.equal(show, null);
+});
+
 test("findShowForArtwork never lets Sonarr's folder pick between different shows", async () => {
   const sections: FakeSection[] = [
     { key: "2", title: "TV", shows: [{ ratingKey: "10", guid: "plex://show/right", folder: "/tv/Right Show" }] },
