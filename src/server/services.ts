@@ -443,7 +443,8 @@ export class PacearrServices {
     const progressBySeries = this.db.listLatestUserProgressForSeriesBatch(matched.map(({ series }) => series.id), cutoff);
     return matched.map(({ series, posterUrl }) => {
       const progress = (progressBySeries.get(series.id) ?? []).filter((item) => item.enabled);
-      return this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl, progress);
+      const show = this.buildCachedShowListItem(series, enrolled.get(series.id) ?? null, posterUrl, progress);
+      return libraryById.has(series.id) ? show : { ...show, sonarrDetailsUnavailable: true };
     });
   }
 
@@ -849,6 +850,8 @@ export class PacearrServices {
         viewers,
         projectedSavingsBytes: 0,
         ignored: true,
+        ...(show ? {} : { sonarrDetailsUnavailable: true }),
+        savingsUnavailable: true,
       };
     });
   }

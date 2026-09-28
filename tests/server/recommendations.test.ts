@@ -1532,8 +1532,11 @@ test("Enrolled lists every enrolled show, including one the Sonarr library cache
     // A cached show keeps its Sonarr enrichment; the uncached one uses Pacearr's record.
     assert.equal(enrolled[0]?.posterUrl, "/images/cached.jpg");
     assert.equal(enrolled[0]?.sizeOnDiskBytes, 5_000);
+    assert.equal(enrolled[0]?.sonarrDetailsUnavailable, undefined);
     assert.equal(enrolled[1]?.year, 2007);
     assert.equal(enrolled[1]?.posterUrl, null);
+    // Its zeroed Sonarr fields are flagged, so the client shows them as unknown.
+    assert.equal(enrolled[1]?.sonarrDetailsUnavailable, true);
     assert.deepEqual(services.listShows({ enrolledOnly: true, query: "grah" }).map((show) => show.sonarrSeriesId), [2]);
     // The Sonarr tab remains a view of the library cache.
     assert.deepEqual(services.listShows().map((show) => show.sonarrSeriesId), [1]);
@@ -1561,9 +1564,12 @@ test("Ignored lists every ignore record, whatever the recommendation cache holds
     // Below the savings threshold, the cached candidate still supplies its details.
     assert.equal(byId.get(10)?.projectedSavingsBytes, 400);
     assert.equal(byId.get(10)?.ignored, true);
+    assert.equal(byId.get(10)?.savingsUnavailable, undefined);
     // With no cached data, the stored title keeps the record visible and restorable.
     assert.equal(byId.get(11)?.title, "Not In Any Cache");
     assert.equal(byId.get(11)?.ignored, true);
+    assert.equal(byId.get(11)?.savingsUnavailable, true);
+    assert.equal(byId.get(11)?.sonarrDetailsUnavailable, true);
 
     services.unignoreRecommendation(11);
     const restored = services.listRecommendations(true);

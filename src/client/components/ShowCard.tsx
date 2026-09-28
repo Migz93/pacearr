@@ -12,6 +12,10 @@ function seasonLabel(count: number) {
   return `${count} season${count === 1 ? "" : "s"}`;
 }
 
+// A show listed from Pacearr's own record before the caches hold it has placeholder
+// zeros; showing them would claim it has no seasons, size or savings.
+const UNKNOWN = "Unknown";
+
 // Column header text is hidden below the list breakpoints (see the header
 // rows in Shows.tsx), so stacked mobile values need their own inline label
 // to stay identifiable — otherwise a mobile user sees bare numbers/badges
@@ -27,7 +31,7 @@ function commonFields(item: ShowBrowserItem) {
     title: data.title,
     year: data.year,
     status: data.status,
-    seasonCount: data.seasonCount,
+    seasonText: data.sonarrDetailsUnavailable ? "Seasons unknown" : seasonLabel(data.seasonCount),
     viewerCount: data.viewerCount,
     viewers: data.viewers.map((viewer) => ({ ...viewer, isHistory: false })),
   };
@@ -40,11 +44,11 @@ export function ShowCard({ item, returnTo }: { item: ShowBrowserItem; returnTo: 
       show={item.data}
       to={`/shows/${common.sonarrSeriesId}`}
       state={{ from: returnTo }}
-      topBadge={item.kind === "recommendation" && <PosterTileBadge><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</PosterTileBadge>}
+      topBadge={item.kind === "recommendation" && !item.data.savingsUnavailable && <PosterTileBadge><HardDrive size={12} /> {formatBytes(item.data.projectedSavingsBytes)}</PosterTileBadge>}
     >
       <span className="text-[11px] font-bold text-on-surface/75">{common.year ?? "Unknown year"}</span>
       <strong className="line-clamp-2 text-sm font-extrabold leading-tight text-on-surface">{common.title}</strong>
-      <span className="text-[11px] text-on-surface/75">{seasonLabel(common.seasonCount)}</span>
+      <span className="text-[11px] text-on-surface/75">{common.seasonText}</span>
       {item.kind === "library" && item.data.enrolled && <ExpandedSeasons seasons={item.data.expandedSeasons} />}
       {common.viewers.length > 0 && <AvatarStack viewers={common.viewers} size={18} />}
     </PosterTile>
@@ -67,15 +71,19 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
           </span>
         </div>
       </div>
-      {item.kind === "recommendation" && <span><RowLabel className="hidden max-[1170px]:inline">Size on disk</RowLabel>{formatBytes(item.data.sizeOnDiskBytes)}</span>}
+      {item.kind === "recommendation" && <span><RowLabel className="hidden max-[1170px]:inline">Size on disk</RowLabel>{item.data.sonarrDetailsUnavailable ? UNKNOWN : formatBytes(item.data.sizeOnDiskBytes)}</span>}
       {item.kind === "recommendation" ? (
       <span className="flex flex-wrap items-center gap-1.5">
           <RowLabel className="hidden max-[1170px]:inline">Seasons</RowLabel>
-          <span className={badgeClass("success")}>{item.data.retainedSeasons.length} kept</span>
-          <span className={badgeClass("warning")}>{item.data.droppedSeasons.length} pilot-only</span>
+          {item.data.savingsUnavailable ? <span className="text-xs text-on-surface-variant">Not calculated</span> : (
+            <>
+              <span className={badgeClass("success")}>{item.data.retainedSeasons.length} kept</span>
+              <span className={badgeClass("warning")}>{item.data.droppedSeasons.length} pilot-only</span>
+            </>
+          )}
         </span>
       ) : (
-        <span>{seasonLabel(common.seasonCount)}</span>
+        <span>{common.seasonText}</span>
       )}
       <span className="flex items-center gap-2">
         <RowLabel className={item.kind === "recommendation" ? "hidden max-[1170px]:inline" : "hidden max-[970px]:inline"}>Viewers</RowLabel>
@@ -83,7 +91,7 @@ export function ShowListRow({ item, returnTo }: { item: ShowBrowserItem; returnT
         {common.viewerCount === 0 && <span className="text-xs text-on-surface-variant">No recent viewers</span>}
       </span>
       {item.kind === "recommendation" && (
-        <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {formatBytes(item.data.projectedSavingsBytes)}</strong>
+        <strong className="flex items-center gap-1.5 text-success"><RowLabel className="hidden max-[1170px]:inline">Projected savings</RowLabel><HardDrive size={14} /> {item.data.savingsUnavailable ? UNKNOWN : formatBytes(item.data.projectedSavingsBytes)}</strong>
       )}
     </Link>
   );
