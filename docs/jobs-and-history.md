@@ -89,7 +89,18 @@ quickly on new arrivals. The setting's activation timestamp and Sonarr's `added`
 the existing library is ignored. On its first poll, Pacearr records every
 pre-activation series as a baseline, retaining `added` when Sonarr provides it.
 If a later response omits `added`, Pacearr uses that persisted baseline to
-detect only newly appearing IDs by list comparison.
+detect only newly appearing IDs by list comparison. A triage run that enrolls a
+show then starts a library refresh (and so a recommendation calculation) so the
+new show has its poster and Sonarr stats.
+
+The caches only enrich the Shows tabs; Pacearr's own records decide membership:
+
+| Tab | Membership | Enrichment |
+|---|---|---|
+| Enrolled | `rolling_shows` | Library cache; stored title/year when absent |
+| Ignored | `ignored_recommendations`, minus enrolled shows | Recommendation cache, then library cache, then stored title |
+| Recommendations | Recommendation cache, minus enrolled and ignored shows | — |
+| Sonarr | Library cache | — |
 
 ## Watch Events
 

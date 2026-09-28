@@ -417,15 +417,29 @@ export class PacearrServices {
   }
 
   listShows(options: { enrolledOnly?: boolean; query?: string } = {}): ShowListItem[] {
-    const items = this.db.getSonarrLibraryCache()?.items ?? [];
-    const enrolled = new Map(this.db.listRollingShows().map((show) => [show.sonarrSeriesId, show]));
+    const libraryItems = this.db.getSonarrLibraryCache()?.items ?? [];
+    const rollingShows = this.db.listRollingShows();
+    const enrolled = new Map(rollingShows.map((show) => [show.sonarrSeriesId, show]));
+    // Enrolled membership comes from rolling_shows, not the library cache, so a show
+    // enrolled after the last library refresh is still listed. Cached Sonarr fields
+    // enrich it when present; otherwise it is built from Pacearr's own record.
+    const libraryById = new Map(libraryItems.map((item) => [item.series.id, item]));
+    const items: SonarrLibraryCacheItem[] = options.enrolledOnly
+      ? rollingShows.map((rolling) => libraryById.get(rolling.sonarrSeriesId) ?? {
+        series: {
+          id: rolling.sonarrSeriesId,
+          title: rolling.title,
+          year: rolling.year ?? undefined,
+          tvdbId: rolling.tvdbId ?? undefined,
+          imdbId: rolling.imdbId,
+        },
+        posterUrl: null,
+      })
+      : libraryItems;
     const query = options.query?.trim().toLowerCase();
     const appSettings = this.db.getAppSettings();
     const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
-    const matched = items.filter(({ series }) =>
-      (!options.enrolledOnly || enrolled.has(series.id)) &&
-      (!query || series.title.toLowerCase().includes(query))
-    ).sort((a, b) => a.series.title.localeCompare(b.series.title));
+    const matched = items.filter(({ series }) => !query || series.title.toLowerCase().includes(query)).sort((a, b) => a.series.title.localeCompare(b.series.title));
     const progressBySeries = this.db.listLatestUserProgressForSeriesBatch(matched.map(({ series }) => series.id), cutoff);
     return matched.map(({ series, posterUrl }) => {
       const progress = (progressBySeries.get(series.id) ?? []).filter((item) => item.enabled);
@@ -449,9 +463,10 @@ export class PacearrServices {
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
   }
 
-  async triageNewSonarrSeries(): Promise<void> {
+  /** Returns how many shows were automatically enrolled. */
+  async triageNewSonarrSeries(): Promise<number> {
     const settings = this.db.getAppSettings();
-    if (!settings.newShowTriageEnabled) return;
+    if (!settings.newShowTriageEnabled) return 0;
 
     const activationAt = settings.newShowTriageEnabledAt;
     const enabledAtMs = activationAt ? Date.parse(activationAt) : Number.NaN;
@@ -459,13 +474,13 @@ export class PacearrServices {
       // This can only happen if an administrator manually edited the stored setting.
       // Skipping is safer than accidentally applying a baseline to an older library.
       this.logger.warn("Skipped new-show triage because its activation time is missing or invalid");
-      return;
+      return 0;
     }
 
     const series = await this.getSonarr().getSeries();
     if (!this.isCurrentNewShowTriageActivation(activationAt)) {
       this.logger.info("Stopped new Sonarr show triage after its activation changed");
-      return;
+      return 0;
     }
     const fallbackBaselineExists = Boolean(this.db.getNewShowTriageFallbackBaselineAt());
     const knownTriageIds = this.db.listKnownNewShowTriageIds();
@@ -608,6 +623,7 @@ export class PacearrServices {
       this.db.addHistory("warn", "show.auto_triage", "New Sonarr show triage", { candidates: candidates.length, errors: errors.slice(0, errorLimit), ...(errors.length > errorLimit ? { omittedErrors: errors.length - errorLimit } : {}) });
       this.logger.warn("New Sonarr show triage complete with errors", { candidates: candidates.length, errors: errors.length });
     }
+    return automaticallyEnrolledSeriesIds.size;
   }
 
   private isCurrentNewShowTriageActivation(activationAt: string | null): boolean {
@@ -772,22 +788,70 @@ export class PacearrServices {
 
   listRecommendations(includeIgnored = false, refreshing = false): RecommendationsResponse {
     const appSettings = this.db.getAppSettings();
-    const ignoredIds = new Set(this.db.listIgnoredRecommendationIds());
+    // The cache is only as current as its last calculation; Pacearr's own enrolment and
+    // ignore records decide membership. An ignore record kept for an enrolled show is
+    // not listed (enrolled shows are not recommendations) but returns on unenrolment.
+    const enrolledIds = new Set(this.db.listRollingShows().map((show) => show.sonarrSeriesId));
+    const ignoredRecords = this.db.listIgnoredRecommendations().filter((record) => !enrolledIds.has(record.sonarrSeriesId));
+    const ignoredIds = new Set(ignoredRecords.map((record) => record.sonarrSeriesId));
     const cache = this.db.getRecommendationCache();
     const minimumSavingsBytes = appSettings.recommendationMinimumSavingsGb * 1024 ** 3;
-    const recommendations = (cache?.candidates ?? [])
+    const recommendations: ShowRecommendation[] = (cache?.candidates ?? [])
       .filter((candidate) => candidate.projectedSavingsBytes >= minimumSavingsBytes)
-      .filter((candidate) => includeIgnored || !ignoredIds.has(candidate.sonarrSeriesId))
-      .map((candidate) => ({ ...candidate, ignored: ignoredIds.has(candidate.sonarrSeriesId) }));
+      .filter((candidate) => !enrolledIds.has(candidate.sonarrSeriesId) && !ignoredIds.has(candidate.sonarrSeriesId))
+      .map((candidate) => ({ ...candidate, ignored: false }));
+    if (includeIgnored) recommendations.push(...this.buildIgnoredRecommendations(ignoredRecords, cache?.candidates ?? [], appSettings));
 
     return {
       candidates: recommendations,
-      ignoredCount: ignoredIds.size,
+      ignoredCount: ignoredRecords.length,
       generatedAt: cache?.generatedAt ?? null,
       refreshing,
       cleanupDeletesFilesEnabled: appSettings.cleanupDeletesFiles,
       viewerActivityWindowDays: appSettings.viewerActivityWindowDays,
     };
+  }
+
+  /**
+   * Every ignore record is listed, whatever the recommendation cache holds. A cached
+   * candidate supplies savings and retention details (even below the savings threshold);
+   * without one, the entry falls back to cached Sonarr fields, then the stored title.
+   */
+  private buildIgnoredRecommendations(
+    records: Array<{ sonarrSeriesId: number; title: string }>,
+    cachedCandidates: ShowRecommendation[],
+    appSettings: AppSettings
+  ): ShowRecommendation[] {
+    const candidatesById = new Map(cachedCandidates.map((candidate) => [candidate.sonarrSeriesId, candidate]));
+    const libraryById = new Map((this.db.getSonarrLibraryCache()?.items ?? []).map((item) => [item.series.id, item]));
+    const uncachedIds = records.map((record) => record.sonarrSeriesId).filter((id) => !candidatesById.has(id));
+    const cutoff = new Date(Date.now() - appSettings.viewerActivityWindowDays * 24 * 60 * 60 * 1000).toISOString();
+    const progressBySeries = this.db.listLatestUserProgressForSeriesBatch(uncachedIds, cutoff);
+    return records.map((record): ShowRecommendation => {
+      const candidate = candidatesById.get(record.sonarrSeriesId);
+      if (candidate) return { ...candidate, ignored: true };
+      const library = libraryById.get(record.sonarrSeriesId);
+      const viewers = (progressBySeries.get(record.sonarrSeriesId) ?? []).filter((item) => item.enabled);
+      const show = library
+        ? this.buildCachedShowListItem(library.series, null, library.posterUrl, viewers)
+        : null;
+      return {
+        sonarrSeriesId: record.sonarrSeriesId,
+        title: show?.title ?? record.title,
+        year: show?.year ?? null,
+        posterUrl: show?.posterUrl ?? null,
+        status: show?.status ?? null,
+        seasonCount: show?.seasonCount ?? 0,
+        episodeCount: show?.episodeCount ?? 0,
+        sizeOnDiskBytes: show?.sizeOnDiskBytes ?? 0,
+        retainedSeasons: [],
+        droppedSeasons: [],
+        viewerCount: new Set(viewers.map((item) => item.userId)).size,
+        viewers,
+        projectedSavingsBytes: 0,
+        ignored: true,
+      };
+    });
   }
 
   async refreshRecommendations(): Promise<void> {

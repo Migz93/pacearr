@@ -328,6 +328,11 @@ export class PacearrDatabase {
       .map((row) => row.sonarr_series_id);
   }
 
+  listIgnoredRecommendations(): Array<{ sonarrSeriesId: number; title: string }> {
+    return (this.db.prepare("SELECT sonarr_series_id, title FROM ignored_recommendations").all() as Array<{ sonarr_series_id: number; title: string }>)
+      .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, title: row.title }));
+  }
+
   ignoreRecommendation(seriesId: number, title: string): void {
     this.db.prepare(`
       INSERT INTO ignored_recommendations (sonarr_series_id, title, created_at)
