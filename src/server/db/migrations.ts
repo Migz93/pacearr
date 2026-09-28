@@ -457,6 +457,31 @@ const migrations: Migration[] = [
       db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
     },
   },
+  {
+    // Seasons and individual episodes an administrator has permanently excluded from
+    // rolling management, for example seasons that cannot be sourced. They belong to
+    // the enrolment, so unenrolling removes them.
+    version: 24,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_excluded_seasons (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          excluded_at TEXT NOT NULL,
+          PRIMARY KEY (rolling_show_id, season_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE
+        );
+        CREATE TABLE rolling_excluded_episodes (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          excluded_at TEXT NOT NULL,
+          PRIMARY KEY (rolling_show_id, season_number, episode_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

@@ -147,6 +147,35 @@ Expansion does this:
 
 If the season is already expanded, Pacearr skips the Sonarr mutation and search.
 
+## Exclusions
+
+An enrolled show's seasons and individual episodes can be permanently excluded from
+the show detail page, for example seasons that cannot be sourced. They are stored in
+`rolling_excluded_seasons` and `rolling_excluded_episodes` and deleted on unenrolment.
+
+| Action | Sonarr change (once) | Pacearr state |
+|---|---|---|
+| Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records cleared, and its episode exclusions cleared if it was expanded (live only) |
+| Include season | E01 monitored and searched if missing (unless E01 is itself excluded) | Back on the pilot-only baseline |
+| Exclude episode | Episode unmonitored | Its prefetch record cleared (live only) |
+| Include episode | Set to the rolling plan's target: monitored when its season is expanded or held by an active viewer, when prefetched, or when it is E01 — unless its season is excluded; searched if now monitored and missing | — |
+
+Excluding never deletes files, and an excluded episode's file is never chosen for
+deletion while it stays excluded. Afterwards every job treats excluded items as follows:
+
+| Rule | Behaviour |
+|---|---|
+| Reconcile, baseline, reset | Excluded items are target-unmonitored and never searched; an excluded season's flag stays off |
+| Expansion | An excluded season is never expanded; expanding a season re-unmonitors its excluded episodes |
+| Trimming | When an expanded season stops being expanded (progressive cleanup, reconcile, reset), its episode exclusions are reset in the same pass and it is trimmed like any other season: E01 monitored, other files deleted. Sonarr rejects a season pack containing an unmonitored episode, so exclusions carried into a later re-expansion would block its packs. Episode exclusions in a season that was never expanded, such as an excluded pilot, are kept. History records the count as `resetExcludedEpisodes` |
+| Prefetch, finale | Nothing happens when the next season is excluded — Pacearr does not skip past it. Excluded episodes are never prefetched |
+| Watch activity | Watching an excluded season or episode still updates viewer progress but triggers no expansion, prefetch, cleanup, or retention of that season |
+| Artwork | An excluded season keeps its original Plex poster |
+| Dry run | The exclusion is stored and applied to every dry-run plan; Sonarr, expanded and prefetch state are not changed, and history records the `dry_run.` action. Reconciliation applies it once live |
+
+History records `show.season_excluded`, `show.season_included`, `show.episode_excluded`
+and `show.episode_included`. Unenrolling re-monitors everything, excluded items included.
+
 ## Per-User Progress
 
 Pacearr stores per-user progress in `rolling_show_users`.

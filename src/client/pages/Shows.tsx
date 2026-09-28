@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, ArrowUpDown, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+  ArrowLeft, ArrowRight, ArrowUpDown, Ban, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, Undo2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { compactGhostButtonClass, compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -478,6 +478,14 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
     }
   }
 
+  /** Exclusion endpoints report refusals (e.g. a busy show) as ok: false rather than an HTTP error. */
+  async function setExcluded(path: string, excluded: boolean) {
+    await runAction(async () => {
+      const result = excluded ? await apiPost<RunResult>(path) : await apiDelete<RunResult>(path);
+      if (!result.ok) throw new Error(result.message);
+    });
+  }
+
   async function enroll() {
     await runAction(() => apiPost<RunResult>(`/api/shows/${seriesId}/enroll`, { applyBaseline: true, importHistory: true }));
   }
@@ -591,6 +599,9 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               viewers={viewersBySeason.get(season.seasonNumber) ?? []}
               viewersByEpisode={viewersByEpisode}
               dryRunEnabled={detail.dryRunPreview.enabled}
+              exclusionBasePath={show.enrolled && show.rollingShowId ? `/api/rolling-shows/${show.rollingShowId}/seasons/${season.seasonNumber}` : null}
+              busy={busy}
+              onSetExcluded={setExcluded}
               key={season.seasonNumber}
             />
           ))}
@@ -621,18 +632,35 @@ function MonitorState({ current, target, dryRunEnabled }: { current: boolean; ta
   );
 }
 
-function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled }: {
+function ExclusionLabel({ excluded }: { excluded: boolean }) {
+  // Only the icon is tinted, reusing the danger-button red and the enrolled green, so the
+  // label keeps the quiet ghost styling.
+  return excluded
+    ? <><Undo2 size={14} className="text-success" /> Include</>
+    : <><Ban size={14} className="text-error" /> Exclude</>;
+}
+
+type ExclusionControl = {
+  /** The season's API path; null when the show is not enrolled, which hides the controls. */
+  exclusionBasePath: string | null;
+  busy: boolean;
+  onSetExcluded: (path: string, excluded: boolean) => Promise<void>;
+};
+
+function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled, exclusionBasePath, busy, onSetExcluded }: {
   season: ShowSeasonSummary;
   episodes: ShowEpisodeSummary[];
   viewers: ViewerBadge[];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
-}) {
+} & ExclusionControl) {
   const [open, setOpen] = useState(false);
   const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
+      {/* The exclusion control sits beside the expand button, not inside it: a button cannot contain another. */}
+      <div className="flex items-center gap-2 pr-3 hover:bg-background-container-highest max-[820px]:flex-col max-[820px]:items-stretch max-[820px]:pb-3 max-[820px]:pl-3">
+      <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent p-3 text-left max-[820px]:p-0 max-[820px]:pt-3" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>
@@ -644,37 +672,70 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
       </span>
       <AvatarStack viewers={viewers} />
       <span className="flex flex-wrap items-center justify-end gap-1.5 text-right">
+        {season.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this season. Existing files are kept.">Excluded</span>}
         {season.isExpanded && <span className={badgeClass("success")}>Expanded</span>}
         {season.prefetchedEpisodes.length > 0 && <span className={badgeClass("warning")} title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
       </span>
       </button>
-      {open && <EpisodeTable id={episodeTableId} episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
+      {exclusionBasePath && (
+        <button
+          type="button"
+          className={`${compactGhostButtonClass} shrink-0 max-[820px]:self-start`}
+          disabled={busy}
+          aria-label={`${season.excluded ? "Include" : "Exclude"} season ${season.seasonNumber}`}
+          title={season.excluded
+            ? "Return this season to the pilot-only baseline so Pacearr manages it again"
+            : "Unmonitor this whole season in Sonarr and stop Pacearr expanding or searching it. Files are not deleted."}
+          onClick={() => void onSetExcluded(`${exclusionBasePath}/exclusion`, !season.excluded)}
+        >
+          <ExclusionLabel excluded={season.excluded} />
+        </button>
+      )}
+      </div>
+      {open && (
+        <EpisodeTable
+          id={episodeTableId}
+          episodes={episodes}
+          prefetchedEpisodes={season.prefetchedEpisodes}
+          viewersByEpisode={viewersByEpisode}
+          dryRunEnabled={dryRunEnabled}
+          seasonExcluded={season.excluded}
+          exclusionBasePath={exclusionBasePath}
+          busy={busy}
+          onSetExcluded={onSetExcluded}
+        />
+      )}
     </div>
   );
 }
 
-function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
+function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled, seasonExcluded, exclusionBasePath, busy, onSetExcluded }: {
   id: string;
   episodes: ShowEpisodeSummary[];
   prefetchedEpisodes: ShowSeasonSummary["prefetchedEpisodes"];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
-}) {
+  seasonExcluded: boolean;
+} & ExclusionControl) {
   const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
+  const columns = exclusionBasePath
+    ? "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px_90px]"
+    : "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px]";
   return (
       <div id={id} className="overflow-hidden border-t border-outline-variant/30">
-        <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
+        <div className={`grid ${columns} items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden`}>
           <span>Episode</span>
           <span>Title</span>
           <span>Viewers</span>
           <span>State</span>
           <span>Air date</span>
+          {exclusionBasePath && <span className="sr-only">Management</span>}
         </div>
         {episodes.map((episode) => {
           const viewers = viewersByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`) ?? [];
           return (
-            <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
+            <div className={`grid ${columns} items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1`} key={episode.id}>
               <strong>{episodeLabel(episode.seasonNumber, episode.episodeNumber)}</strong>
               <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
               <div className="flex items-center gap-1.5">
@@ -684,6 +745,7 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
               <div className="flex flex-wrap items-center gap-1.5">
                 <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
+                {episode.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this episode. Its file is kept.">Excluded</span>}
                 {(() => {
                   const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`);
                   if (!prefetch) return null;
@@ -691,6 +753,22 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
                 })()}
               </div>
               <span className="text-on-surface-variant"><RowLabel className="hidden max-[820px]:inline">Air date</RowLabel>{formatDate(episode.airDate)}</span>
+              {exclusionBasePath && (
+                <button
+                  type="button"
+                  className={`${compactGhostButtonClass} justify-self-end max-[820px]:justify-self-start`}
+                  disabled={busy || seasonExcluded}
+                  aria-label={`${episode.excluded ? "Include" : "Exclude"} ${episodeLabel(episode.seasonNumber, episode.episodeNumber)}`}
+                  title={seasonExcluded
+                    ? "The whole season is excluded. Include the season first."
+                    : episode.excluded
+                      ? "Restore the monitoring this episode's season implies"
+                      : "Unmonitor this episode in Sonarr and stop Pacearr searching it. Its file is not deleted. The exclusion resets if the season is later trimmed back to its pilot."}
+                  onClick={() => void onSetExcluded(`${exclusionBasePath}/episodes/${episode.episodeNumber}/exclusion`, !episode.excluded)}
+                >
+                  <ExclusionLabel excluded={episode.excluded} />
+                </button>
+              )}
             </div>
           );
         })}
