@@ -1136,8 +1136,7 @@ export class PacearrServices {
   /**
    * Excluding an episode unmonitors it once and stops Pacearr monitoring or searching it,
    * even if its season later expands, until that season is trimmed back to its pilot.
-   * Including it restores the monitoring its season implies: monitored when expanded,
-   * otherwise only if it is the pilot.
+   * Including it restores the target the rolling plan gives it, as if never excluded.
    */
   async setEpisodeExcluded(rollingShowId: number, seasonNumber: number, episodeNumber: number, exclude: boolean): Promise<RunResult> {
     const show = this.db.getRollingShow(rollingShowId);
@@ -1150,8 +1149,8 @@ export class PacearrServices {
     try {
       const dryRun = this.isDryRun();
       const sonarr = this.getSonarr(dryRun);
-      const episode = (await sonarr.getEpisodes(show.sonarrSeriesId))
-        .find((item) => item.seasonNumber === seasonNumber && item.episodeNumber === episodeNumber);
+      const episodes = await sonarr.getEpisodes(show.sonarrSeriesId);
+      const episode = episodes.find((item) => item.seasonNumber === seasonNumber && item.episodeNumber === episodeNumber);
       if (!episode) return { ok: false, message: `Episode S${seasonNumber}E${episodeNumber} does not exist in Sonarr.` };
       let monitored = 0;
       let unmonitored = 0;
@@ -1166,8 +1165,14 @@ export class PacearrServices {
           if (!dryRun) this.db.clearPrefetchedEpisode(show.id, seasonNumber, episodeNumber);
         });
       } else {
-        const seasonExcluded = this.db.getRollingExclusions(show.id).seasons.includes(seasonNumber);
-        const target = !seasonExcluded && (episodeNumber === 1 || show.expandedSeasons.includes(seasonNumber));
+        // The same target the rolling plan would set once this exclusion is gone: expanded
+        // seasons, seasons active viewers are in, prefetches and pilots, minus any season exclusion.
+        const stored = this.db.getRollingExclusions(show.id);
+        const exclusions = { seasons: stored.seasons, episodes: stored.episodes.filter((item) => item.seasonNumber !== seasonNumber || item.episodeNumber !== episodeNumber) };
+        const keptSeasons = [...new Set([...show.expandedSeasons, ...this.getActiveRetainedSeasons(show.id)])];
+        const prefetchedIds = prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(show.id));
+        const series = await sonarr.getSeriesById(show.sonarrSeriesId);
+        const target = calculateRollingPlan(series, episodes, keptSeasons, false, prefetchedIds, exclusions).isTargetMonitored(episode);
         if (target !== episode.monitored) {
           await sonarr.updateEpisodesMonitoring([{ id: episode.id, monitored: target }]);
           if (target) monitored = 1; else unmonitored = 1;

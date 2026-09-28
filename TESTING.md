@@ -268,6 +268,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A dry-run trim keeps the season's episode exclusions | Dry run sends nothing to Sonarr and leaves expanded seasons and exclusions unchanged |
 | Including a season restores only its pilot and searches it when missing | The season returns to the pilot-only baseline: `EpisodeSearch` for E01 only, no expansion |
 | Including an episode restores the monitoring its season implies | Monitored and searched in an expanded season; left unmonitored, with nothing sent, in a pilot-only season |
+| Including an episode monitors it when an active viewer holds its not-yet-expanded season | Include uses the rolling plan's target, so a season retained by an active viewer but not yet marked expanded gets the episode monitored and searched immediately |
 | Dry run stores an exclusion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, the exclusion is stored and `dry_run.show.season_excluded` is recorded |
 
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage

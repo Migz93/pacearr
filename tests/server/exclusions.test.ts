@@ -317,6 +317,25 @@ test("including an episode restores the monitoring its season implies", async ()
   }
 });
 
+test("including an episode monitors it when an active viewer holds its not-yet-expanded season", async () => {
+  // A viewer is in season 3, but its expansion was never persisted (for example it was
+  // first seen in dry run). The rolling plan already retains season 3, so including
+  // S03E02 must monitor and search it now rather than wait for the next reconcile.
+  const harness = createHarness();
+  try {
+    const viewer = harness.db.listUsers()[0]!;
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, viewer.id, 3, 1, new Date().toISOString());
+    harness.db.excludeEpisode(harness.rollingShowId, 3, 2);
+
+    await harness.services.setEpisodeExcluded(harness.rollingShowId, 3, 2, false);
+
+    assert.deepEqual(harness.episodeMonitorUpdates(), [{ episodeIds: [8302], monitored: true }]);
+    assert.deepEqual(harness.searches(), [{ name: "EpisodeSearch", episodeIds: [8302] }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("dry run stores an exclusion without changing Sonarr or expanded seasons", async () => {
   const harness = createHarness({ dryRun: true });
   try {

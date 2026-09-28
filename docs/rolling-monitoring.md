@@ -158,7 +158,7 @@ the show detail page, for example seasons that cannot be sourced. They are store
 | Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records and episode exclusions cleared (live only) |
 | Include season | E01 monitored and searched if missing (unless E01 is itself excluded) | Back on the pilot-only baseline |
 | Exclude episode | Episode unmonitored | Its prefetch record cleared (live only) |
-| Include episode | Monitored when its season is expanded or it is E01, otherwise unmonitored; searched if now monitored and missing | — |
+| Include episode | Set to the rolling plan's target: monitored when its season is expanded or held by an active viewer, when prefetched, or when it is E01 — unless its season is excluded; searched if now monitored and missing | — |
 
 Excluding never deletes files, and an excluded episode's file is never chosen for
 deletion while it stays excluded. Afterwards every job treats excluded items as follows:
