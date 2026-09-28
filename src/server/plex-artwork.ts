@@ -43,9 +43,9 @@ export class PlexArtworkService {
   }
 
   async syncShow(plex: PlexIntegration, rolling: RollingShowRecord, series: SonarrSeries, retainedSeasons: number[]): Promise<void> {
-    const show = await plex.findShowForArtwork({ tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
+    const show = await plex.findShowForArtwork({ tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null, path: series.path ?? null });
     if (!show) {
-      this.logger.warn("Plex artwork skipped; no exact TVDB or IMDb match", { seriesId: series.id, title: series.title, tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
+      this.logger.warn("Plex artwork skipped; no single Plex show to update", { seriesId: series.id, title: series.title, tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
       return;
     }
     if (show.thumb) await this.overlayItem(plex, rolling, show.ratingKey, { ratingKey: show.ratingKey, seasonNumber: 0, thumb: show.thumb }, "show");

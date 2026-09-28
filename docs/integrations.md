@@ -27,7 +27,15 @@ Pacearr stores:
 
 When **Rolling-season artwork** is enabled and Pacearr is in live mode, it
 matches an enrolled Sonarr show to Plex using only TVDB or IMDb identifiers.
-It never uses a title match for artwork changes. Pacearr saves each affected
+It never uses a title match for artwork changes.
+
+| ID lookup finds | Result |
+|---|---|
+| One Plex item | That item gets artwork |
+| Different Plex shows (different Plex GUIDs) | Skipped |
+| One Plex show in several TV libraries | Only the copy whose Plex folder (`Location` path) equals Sonarr's `series.path` gets artwork; skipped if not exactly one does. Paths are compared exactly apart from a trailing slash, so differing Sonarr/Plex mount points are skipped |
+
+Pacearr saves each affected
 season's original poster under `/config/plex-artwork`, overlays `WATCH E01 TO
 UNLOCK` while that season is pilot-only, and restores the original image when
 the season expands or the show is unenrolled. The original backup makes
