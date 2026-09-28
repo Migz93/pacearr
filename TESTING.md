@@ -231,7 +231,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| `findShowForArtwork` requests a single seed item per TV section | Regression for #200 — the seed request that reaches a section's `/matches` endpoint sends both `X-Plex-Container-Start=0` and `X-Plex-Container-Size=1`. Plex ignores the size without the start, so dropping it downloads the whole section per identifier and times out under load |
+| `findShowForArtwork` requests a single seed item per TV section | Regression for #200 — the seed request to `/library/sections/{key}/all`, which fetches one show so the lookup can call that show's `/matches` endpoint, sends both `X-Plex-Container-Start=0` and `X-Plex-Container-Size=1` as URL query parameters. Plex ignores the size without the start, so dropping it downloads the whole section per identifier and times out under load |
 
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 
