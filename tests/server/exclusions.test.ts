@@ -336,6 +336,24 @@ test("including an episode monitors it when an active viewer holds its not-yet-e
   }
 });
 
+test("including the episode an active viewer is on counts that viewer toward its season", async () => {
+  // While S03E02 was excluded, the viewer on it held nothing. Once it is included that
+  // viewer holds season 3, so the episode must be monitored and searched now.
+  const harness = createHarness();
+  try {
+    const viewer = harness.db.listUsers()[0]!;
+    harness.db.upsertRollingUserProgress(harness.rollingShowId, viewer.id, 3, 2, new Date().toISOString());
+    harness.db.excludeEpisode(harness.rollingShowId, 3, 2);
+
+    await harness.services.setEpisodeExcluded(harness.rollingShowId, 3, 2, false);
+
+    assert.deepEqual(harness.episodeMonitorUpdates(), [{ episodeIds: [8302], monitored: true }]);
+    assert.deepEqual(harness.searches(), [{ name: "EpisodeSearch", episodeIds: [8302] }]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("dry run stores an exclusion without changing Sonarr or expanded seasons", async () => {
   const harness = createHarness({ dryRun: true });
   try {

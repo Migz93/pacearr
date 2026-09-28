@@ -1169,7 +1169,8 @@ export class PacearrServices {
         // seasons, seasons active viewers are in, prefetches and pilots, minus any season exclusion.
         const stored = this.db.getRollingExclusions(show.id);
         const exclusions = { seasons: stored.seasons, episodes: stored.episodes.filter((item) => item.seasonNumber !== seasonNumber || item.episodeNumber !== episodeNumber) };
-        const keptSeasons = [...new Set([...show.expandedSeasons, ...this.getActiveRetainedSeasons(show.id)])];
+        // Retention is judged without this episode's exclusion too, so a viewer on it counts.
+        const keptSeasons = [...new Set([...show.expandedSeasons, ...this.getActiveRetainedSeasons(show.id, exclusions)])];
         const prefetchedIds = prefetchedEpisodeIdsForEpisodes(episodes, this.db.listPrefetchedEpisodes(show.id));
         const series = await sonarr.getSeriesById(show.sonarrSeriesId);
         const target = calculateRollingPlan(series, episodes, keptSeasons, false, prefetchedIds, exclusions).isTargetMonitored(episode);
@@ -1207,11 +1208,11 @@ export class PacearrServices {
     );
   }
 
-  private getActiveRetainedSeasons(rollingShowId: number): number[] {
+  private getActiveRetainedSeasons(rollingShowId: number, exclusions = this.db.getRollingExclusions(rollingShowId)): number[] {
     const settings = this.db.getAppSettings();
     const cutoff = Date.now() - settings.viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     // Watching an excluded season or episode must not make Pacearr monitor anything.
-    const excluded = exclusionCheck(this.db.getRollingExclusions(rollingShowId));
+    const excluded = exclusionCheck(exclusions);
     return [...new Set(this.getActiveProgress(rollingShowId, cutoff)
       .filter((progress) => !excluded.episode(progress.lastWatchedSeason, progress.lastWatchedEpisode))
       .map((progress) => progress.lastWatchedSeason))]
