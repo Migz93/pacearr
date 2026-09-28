@@ -1081,3 +1081,25 @@ test("Plex artwork records persist original poster backups and overlay state", (
     cleanup();
   }
 });
+
+test("Migration 25 clears ignore records for shows that are already enrolled", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 24);
+    const stamp = "2026-09-28T09:00:00.000Z";
+    raw.prepare(`
+      INSERT INTO rolling_shows (sonarr_series_id, title, expanded_seasons, created_at, updated_at)
+      VALUES (?, ?, '[]', ?, ?)
+    `).run(1, "Enrolled And Ignored", stamp, stamp);
+    const ignore = raw.prepare("INSERT INTO ignored_recommendations (sonarr_series_id, title, created_at) VALUES (?, ?, ?)");
+    ignore.run(1, "Enrolled And Ignored", stamp);
+    ignore.run(2, "Only Ignored", stamp);
+
+    runMigrations(raw);
+    assert.deepEqual(raw.prepare("SELECT sonarr_series_id FROM ignored_recommendations").all(), [{ sonarr_series_id: 2 }]);
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
