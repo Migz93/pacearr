@@ -172,6 +172,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
+| runAfterActiveAndWait waits for a fresh run after an active one, not the active run | A caller that needs work started after its request (the Sonarr tag import's full history read) is not satisfied by a run already in progress: it resolves only after a queued fresh run finishes |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
 
