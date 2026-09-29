@@ -612,7 +612,7 @@ function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSa
     >
       <ToggleField
         label="Write tags to Sonarr"
-        hint="Tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored. Pacearr never adds or removes any other tag. Nothing is written while dry run is on."
+        hint="Tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored."
         checked={tagsEnabled}
         onChange={(value) => { setTagsEnabled(value); setSaved(false); }}
       />
@@ -631,7 +631,7 @@ function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSa
         <span aria-live="polite">{result && <span className={`text-[13px] font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>}</span>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        Works whether or not tag writing is on. Adds only shows Pacearr has no record of, and never changes an existing enrolment or ignore. Imported shows are not reset to pilots: Pacearr reads the latest Plex and Tautulli history, then reconciles them as usual. Excluded seasons and episodes cannot be recovered from tags.
+        Restores enrolled and ignored shows from their Sonarr tags. Only needed when setting Pacearr up again from scratch.
       </p>
       {preview && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
