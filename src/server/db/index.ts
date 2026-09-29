@@ -1231,6 +1231,8 @@ export class PacearrDatabase {
    * is recognised as a duplicate rather than imported again. Only a row recording the
    * same watch moves: a different install behind the same URL can reuse the ID for
    * another watch, and that row must stay where it is rather than absorb the new event.
+   * Every field compared is stored as imported and never rewritten. A missed match only
+   * stores the watch twice; a false one would drop the new event, so the check is strict.
    */
   private adoptFallbackWatchEvent(input: NormalizedWatchEventInput): boolean {
     if (!input.fallbackConnection || input.fallbackConnection === input.sourceConnection) return false;
@@ -1238,8 +1240,13 @@ export class PacearrDatabase {
       UPDATE OR IGNORE watch_events SET source_connection = ?
       WHERE source = ? AND source_connection = ? AND source_event_id = ?
         AND watched_at = ? AND season_number = ? AND episode_number = ?
+        AND show_title = ? AND username IS ? AND plex_account_id IS ?
     `);
-    return this.adoptFallbackStatement.run(input.sourceConnection, input.source, input.fallbackConnection, input.sourceEventId, input.watchedAt, input.seasonNumber, input.episodeNumber).changes > 0;
+    return this.adoptFallbackStatement.run(
+      input.sourceConnection, input.source, input.fallbackConnection, input.sourceEventId,
+      input.watchedAt, input.seasonNumber, input.episodeNumber,
+      input.showTitle, input.username, input.plexAccountId,
+    ).changes > 0;
   }
 
   insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null; adopted: boolean } {

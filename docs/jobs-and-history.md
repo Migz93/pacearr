@@ -139,7 +139,7 @@ Events are unique by `(source, source_connection, source_event_id)` so re-import
 
 The connections are defined in `history-sync.ts`. Tautulli's install ID is asked for on every history import and active-session check, so a Tautulli reinstalled behind the same URL and API key is recognised without a settings save.
 
-Migration 27 stamped existing events with the connection configured at upgrade. Tautulli events were stamped with the URL, because its install ID needs a network call. An event stored under a fallback URL moves to the stable ID only when that server reports the same watch again: same source event ID, watch time, season and episode. An event that does not match stays under the URL, because a different install behind that URL can reuse the ID for another watch.
+Migration 27 stamped existing events with the connection configured at upgrade. Tautulli events were stamped with the URL, because its install ID needs a network call. An event stored under a fallback URL moves to the stable ID only when that server reports the same watch again: same source event ID, watch time, season, episode, show title, username and Plex account ID. An event that does not match stays under the URL, because a different install behind that URL can reuse the ID for another watch.
 
 ## History Synchronization
 

@@ -1016,6 +1016,15 @@ test("a watch event stored under its server's URL moves to the stable ID only wh
     // the old row stays under the URL rather than being claimed by the new install.
     assert.deepEqual(db.insertWatchEventsBatch([event("tautulli", "install-a", "2", 5, url)]).map((result) => [result.inserted, result.adopted]), [[true, false]]);
     assert.equal(db.countWatchEvents(), 4);
+    // The same ID, second, season and episode is still not the same watch when the show
+    // or the viewer differs.
+    db.insertWatchEvent(event("tautulli", url, "3", 1));
+    assert.equal(db.insertWatchEvent({ ...event("tautulli", "install-a", "3", 1, url), showTitle: "Gold Rush" }).adopted, false, "another show");
+    db.insertWatchEvent(event("tautulli", url, "4", 1));
+    assert.equal(db.insertWatchEvent({ ...event("tautulli", "install-a", "4", 1, url), username: "bob" }).adopted, false, "another viewer");
+    db.insertWatchEvent({ ...event("plex-history", url, "5", 1), plexAccountId: "1" });
+    assert.equal(db.insertWatchEvent({ ...event("plex-history", "plex-id", "5", 1, url), plexAccountId: "2" }).adopted, false, "another Plex account");
+    assert.equal(db.countWatchEvents(), 10);
     assert.equal(db.insertWatchEvent(event("tautulli", url, "2", 2)).inserted, false, "the unmatched row is still stored under the URL");
     assert.equal(db.insertWatchEvent(event("plex-history", url, "1", 1)).inserted, false, "other sources keep their connection");
   } finally {
