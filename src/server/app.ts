@@ -124,6 +124,11 @@ function requiredString(value: unknown, name: string) {
   return value.trim();
 }
 
+function seriesIdList(value: unknown): number[] | null {
+  if (!Array.isArray(value) || !value.every((item) => Number.isSafeInteger(item) && item > 0)) return null;
+  return value as number[];
+}
+
 function parseServerUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -402,6 +407,40 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ ok: true, sonarr: db.getSonarrSettingsView() });
   }));
 
+  // Import from Sonarr tags is two steps: a read-only preview the administrator confirms,
+  // then the import, which is limited to the series IDs that preview listed.
+  app.get("/api/sonarr/tag-import", requireAuth, asyncRoute(async (_req, res) => {
+    res.json(await services.previewSonarrTagImport());
+  }));
+  app.post("/api/sonarr/tag-import", requireAuth, asyncRoute(async (req, res) => {
+    const enrollSeriesIds = seriesIdList(req.body.enrollSeriesIds);
+    const ignoreSeriesIds = seriesIdList(req.body.ignoreSeriesIds);
+    if (!enrollSeriesIds || !ignoreSeriesIds) {
+      res.status(400).json({ error: "enrollSeriesIds and ignoreSeriesIds must be arrays of series IDs." });
+      return;
+    }
+    const result = await services.importFromSonarrTags({ enrollSeriesIds, ignoreSeriesIds });
+    if (result.enrolled > 0 || result.ignored > 0) runRecommendationRefreshNow();
+    if (result.enrolled > 0 && scheduler) {
+      // Re-adopted shows are reconciled against the latest playback history rather than
+      // waiting for the next scheduled runs: read Plex and Tautulli in full first, then
+      // reconcile, so the reconcile sees every viewer's current position.
+      logger.info("Sonarr tag import re-adopted shows; scheduling full history reconciliation then rolling reconciliation", { enrolled: result.enrolled });
+      // runAfterActiveAndWait waits out a full read already in progress and then runs a
+      // fresh one, so the rolling reconcile never starts ahead of the history it needs.
+      void scheduler.runAfterActiveAndWait("full-history-reconcile")
+        .then((completed) => {
+          if (!completed) {
+            logger.warn("Full history reconciliation after the Sonarr tag import did not complete; re-adopted shows stay protected from cleanup until one succeeds", { enrolled: result.enrolled });
+          }
+          // Still run: it reconciles every other show, and skips the protected ones.
+          scheduler.runNowOrQueue("rolling-reconcile");
+        })
+        .catch((error) => logger.warn("Post-import reconciliation failed to start", { error: error instanceof Error ? error.message : String(error) }));
+    }
+    res.json(result);
+  }));
+
   app.post("/api/settings/tautulli/test", requireAuth, asyncRoute(async (req, res) => {
     const existing = db.getTautulliSettings();
     const settings = {
@@ -439,6 +478,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const patch: Partial<AppSettings> = {};
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
+    if (body.sonarrTagsEnabled !== undefined) patch.sonarrTagsEnabled = Boolean(body.sonarrTagsEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
     if (body.historyRetentionDays !== undefined) {
       const retentionDays = Number(body.historyRetentionDays);
@@ -541,6 +581,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
       scheduler?.runNow("rolling-reconcile");
+    }
+    // The library refresh reconciles Sonarr tags, which were left out of date while
+    // tag writing was off or dry run was on.
+    const tagsWereWritable = previousSettings.sonarrTagsEnabled && !previousSettings.dryRun;
+    if (!tagsWereWritable && appSettings.sonarrTagsEnabled && !appSettings.dryRun) {
+      logger.info("Sonarr tag writing is now active; scheduling a library refresh to catch tags up");
+      scheduler?.runNowOrQueue("sonarr-library-refresh");
     }
     res.json({ app: appSettings });
   });
@@ -784,18 +831,22 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
     res.json({ triggered: runRecommendationRefreshNow() });
   });
-  app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
+  app.post("/api/recommendations/:seriesId/ignore", requireAuth, asyncRoute(async (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
-    if (!title) return res.status(400).json({ error: "A show title is required." });
-    if (!services.ignoreRecommendation(Number(req.params.seriesId), title)) {
-      return res.status(409).json({ error: "An enrolled show cannot be ignored." });
+    if (!title) {
+      res.status(400).json({ error: "A show title is required." });
+      return;
+    }
+    if (!(await services.ignoreRecommendation(Number(req.params.seriesId), title))) {
+      res.status(409).json({ error: "An enrolled show cannot be ignored." });
+      return;
     }
     res.json({ ok: true });
-  });
-  app.delete("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
-    services.unignoreRecommendation(Number(req.params.seriesId));
+  }));
+  app.delete("/api/recommendations/:seriesId/ignore", requireAuth, asyncRoute(async (req, res) => {
+    await services.unignoreRecommendation(Number(req.params.seriesId));
     res.json({ ok: true });
-  });
+  }));
   app.post("/api/rolling-shows/:id/reset", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.resetShow(Number(req.params.id)));
   }));

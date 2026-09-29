@@ -1371,7 +1371,7 @@ test("ignored recommendations are persistent, hidden by default, and can be rest
 
   try {
     await services.refreshRecommendations();
-    services.ignoreRecommendation(900, show.title);
+    await services.ignoreRecommendation(900, show.title);
     const hidden = services.listRecommendations();
     assert.deepEqual(hidden.candidates, []);
     assert.equal(hidden.ignoredCount, 1);
@@ -1379,7 +1379,7 @@ test("ignored recommendations are persistent, hidden by default, and can be rest
     const included = services.listRecommendations(true);
     assert.equal(included.candidates[0]?.ignored, true);
 
-    services.unignoreRecommendation(900);
+    await services.unignoreRecommendation(900);
     const restored = services.listRecommendations();
     assert.equal(restored.candidates[0]?.ignored, false);
     assert.equal(restored.ignoredCount, 0);
@@ -1545,7 +1545,7 @@ test("Enrolled lists every enrolled show, including one the Sonarr library cache
   }
 });
 
-test("Ignored lists every ignore record, whatever the recommendation cache holds", () => {
+test("Ignored lists every ignore record, whatever the recommendation cache holds", async () => {
   const { db, services, cleanup } = createHarness();
   const candidate = {
     sonarrSeriesId: 10, title: "Small Savings", year: 2010, posterUrl: null, status: "ended", seasonCount: 2, episodeCount: 20,
@@ -1554,8 +1554,8 @@ test("Ignored lists every ignore record, whatever the recommendation cache holds
   try {
     db.updateAppSettings({ recommendationMinimumSavingsGb: 1 });
     db.saveRecommendationCache([candidate]);
-    services.ignoreRecommendation(10, "Small Savings");
-    services.ignoreRecommendation(11, "Not In Any Cache");
+    await services.ignoreRecommendation(10, "Small Savings");
+    await services.ignoreRecommendation(11, "Not In Any Cache");
 
     const result = services.listRecommendations(true);
     const byId = new Map(result.candidates.map((item) => [item.sonarrSeriesId, item]));
@@ -1571,7 +1571,7 @@ test("Ignored lists every ignore record, whatever the recommendation cache holds
     assert.equal(byId.get(11)?.savingsUnavailable, true);
     assert.equal(byId.get(11)?.sonarrDetailsUnavailable, true);
 
-    services.unignoreRecommendation(11);
+    await services.unignoreRecommendation(11);
     const restored = services.listRecommendations(true);
     assert.deepEqual(restored.candidates.map((item) => item.sonarrSeriesId), [10]);
     assert.equal(restored.ignoredCount, 1);
@@ -1580,7 +1580,7 @@ test("Ignored lists every ignore record, whatever the recommendation cache holds
   }
 });
 
-test("Enrolling a show clears its ignore, and an enrolled show cannot be ignored", () => {
+test("Enrolling a show clears its ignore, and an enrolled show cannot be ignored", async () => {
   const { db, services, cleanup } = createHarness();
   const candidate = {
     sonarrSeriesId: 20, title: "Now Enrolled", year: null, posterUrl: null, status: null, seasonCount: 2, episodeCount: 4,
@@ -1589,11 +1589,11 @@ test("Enrolling a show clears its ignore, and an enrolled show cannot be ignored
   try {
     // A recommendation calculated before the enrolment must not keep listing the show.
     db.saveRecommendationCache([candidate]);
-    assert.equal(services.ignoreRecommendation(20, "Now Enrolled"), true);
+    assert.equal(await services.ignoreRecommendation(20, "Now Enrolled"), true);
     db.upsertRollingShow({ id: 20, title: "Now Enrolled" });
 
     assert.deepEqual(db.listIgnoredRecommendationIds(), []);
-    assert.equal(services.ignoreRecommendation(20, "Now Enrolled"), false);
+    assert.equal(await services.ignoreRecommendation(20, "Now Enrolled"), false);
     assert.deepEqual(db.listIgnoredRecommendationIds(), []);
     const result = services.listRecommendations(true);
     assert.deepEqual(result.candidates, []);
@@ -1635,8 +1635,8 @@ test("A library refresh removes Pacearr records only for series Sonarr confirms 
   const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 4: 500, 5: 404, 6: 500 });
   try {
     for (const id of [1, 2, 3, 4]) db.upsertRollingShow({ id, title: `Series ${id}` });
-    services.ignoreRecommendation(5, "Series 5");
-    services.ignoreRecommendation(6, "Series 6");
+    await services.ignoreRecommendation(5, "Series 5");
+    await services.ignoreRecommendation(6, "Series 6");
 
     await services.refreshSonarrLibrary();
 
@@ -1662,7 +1662,7 @@ test("An empty Sonarr series list or dry run never removes Pacearr records", asy
 
     // Dry run changes nothing, Pacearr's own records included; it previews each removal.
     const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 5: 404 });
-    services.ignoreRecommendation(5, "Series 5");
+    await services.ignoreRecommendation(5, "Series 5");
     db.updateAppSettings({ dryRun: true });
     try {
       await services.refreshSonarrLibrary();

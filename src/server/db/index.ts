@@ -25,6 +25,7 @@ import type {
   DashboardShowActivity,
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
+  PacearrSonarrTag,
 } from "../../shared/types.js";
 import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
@@ -46,6 +47,7 @@ export const MAX_SAFE_RETENTION_DAYS = 100_000_000;
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
+  sonarrTagsEnabled: false,
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
@@ -343,6 +345,27 @@ export class PacearrDatabase {
 
   unignoreRecommendation(seriesId: number): void {
     this.db.prepare("DELETE FROM ignored_recommendations WHERE sonarr_series_id = ?").run(seriesId);
+  }
+
+  queueSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare(`
+      INSERT INTO sonarr_tag_removals (sonarr_series_id, tag, queued_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(sonarr_series_id, tag) DO NOTHING
+    `).run(seriesId, tag, now());
+  }
+
+  listSonarrTagRemovals(): Array<{ sonarrSeriesId: number; tag: PacearrSonarrTag }> {
+    return (this.db.prepare("SELECT sonarr_series_id, tag FROM sonarr_tag_removals ORDER BY queued_at, sonarr_series_id").all() as Array<{ sonarr_series_id: number; tag: PacearrSonarrTag }>)
+      .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, tag: row.tag }));
+  }
+
+  clearSonarrTagRemovalsForSeries(seriesId: number): number {
+    return this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ?").run(seriesId).changes;
+  }
+
+  clearSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ? AND tag = ?").run(seriesId, tag);
   }
 
   /**
@@ -782,6 +805,23 @@ export class PacearrDatabase {
       this.unignoreRecommendation(series.id);
       return this.getRollingShowBySeriesId(series.id)!;
     });
+  }
+
+  markRollingShowAwaitingHistory(id: number): void {
+    this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = ? WHERE id = ?").run(now(), id);
+  }
+
+  isRollingShowAwaitingHistory(id: number): boolean {
+    return this.db.prepare("SELECT 1 FROM rolling_shows WHERE id = ? AND awaiting_history_since IS NOT NULL").get(id) !== undefined;
+  }
+
+  listRollingShowIdsAwaitingHistory(): number[] {
+    return (this.db.prepare("SELECT id FROM rolling_shows WHERE awaiting_history_since IS NOT NULL").all() as Array<{ id: number }>).map((row) => row.id);
+  }
+
+  clearRollingShowsAwaitingHistory(ids: number[]): void {
+    const clear = this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = NULL WHERE id = ?");
+    this.transaction(() => { for (const id of ids) clear.run(id); });
   }
 
   deleteRollingShow(id: number): void {

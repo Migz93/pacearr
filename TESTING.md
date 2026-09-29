@@ -172,6 +172,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
+| runAfterActiveAndWait waits for a fresh run after an active one, not the active run | A caller that needs work started after its request (the Sonarr tag import's full history read) is not satisfied by a run already in progress: it resolves only after a queued fresh run finishes |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
 
@@ -216,7 +217,24 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Dry-run blocks Sonarr mutations | Monitoring updates, searches, and file deletions send no HTTP requests while dry-run mode is enabled |
+| Dry-run blocks Sonarr mutations | Monitoring updates, searches, file deletions, tag creation and series-tag edits send no HTTP requests while dry-run mode is enabled |
+
+### `tests/server/sonarr-tags.test.ts` — Sonarr tag mirror and import
+
+Runs against a temporary SQLite database and an in-memory fake Sonarr that applies series-editor tag changes.
+
+| Test | What it checks |
+|---|---|
+| Tag writes add and remove only Pacearr's own tags, through the series editor | Ignore, enrol (ignored → enrolled), unenrol and restore each add or remove the matching Pacearr tag, every editor request uses `add`/`remove` with only Pacearr's tag IDs, and an unrelated tag on the series survives all of it |
+| A reconcile adds missing tags but never removes a tag Pacearr has no record for | With an empty database facing tagged series (the state after database loss), a library refresh sends no removal; an enrolled show missing its tag gets it |
+| A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |
+| Dry run sends no tag request, and queued removals catch up once it is off | No `/tag` or `/series/editor` request in dry run; afterwards queued removals and missing adds are applied, and a removal for a show ignored again before it was sent is dropped rather than stripping the current tag |
+| Tag writing is off by default: nothing is sent, removals queue, and import still works | `sonarrTagsEnabled` defaults to false; while off, no `/tag` or `/series/editor` request is sent but removals are queued, the import preview still works, and turning writing on applies the queued removal and missing adds |
+| A series confirmed deleted from Sonarr drops its queued tag removals without sending them | With tag writing off, a queued removal for a restored show (no record left) and one for an enrolled show are both cleared once Sonarr confirms each series is gone, and no tag request is sent |
+| A reconcile defers a show another operation holds, logs it, and tags it once it is free | A busy show is not written during the main pass; its title is logged; one that becomes free within the retry window is tagged in the same run, and one still busy is reported as deferred for the next refresh |
+| A deferred show whose re-read fails stays deferred instead of being counted as done | A transient Sonarr error re-reading a freed show is logged and keeps it in the deferred count, rather than being treated as a deleted series and silently dropped |
+| A re-adopted show is not reconciled or cleaned up until a full history read completes | With a zero-day cleanup delay, a rolling reconcile before history is rebuilt sends nothing for an imported show; a successful full history reconciliation clears the guard and the next reconcile treats it normally |
+| Importing from Sonarr tags is additive, skips conflicts, and re-adopts without a pilot baseline | The preview splits tagged shows into enrol/ignore/already known/conflict and treats a queued removal as absent; the import only creates records the confirmation listed, never changes an existing one, records still-monitored seasons as expanded, and sends nothing to Sonarr |
 
 ---
 
