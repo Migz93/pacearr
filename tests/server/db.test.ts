@@ -241,12 +241,12 @@ test("rolling progress follows a viewer's most recent watch, even after a rewatc
     assert.equal(progress?.lastWatchedAt, "2026-07-13T10:00:00.000Z");
 
     db.insertWatchEvent({
-      source: "plex-history", sourceEventId: "old", userId: user.id, plexAccountId: "1", username: "alice",
+      source: "plex-history", sourceConnection: "plex-id", sourceEventId: "old", userId: user.id, plexAccountId: "1", username: "alice",
       sonarrSeriesId: 42, showTitle: "Fringe", seasonNumber: 5, episodeNumber: 8,
       watchedAt: "2025-01-01T10:00:00.000Z", rawPayload: {},
     });
     db.insertWatchEvent({
-      source: "plex-history", sourceEventId: "recent", userId: user.id, plexAccountId: "1", username: "alice",
+      source: "plex-history", sourceConnection: "plex-id", sourceEventId: "recent", userId: user.id, plexAccountId: "1", username: "alice",
       sonarrSeriesId: 42, showTitle: "Fringe", seasonNumber: 1, episodeNumber: 3,
       watchedAt: "2026-07-13T10:00:00.000Z", rawPayload: {},
     });
@@ -570,7 +570,7 @@ test("pruning history events by retention only removes events older than the cut
     const [user] = db.upsertUsers([{ plexUserId: "plex-retention", plexAccountId: "9", tautulliUserId: null, username: "retention", displayName: "Retention", avatarUrl: null }]);
     db.upsertRollingShow({ id: 900, title: "Retention Show" });
     db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "retention-evt-1",
       userId: user!.id,
       plexAccountId: "9",
@@ -647,11 +647,12 @@ test("pruning history events does not crash or wipe every row on a NaN retention
   }
 });
 
-test("watch event import is idempotent by source and source event id", () => {
+test("watch event import is idempotent by source, connection and source event id", () => {
   const { db, cleanup } = createDb();
   try {
     const input = {
       source: "plex-history" as const,
+      sourceConnection: "plex-id",
       sourceEventId: "history-1",
       userId: null,
       plexAccountId: "1",
@@ -676,7 +677,7 @@ test("server-local Plex owner history can be linked and used to rebuild progress
   try {
     const [owner] = db.upsertUsers([{ plexUserId: "owner-cloud-id", plexAccountId: "owner-cloud-id", tautulliUserId: null, username: "owner", displayName: "Owner", avatarUrl: null }]);
     db.insertWatchEvent({
-      source: "plex-history", sourceEventId: "owner-history-1", userId: null, plexAccountId: "1", username: null,
+      source: "plex-history", sourceConnection: "plex-id", sourceEventId: "owner-history-1", userId: null, plexAccountId: "1", username: null,
       sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 11,
       watchedAt: "2026-04-12T10:00:00.000Z", rawPayload: {},
     });
@@ -697,14 +698,14 @@ test("a previously orphaned Tautulli watch event can be repaired once its user r
       { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
     ]);
     db.insertWatchEvent({
-      source: "tautulli", sourceEventId: "tautulli-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+      source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "tautulli-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
       sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 3,
       watchedAt: "2026-04-12T10:00:00.000Z", rawPayload: {},
     });
-    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), true);
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-install", "tautulli-orphan-1", dave.id), true);
     assert.deepEqual(db.listLatestWatchProgressForUser(dave.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 3, watchedAt: "2026-04-12T10:00:00.000Z" }]);
     // Already-assigned events must not be re-attributed by a later, different resolution.
-    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-orphan-1", dave.id), false);
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("tautulli-install", "tautulli-orphan-1", dave.id), false);
   } finally {
     cleanup();
   }
@@ -717,7 +718,7 @@ test("mapping a Tautulli identity persists it and links that identity's orphaned
       { plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave_plex", displayName: "Dave", avatarUrl: null },
     ]);
     db.insertWatchEvent({
-      source: "tautulli", sourceEventId: "tautulli-orphan-mapping", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "tautulli-orphan-mapping", userId: null, plexAccountId: null, username: "Different Tautulli Name",
       sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 5,
       watchedAt: "2026-04-13T10:00:00.000Z", rawPayload: { user_id: 47, user: "Different Tautulli Name" },
     });
@@ -774,8 +775,8 @@ test("unmapped Tautulli users display the names from their newest event", () => 
   try {
     const older = "2026-04-01T10:00:00.000Z";
     const newer = "2026-04-02T10:00:00.000Z";
-    db.insertWatchEvent({ source: "tautulli", sourceEventId: "older", userId: null, plexAccountId: null, username: "Zoe", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 1, watchedAt: older, rawPayload: { user_id: "47", user: "Old friendly name" } });
-    db.insertWatchEvent({ source: "tautulli", sourceEventId: "newer", userId: null, plexAccountId: null, username: "Adam", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 2, watchedAt: newer, rawPayload: { user_id: "47", user: "New friendly name" } });
+    db.insertWatchEvent({ source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "older", userId: null, plexAccountId: null, username: "Zoe", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 1, watchedAt: older, rawPayload: { user_id: "47", user: "Old friendly name" } });
+    db.insertWatchEvent({ source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "newer", userId: null, plexAccountId: null, username: "Adam", sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 2, watchedAt: newer, rawPayload: { user_id: "47", user: "New friendly name" } });
 
     assert.deepEqual(db.listUnmappedTautulliUsers(), [{
       tautulliUserId: "47", username: "Adam", friendlyName: "New friendly name", eventCount: 2, lastWatchedAt: newer,
@@ -868,7 +869,7 @@ test("migration 23 stamps history cursors with the connection configured at upgr
       tautulli: { backfillComplete: true, cursor: stamp },
     }), stamp);
 
-    runMigrations(raw);
+    runMigrations(raw, undefined, 23);
 
     const sync = JSON.parse((raw.prepare("SELECT value FROM settings WHERE key = 'historySync'").get() as { value: string }).value);
     assert.deepEqual(sync.plex, { backfillComplete: true, cursor: stamp, connection: "plex-id" });
@@ -920,7 +921,7 @@ test("migration 22 separates Tautulli active-session events without losing exist
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run("tautulli", "completed-1", "The Expanse", 1, 1, stamp, "{}", stamp);
 
-    runMigrations(raw);
+    runMigrations(raw, undefined, 22);
 
     assert.equal((raw.prepare("SELECT COUNT(*) AS count FROM watch_events WHERE source = 'tautulli'").get() as { count: number }).count, 1);
     raw.prepare(`
@@ -933,12 +934,147 @@ test("migration 22 separates Tautulli active-session events without losing exist
   }
 });
 
+test("migration 27 stamps existing watch events with the connection configured at upgrade", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 26);
+    const stamp = "2026-09-01T09:00:00.000Z";
+    const save = raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)");
+    save.run("plex", JSON.stringify({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" }), stamp);
+    save.run("tautulli", JSON.stringify({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }), stamp);
+    // As migration 23 stamped them.
+    save.run("historySync", JSON.stringify({
+      plex: { backfillComplete: true, cursor: stamp, connection: "plex-id" },
+      tautulli: { backfillComplete: true, cursor: stamp, connection: "http://tautulli:8181" },
+    }), stamp);
+    const insert = raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const source of ["plex-history", "plex-session", "tautulli", "tautulli-session"]) insert.run(source, "1", "The Expanse", 1, 1, stamp, "{}", stamp);
+
+    runMigrations(raw);
+
+    const rows = raw.prepare("SELECT source, source_connection AS connection FROM watch_events ORDER BY id").all();
+    // The configured server may have replaced the one a row came from, so rows get the
+    // URL fallback, never the stable ID; insertWatchEvent moves each one that is reported
+    // again as the same watch.
+    assert.deepEqual(rows, [
+      { source: "plex-history", connection: "http://plex:32400" },
+      { source: "plex-session", connection: "http://plex:32400" },
+      { source: "tautulli", connection: "http://tautulli:8181" },
+      { source: "tautulli-session", connection: "http://tautulli:8181" },
+    ]);
+    const sync = JSON.parse((raw.prepare("SELECT value FROM settings WHERE key = 'historySync'").get() as { value: string }).value);
+    assert.equal(sync.plex.connection, "http://plex:32400", "the Plex cursor is restamped, so the next import is a full read");
+    assert.equal(sync.tautulli.connection, "http://tautulli:8181");
+    const reinsert = raw.prepare(`
+      INSERT OR IGNORE INTO watch_events (source, source_connection, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    assert.equal(reinsert.run("plex-history", "http://plex:32400", "1", "The Expanse", 1, 1, stamp, "{}", stamp).changes, 0, "an event under the same connection is still a duplicate");
+    assert.equal(reinsert.run("plex-history", "other-plex", "1", "The Expanse", 1, 1, stamp, "{}", stamp).changes, 1, "another server's event with the same ID is not");
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("migration 27 treats malformed connection settings as unconfigured instead of failing", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 26);
+    const stamp = "2026-09-01T09:00:00.000Z";
+    const save = raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)");
+    save.run("plex", JSON.stringify({ serverUrl: "http://plex:32400", machineIdentifier: [] }), stamp);
+    save.run("tautulli", JSON.stringify({ baseUrl: {} }), stamp);
+    const insert = raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("plex-history", "1", "The Expanse", 1, 1, stamp, "{}", stamp);
+    insert.run("tautulli", "1", "The Expanse", 1, 1, stamp, "{}", stamp);
+
+    runMigrations(raw);
+
+    assert.deepEqual(raw.prepare("SELECT source, source_connection AS connection FROM watch_events ORDER BY id").all(), [
+      { source: "plex-history", connection: "http://plex:32400" },
+      { source: "tautulli", connection: "" },
+    ]);
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("watch events with the same source event ID from two connections are both stored", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const event = (sourceConnection: string, episodeNumber: number) => ({
+      source: "tautulli" as const, sourceConnection, sourceEventId: "138944", userId: null, plexAccountId: null, username: "alice",
+      sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber, watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
+    });
+    assert.equal(db.insertWatchEvent(event("old-install", 1)).inserted, true);
+    assert.equal(db.insertWatchEvent(event("new-install", 2)).inserted, true);
+    assert.equal(db.insertWatchEvent(event("new-install", 2)).inserted, false);
+    assert.equal(db.countWatchEvents(), 2);
+
+    // A repair targets the row from its own connection only.
+    const [alice] = db.upsertUsers([{ plexUserId: "plex-alice", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null }]);
+    assert.equal(db.repairUnmatchedWatchEventSeries("tautulli", "new-install", "138944", 99), true);
+    assert.equal(db.repairUnmatchedTautulliWatchEvent("new-install", "138944", alice!.id), true);
+    assert.deepEqual(db.listLatestWatchProgressForUser(alice!.id), [{ sonarrSeriesId: 99, seasonNumber: 1, episodeNumber: 2, watchedAt: "2026-04-01T10:00:00.000Z" }]);
+    assert.equal(db.listUnmatchedWatchEvents().length, 1, "the old install's row is untouched");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a watch event stored under its server's URL moves to the stable ID only when it is the same watch", () => {
+  const { db, cleanup } = createDb();
+  try {
+    const event = (source: "tautulli" | "plex-history", sourceConnection: string, sourceEventId: string, episodeNumber: number, fallbackConnection?: string) => ({
+      source, sourceConnection, fallbackConnection, sourceEventId, userId: null, plexAccountId: null, username: "alice",
+      sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber, watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
+    });
+    const url = "http://tautulli:8181";
+    // Stored under the URL, as migration 27 stamps rows imported before this change.
+    db.insertWatchEvent(event("tautulli", url, "1", 1));
+    db.insertWatchEvent(event("tautulli", url, "2", 2));
+    // Another source at the same URL is not this Tautulli.
+    db.insertWatchEvent(event("plex-history", url, "1", 1));
+
+    // The same install reports the same watch: recognised, not imported again.
+    const same = db.insertWatchEvent(event("tautulli", "install-a", "1", 1, url));
+    assert.deepEqual(same, { inserted: false, id: null, adopted: true });
+    // A different install behind the URL reused ID 2 for another watch: it is kept, and
+    // the old row stays under the URL rather than being claimed by the new install.
+    assert.deepEqual(db.insertWatchEventsBatch([event("tautulli", "install-a", "2", 5, url)]).map((result) => [result.inserted, result.adopted]), [[true, false]]);
+    assert.equal(db.countWatchEvents(), 4);
+    // The same ID, second, season and episode is still not the same watch when the show
+    // or the viewer differs.
+    db.insertWatchEvent(event("tautulli", url, "3", 1));
+    assert.equal(db.insertWatchEvent({ ...event("tautulli", "install-a", "3", 1, url), showTitle: "Gold Rush" }).adopted, false, "another show");
+    db.insertWatchEvent(event("tautulli", url, "4", 1));
+    assert.equal(db.insertWatchEvent({ ...event("tautulli", "install-a", "4", 1, url), username: "bob" }).adopted, false, "another viewer");
+    db.insertWatchEvent({ ...event("plex-history", url, "5", 1), plexAccountId: "1" });
+    assert.equal(db.insertWatchEvent({ ...event("plex-history", "plex-id", "5", 1, url), plexAccountId: "2" }).adopted, false, "another Plex account");
+    assert.equal(db.countWatchEvents(), 10);
+    assert.equal(db.insertWatchEvent(event("tautulli", url, "2", 2)).inserted, false, "the unmatched row is still stored under the URL");
+    assert.equal(db.insertWatchEvent(event("plex-history", url, "1", 1)).inserted, false, "other sources keep their connection");
+  } finally {
+    cleanup();
+  }
+});
+
 test("latest show progress and season stats are derived from watch events", () => {
   const { db, cleanup } = createDb();
   try {
     const [user] = db.upsertUsers([{ plexUserId: "plex-1", plexAccountId: "1", tautulliUserId: null, username: "alice", displayName: "Alice", avatarUrl: null }]);
     db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "history-1",
       userId: user.id,
       plexAccountId: "1",
@@ -951,7 +1087,7 @@ test("latest show progress and season stats are derived from watch events", () =
       rawPayload: { ok: true },
     });
     db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "history-2",
       userId: user.id,
       plexAccountId: "1",
@@ -993,7 +1129,7 @@ test("dashboard activity uses latest playback and counts active enrolled viewers
     db.upsertRollingUserProgress(show.id, alice.id, 2, 3, "2026-04-02T10:00:00.000Z");
     db.upsertRollingUserProgress(show.id, bob.id, 1, 2, "2026-03-01T10:00:00.000Z");
     db.insertWatchEvent({
-      source: "plex-history", sourceEventId: "dashboard-activity", userId: alice.id, plexAccountId: "1", username: "alice",
+      source: "plex-history", sourceConnection: "plex-id", sourceEventId: "dashboard-activity", userId: alice.id, plexAccountId: "1", username: "alice",
       sonarrSeriesId: 99, showTitle: "The Expanse", seasonNumber: 2, episodeNumber: 3,
       watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: {},
     });

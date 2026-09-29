@@ -80,7 +80,7 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled. Its separately scheduled `get_activity` episode polling records active playback under a distinct source, so it cannot advance the completed-history import cursor.
 
-Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
+Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_connection, source_event_id)`: Plex history keys and Tautulli reference IDs are only unique within one server, so each event records the server it came from (see [jobs-and-history.md](jobs-and-history.md#watch-events)).
 
 ### Live session monitoring
 

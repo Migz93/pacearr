@@ -55,6 +55,17 @@ export class TautulliIntegration {
     }
   }
 
+  /**
+   * Tautulli's install ID (`pms_uuid`, see tautulliHistoryConnection). Only the PMS
+   * settings section is requested, so the notifier credentials elsewhere in Tautulli's
+   * settings are never fetched. Null when this Tautulli does not report one.
+   */
+  async getInstallId(): Promise<string | null> {
+    const data = await this.command<{ pms_uuid?: unknown }>("get_settings", { key: "PMS" });
+    const installId = typeof data?.pms_uuid === "string" ? data.pms_uuid.trim() : "";
+    return installId || null;
+  }
+
   async getShowGuids(ratingKey: string): Promise<ExternalIds> {
     const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey });
     const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];

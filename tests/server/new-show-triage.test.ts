@@ -37,6 +37,9 @@ function installSonarrFetchStub(state: { series: SonarrSeries[]; requests: Array
       if (state.plexHistoryStatus) return new Response("temporary Plex error", { status: state.plexHistoryStatus });
       return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { headers: { "content-type": "application/xml" } });
     }
+    if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_settings") {
+      return jsonResponse({ response: { result: "success", data: { pms_uuid: "tautulli-install" } } });
+    }
     if (url.hostname === "tautulli" && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: [] } } });
     }

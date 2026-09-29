@@ -509,6 +509,79 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Plex history keys and Tautulli reference IDs are only unique within one server, so
+    // a watch event's identity now includes the connection it came from. Otherwise a new
+    // server's event that reused an old server's ID was dropped as a duplicate. Which
+    // server an existing row came from is unknown: the one configured now may have
+    // replaced it. So existing rows are stamped with the configured URL fallback, never a
+    // stable ID, and the Plex cursor is restamped to match. The first import that resolves
+    // a stable ID therefore reads that source in full (while none is reported, the URL is
+    // the connection and its cursor resumes). insertWatchEvent moves a row to the stable
+    // ID only when that read reports the same watch; any other row stays under the URL.
+    version: 27,
+    up(db) {
+      const read = <T>(key: string): T | null => {
+        const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+        if (!row) return null;
+        try { return JSON.parse(row.value) as T; } catch { return null; }
+      };
+      // A hand-edited setting can hold any JSON; binding a non-string would throw and block
+      // startup, so it counts as missing, like an unconfigured source.
+      const text = (value: unknown) => typeof value === "string" ? value : "";
+      const plex = read<{ serverUrl?: unknown; machineIdentifier?: unknown }>("plex");
+      const tautulli = read<{ baseUrl?: unknown }>("tautulli");
+      const plexUrl = text(plex?.serverUrl);
+      const tautulliUrl = text(tautulli?.baseUrl);
+      // Migration 23 stamped the Plex cursor with the machine identifier, which would resume
+      // it and skip the full read. A Tautulli cursor already holds the URL.
+      const sync = read<{ plex?: unknown }>("historySync");
+      if (plexUrl && sync?.plex && typeof sync.plex === "object") {
+        const cursor = sync.plex as { connection?: unknown };
+        if (cursor.connection === plexHistoryConnection({ serverUrl: plexUrl, machineIdentifier: text(plex?.machineIdentifier) })) {
+          cursor.connection = plexUrl;
+          db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
+        }
+      }
+      db.exec(`
+        CREATE TABLE watch_events_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL CHECK(source IN ('plex-history', 'plex-session', 'tautulli', 'tautulli-session')),
+          source_connection TEXT NOT NULL,
+          source_event_id TEXT NOT NULL,
+          user_id INTEGER,
+          plex_account_id TEXT,
+          username TEXT,
+          sonarr_series_id INTEGER,
+          show_title TEXT NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          watched_at TEXT NOT NULL,
+          raw_payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source, source_connection, source_event_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+      `);
+      db.prepare(`
+        INSERT INTO watch_events_next
+          SELECT id, source,
+            CASE WHEN source IN ('plex-history', 'plex-session') THEN ? ELSE ? END,
+            source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at
+          FROM watch_events
+      `).run(plexUrl, tautulliUrl);
+      db.exec(`
+        DROP TABLE watch_events;
+        ALTER TABLE watch_events_next RENAME TO watch_events;
+        CREATE INDEX idx_watch_events_user ON watch_events(user_id);
+        CREATE INDEX idx_watch_events_show ON watch_events(sonarr_series_id);
+        CREATE INDEX idx_watch_events_series_user_watched
+          ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+          ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {
