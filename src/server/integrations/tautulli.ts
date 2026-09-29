@@ -1,5 +1,6 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { createProgressLog, type ProgressLog } from "../progress-log.js";
 import { liveSessionEventId } from "./live-session.js";
 import { buildIntegrationUrl, fetchIntegration } from "./request.js";
 
@@ -130,6 +131,7 @@ export class TautulliIntegration {
     const cutoff = since ? new Date(since).getTime() : null;
     let start = 0;
     const length = 1000;
+    let progress: ProgressLog | null = null;
     for (;;) {
       const data = await this.command<{ data?: any[]; recordsFiltered?: number; total_duration?: string }>("get_history", {
         media_type: "episode",
@@ -137,6 +139,11 @@ export class TautulliIntegration {
         length,
       }, 60_000);
       const rows = data?.data ?? [];
+      // Tautulli reports its row count with the first page. An incremental read stops at
+      // its cursor well before that, so only a full read reports a total.
+      const reportedTotal = Number(data?.recordsFiltered);
+      progress ??= createProgressLog(this.logger, "Tautulli history fetch progress", since === undefined && Number.isFinite(reportedTotal) ? reportedTotal : null);
+      progress.tick(rows.length);
       const pageRecords: TautulliHistoryRecord[] = [];
       for (const row of rows) {
         const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);

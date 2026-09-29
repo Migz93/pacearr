@@ -192,6 +192,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A loop that finishes within the interval logs nothing | Short runs of a long job stay quiet |
 | Progress is reported once per interval with the running count and total | A long loop logs `processed`/`total` (plus its own fields) at each interval, never more often |
 | The next interval is measured from the last line | A slow item that crosses the interval late does not let the following item log early |
+| Several items per tick, with an unknown total | A paged read counts a whole page per tick, and a loop with no known length logs `processed` without a `total` |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 

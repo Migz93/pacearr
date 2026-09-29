@@ -244,8 +244,9 @@ run that finishes sooner.
 
 | Job | Progress message | Extra fields |
 |---|---|---|
-| `history-import` | `History import progress` | `source` (`plex`/`tautulli`), `phase` (`matching`/`rolling`) |
+| `history-import` | `History import progress` | `source` (`plex`/`tautulli`) and `phase` (`matching`/`rolling`), or `phase: "active-progress"` for the enrolled-show pass at the end |
 | `full-history-reconcile` | `Full history reconciliation progress` | same as above |
+| both history jobs, while reading pages | `Plex playback history fetch progress`, `Tautulli history fetch progress` | no `total` for Plex, or for an incremental Tautulli read |
 | `sonarr-library-refresh` | `Sonarr library refresh progress` | `phase: "posters"` |
 | `recommendation-refresh` | `Recommendation refresh progress` | — |
 | `rolling-reconcile` | no progress line; `Applying Sonarr monitoring plan` carries `position` and `total` | — |

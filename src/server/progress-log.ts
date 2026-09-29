@@ -3,8 +3,8 @@ import type { Logger } from "./logger.js";
 export const PROGRESS_LOG_INTERVAL_MS = 30_000;
 
 export interface ProgressLog {
-  /** Counts one finished item, logging progress if the interval has passed since the last line. */
-  tick(): void;
+  /** Counts finished items (one by default), logging progress if the interval has passed since the last line. */
+  tick(count?: number): void;
 }
 
 /**
@@ -15,7 +15,7 @@ export interface ProgressLog {
 export function createProgressLog(
   logger: Pick<Logger, "info">,
   message: string,
-  total: number,
+  total: number | null,
   fields: Record<string, unknown> = {},
   options: { intervalMs?: number; now?: () => number } = {}
 ): ProgressLog {
@@ -24,12 +24,13 @@ export function createProgressLog(
   let processed = 0;
   let lastLoggedAt = now();
   return {
-    tick() {
-      processed++;
+    tick(count = 1) {
+      processed += count;
       const current = now();
       if (current - lastLoggedAt < intervalMs) return;
       lastLoggedAt = current;
-      logger.info(message, { ...fields, processed, total });
+      // A null total is a loop that cannot know its length up front, such as a paged read.
+      logger.info(message, total === null ? { ...fields, processed } : { ...fields, processed, total });
     },
   };
 }

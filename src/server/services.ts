@@ -2409,12 +2409,18 @@ export class PacearrServices {
     // Dry-run records watch events but intentionally does not persist Sonarr
     // expansion state. Routine full reconciliations only repair history, while
     // enrollment-controlled full reads opt in so active progress is applied immediately.
-    if (!full || options.reconcileActiveProgress) for (const rolling of this.db.listRollingShows()) {
-      const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
-      if (operation === null) continue;
-      try {
-        changed += await this.applyActiveViewerPositions(rolling, "active-progress-reconcile", episodeCache, dryRunExpandedSeasons);
-      } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
+    if (!full || options.reconcileActiveProgress) {
+      const rollingShows = this.db.listRollingShows();
+      const activeProgress = createProgressLog(this.logger, progressMessage, rollingShows.length, { phase: "active-progress" });
+      for (const rolling of rollingShows) {
+        const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
+        if (operation !== null) {
+          try {
+            changed += await this.applyActiveViewerPositions(rolling, "active-progress-reconcile", episodeCache, dryRunExpandedSeasons);
+          } finally { this.releaseSeriesOperation(rolling.sonarrSeriesId, operation); }
+        }
+        activeProgress.tick();
+      }
     }
 
     const action = full ? "history.full_reconcile" : "history.import";

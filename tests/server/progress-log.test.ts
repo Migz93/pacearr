@@ -43,3 +43,14 @@ test("progress logging measures the next interval from the last line, not the it
   progress.tick();
   assert.deepEqual(lines.map((line) => (line.meta as { processed: number }).processed), [1, 3]);
 });
+
+test("progress logging counts several items per tick and leaves out an unknown total", () => {
+  let clock = 0;
+  const lines: unknown[] = [];
+  const progress = createProgressLog({ info: (_message: string, meta?: unknown) => { lines.push(meta); } }, "Fetch progress", null, {}, { intervalMs: 30_000, now: () => clock });
+  for (let page = 0; page < 3; page++) {
+    clock += 20_000;
+    progress.tick(1_000);
+  }
+  assert.deepEqual(lines, [{ processed: 2_000 }]);
+});
