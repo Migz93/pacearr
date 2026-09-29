@@ -869,7 +869,7 @@ test("migration 23 stamps history cursors with the connection configured at upgr
       tautulli: { backfillComplete: true, cursor: stamp },
     }), stamp);
 
-    runMigrations(raw);
+    runMigrations(raw, undefined, 23);
 
     const sync = JSON.parse((raw.prepare("SELECT value FROM settings WHERE key = 'historySync'").get() as { value: string }).value);
     assert.deepEqual(sync.plex, { backfillComplete: true, cursor: stamp, connection: "plex-id" });
@@ -943,6 +943,11 @@ test("migration 27 stamps existing watch events with the connection configured a
     const save = raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)");
     save.run("plex", JSON.stringify({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" }), stamp);
     save.run("tautulli", JSON.stringify({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }), stamp);
+    // As migration 23 stamped them.
+    save.run("historySync", JSON.stringify({
+      plex: { backfillComplete: true, cursor: stamp, connection: "plex-id" },
+      tautulli: { backfillComplete: true, cursor: stamp, connection: "http://tautulli:8181" },
+    }), stamp);
     const insert = raw.prepare(`
       INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -952,19 +957,23 @@ test("migration 27 stamps existing watch events with the connection configured a
     runMigrations(raw);
 
     const rows = raw.prepare("SELECT source, source_connection AS connection FROM watch_events ORDER BY id").all();
-    // Tautulli's install ID needs a network call, so its rows get the URL fallback until
-    // the next Tautulli read moves them (adoptWatchEventConnection).
+    // The configured server may have replaced the one a row came from, so rows get the
+    // URL fallback, never the stable ID; insertWatchEvent moves each one that is reported
+    // again as the same watch.
     assert.deepEqual(rows, [
-      { source: "plex-history", connection: "plex-id" },
-      { source: "plex-session", connection: "plex-id" },
+      { source: "plex-history", connection: "http://plex:32400" },
+      { source: "plex-session", connection: "http://plex:32400" },
       { source: "tautulli", connection: "http://tautulli:8181" },
       { source: "tautulli-session", connection: "http://tautulli:8181" },
     ]);
+    const sync = JSON.parse((raw.prepare("SELECT value FROM settings WHERE key = 'historySync'").get() as { value: string }).value);
+    assert.equal(sync.plex.connection, "http://plex:32400", "the Plex cursor is restamped, so the next import is a full read");
+    assert.equal(sync.tautulli.connection, "http://tautulli:8181");
     const reinsert = raw.prepare(`
       INSERT OR IGNORE INTO watch_events (source, source_connection, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    assert.equal(reinsert.run("plex-history", "plex-id", "1", "The Expanse", 1, 1, stamp, "{}", stamp).changes, 0, "the same server's event is still a duplicate");
+    assert.equal(reinsert.run("plex-history", "http://plex:32400", "1", "The Expanse", 1, 1, stamp, "{}", stamp).changes, 0, "an event under the same connection is still a duplicate");
     assert.equal(reinsert.run("plex-history", "other-plex", "1", "The Expanse", 1, 1, stamp, "{}", stamp).changes, 1, "another server's event with the same ID is not");
   } finally {
     raw.close();

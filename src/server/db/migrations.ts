@@ -512,11 +512,12 @@ const migrations: Migration[] = [
   {
     // Plex history keys and Tautulli reference IDs are only unique within one server, so
     // a watch event's identity now includes the connection it came from. Otherwise a new
-    // server's event that reused an old server's ID was dropped as a duplicate. Existing
-    // rows are stamped with the connection configured at upgrade, which is the server
-    // they came from, so re-reading it does not import them again. Tautulli's install ID
-    // needs a network call, so its rows get the URL fallback here and the services layer
-    // moves them to the install ID on the next Tautulli read.
+    // server's event that reused an old server's ID was dropped as a duplicate. Which
+    // server an existing row came from is unknown: the one configured now may have
+    // replaced it. So existing rows are stamped with the configured URL fallback, never a
+    // stable ID, and the Plex cursor is restamped to match, so the next import reads each
+    // source in full. insertWatchEvent moves a row to the stable ID only when that read
+    // reports the same watch; any other row stays under the URL and cannot collide.
     version: 27,
     up(db) {
       const read = <T>(key: string): T | null => {
@@ -531,8 +532,16 @@ const migrations: Migration[] = [
       const tautulli = read<{ baseUrl?: unknown }>("tautulli");
       const plexUrl = text(plex?.serverUrl);
       const tautulliUrl = text(tautulli?.baseUrl);
-      const plexConnection = plexUrl ? plexHistoryConnection({ serverUrl: plexUrl, machineIdentifier: text(plex?.machineIdentifier) }) : "";
-      const tautulliConnection = tautulliUrl ? tautulliHistoryConnection({ baseUrl: tautulliUrl }) : "";
+      // Migration 23 stamped the Plex cursor with the machine identifier, which would resume
+      // it and skip the full read. A Tautulli cursor already holds the URL.
+      const sync = read<{ plex?: unknown }>("historySync");
+      if (plexUrl && sync?.plex && typeof sync.plex === "object") {
+        const cursor = sync.plex as { connection?: unknown };
+        if (cursor.connection === plexHistoryConnection({ serverUrl: plexUrl, machineIdentifier: text(plex?.machineIdentifier) })) {
+          cursor.connection = plexUrl;
+          db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
+        }
+      }
       db.exec(`
         CREATE TABLE watch_events_next (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -559,7 +568,7 @@ const migrations: Migration[] = [
             CASE WHEN source IN ('plex-history', 'plex-session') THEN ? ELSE ? END,
             source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at
           FROM watch_events
-      `).run(plexConnection, tautulliConnection);
+      `).run(plexUrl, tautulliUrl);
       db.exec(`
         DROP TABLE watch_events;
         ALTER TABLE watch_events_next RENAME TO watch_events;
