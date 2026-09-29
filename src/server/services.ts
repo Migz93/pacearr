@@ -2196,8 +2196,10 @@ export class PacearrServices {
     // changed connection reads its history in full before resuming incrementally.
     // Migration 23 stamped cursors saved before connections were recorded, so an
     // unknown connection is treated as a different server. So is one stamped with the
-    // server's URL: a different install may have replaced the one it came from, and the
-    // full read recognises each event that is still the same watch (insertWatchEvent).
+    // server's URL once the server reports a stable ID: a different install may have
+    // replaced the one it came from, and the full read recognises each event that is
+    // still the same watch (insertWatchEvent). While no stable ID is reported, the URL is
+    // the connection itself, so its cursor resumes; the full read waits for the ID.
     const resumeFrom = (state: { backfillComplete: boolean; cursor: string | null; connection?: string }, connection: string) =>
       state.backfillComplete && state.connection === connection ? withOverlap(state.cursor) : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;

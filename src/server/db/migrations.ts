@@ -515,9 +515,10 @@ const migrations: Migration[] = [
     // server's event that reused an old server's ID was dropped as a duplicate. Which
     // server an existing row came from is unknown: the one configured now may have
     // replaced it. So existing rows are stamped with the configured URL fallback, never a
-    // stable ID, and the Plex cursor is restamped to match, so the next import reads each
-    // source in full. insertWatchEvent moves a row to the stable ID only when that read
-    // reports the same watch; any other row stays under the URL and cannot collide.
+    // stable ID, and the Plex cursor is restamped to match. The first import that resolves
+    // a stable ID therefore reads that source in full (while none is reported, the URL is
+    // the connection and its cursor resumes). insertWatchEvent moves a row to the stable
+    // ID only when that read reports the same watch; any other row stays under the URL.
     version: 27,
     up(db) {
       const read = <T>(key: string): T | null => {
