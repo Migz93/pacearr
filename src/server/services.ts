@@ -10,6 +10,8 @@ import type {
   ShowSeasonSummary,
   ShowUserProgress,
   SonarrEpisode,
+  SonarrTagImportPreview,
+  SonarrTagImportResult,
   SonarrEpisodeFile,
   SonarrLibraryCacheItem,
   RollingExclusions,
@@ -31,6 +33,7 @@ import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
 import { PlexSessionMonitor, type PlexSessionMonitorStatus } from "./plex-session-monitor.js";
+import { SonarrTagMirror } from "./sonarr-tags.js";
 
 function isRealSeasonEpisode(episode: SonarrEpisode) {
   return episode.seasonNumber > 0 && episode.episodeNumber > 0;
@@ -213,6 +216,7 @@ export function calculateProjectedSavings(
 export class PacearrServices {
   private readonly plexArtwork: PlexArtworkService;
   private readonly sessionMonitor: PlexSessionMonitor;
+  private readonly sonarrTags: SonarrTagMirror;
   private sessionCheckTrigger?: () => void;
   /** Serializes all Sonarr and rolling-state mutations for an individual series. */
   private readonly activeSeriesOperations = new Map<number, number>();
@@ -225,6 +229,7 @@ export class PacearrServices {
   constructor(private readonly db: PacearrDatabase, private readonly logger: Logger, private readonly imageCache: ImageCacheService, dataDir: string) {
     this.plexArtwork = new PlexArtworkService(db, logger, dataDir);
     this.sessionMonitor = new PlexSessionMonitor(() => this.db.getPlexSettings(), logger, () => this.sessionCheckTrigger?.());
+    this.sonarrTags = new SonarrTagMirror(db, logger, () => this.getSonarr(), (seriesId) => this.activeSeriesOperations.has(seriesId));
   }
 
   startPlexSessionMonitor(triggerSessionCheck: () => void): void {
@@ -464,6 +469,8 @@ export class PacearrServices {
     const generatedAt = this.db.saveSonarrLibraryCache(items);
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
     await this.removeSeriesDeletedFromSonarr(series, sonarr);
+    // Runs after the deleted-series check so a removed record is not tagged again.
+    await this.sonarrTags.reconcile(series);
   }
 
   /**
@@ -507,6 +514,7 @@ export class PacearrServices {
           continue;
         }
         if (rolling && !(await this.removeEnrollmentOfDeletedSeries(rolling))) continue;
+        // No Sonarr tag removal: the series, and its tags, are already gone from Sonarr.
         this.db.unignoreRecommendation(seriesId);
         this.db.removeRecommendationFromCache(seriesId);
         this.db.addHistory("info", "show.removed_from_sonarr", title, { ...details, dryRun });
@@ -1028,17 +1036,90 @@ export class PacearrServices {
   }
 
   /** Returns false for an enrolled show, which is not a recommendation and cannot be ignored. */
-  ignoreRecommendation(seriesId: number, title: string): boolean {
+  async ignoreRecommendation(seriesId: number, title: string): Promise<boolean> {
     if (this.db.getRollingShowBySeriesId(seriesId)) return false;
     this.db.ignoreRecommendation(seriesId, title);
     this.db.addHistory("info", "recommendation.ignored", title, { seriesId });
     this.logger.info("Recommendation ignored", { seriesId, title });
+    await this.sonarrTags.applyChange(seriesId, { add: "ignored" });
     return true;
   }
 
-  unignoreRecommendation(seriesId: number): void {
+  async unignoreRecommendation(seriesId: number): Promise<void> {
     this.db.unignoreRecommendation(seriesId);
     this.logger.info("Recommendation restored", { seriesId });
+    await this.sonarrTags.applyChange(seriesId, { remove: "ignored" });
+  }
+
+  async previewSonarrTagImport(): Promise<SonarrTagImportPreview> {
+    const { preview } = await this.sonarrTags.planImport();
+    this.logger.info("Sonarr tag import previewed", { toEnroll: preview.toEnroll.length, toIgnore: preview.toIgnore.length, alreadyKnown: preview.alreadyKnown.length, conflicts: preview.conflicts.length });
+    return preview;
+  }
+
+  /**
+   * Creates records for tagged shows Pacearr has no record of. Additive only: an existing
+   * enrolment or ignore is never changed. Only shows the confirmed preview listed are
+   * imported, so the result cannot exceed what the administrator agreed to.
+   */
+  async importFromSonarrTags(confirmed: { enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
+    const { preview, seriesById } = await this.sonarrTags.planImport();
+    const confirmedEnroll = new Set(confirmed.enrollSeriesIds);
+    const confirmedIgnore = new Set(confirmed.ignoreSeriesIds);
+    let enrolled = 0;
+    let ignored = 0;
+    let skipped = 0;
+
+    for (const show of preview.toEnroll) {
+      const series = seriesById.get(show.sonarrSeriesId);
+      if (!series || !confirmedEnroll.has(series.id)) continue;
+      const operation = this.acquireSeriesOperation(series.id);
+      if (operation === null) {
+        skipped++;
+        this.logger.info("Skipped importing a tagged show while another show operation is running", { seriesId: series.id, title: series.title });
+        continue;
+      }
+      try {
+        // Re-checked under the lock: a manual action may have created a record since the plan.
+        if (this.db.getRollingShowBySeriesId(series.id) || this.db.listIgnoredRecommendationIds().includes(series.id)) {
+          skipped++;
+          continue;
+        }
+        const rolling = this.db.upsertRollingShow(series);
+        // Re-adoption, not enrolment: no pilot baseline. Seasons Sonarr still monitors
+        // were expanded before the database was lost, so they are recorded as expanded
+        // and the rolling reconcile times them out as usual, instead of trimming them
+        // to pilots on its next run.
+        const expandedSeasons = (series.seasons ?? []).filter((season) => season.seasonNumber > 0 && season.monitored).map((season) => season.seasonNumber);
+        this.db.replaceExpandedSeasons(rolling.id, expandedSeasons);
+        this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
+        this.db.removeRecommendationFromCache(series.id);
+        this.db.addHistory("info", "show.enrolled", series.title, { seriesId: series.id, source: "sonarr-tags", expandedSeasons });
+        this.logger.info("Show re-adopted from its Sonarr tag", { seriesId: series.id, title: series.title, expandedSeasons });
+        enrolled++;
+      } finally {
+        this.releaseSeriesOperation(series.id, operation);
+      }
+    }
+
+    for (const show of preview.toIgnore) {
+      if (!confirmedIgnore.has(show.sonarrSeriesId)) continue;
+      if (this.db.getRollingShowBySeriesId(show.sonarrSeriesId) || this.db.listIgnoredRecommendationIds().includes(show.sonarrSeriesId)) {
+        skipped++;
+        continue;
+      }
+      this.db.ignoreRecommendation(show.sonarrSeriesId, show.title);
+      this.db.addHistory("info", "recommendation.ignored", show.title, { seriesId: show.sonarrSeriesId, source: "sonarr-tags" });
+      this.logger.info("Show ignored from its Sonarr tag", { seriesId: show.sonarrSeriesId, title: show.title });
+      ignored++;
+    }
+
+    const details = { enrolled, ignored, skipped, alreadyKnown: preview.alreadyKnown.length, conflicts: preview.conflicts.length };
+    this.db.addHistory("info", "sonarr.tag_import", "Import from Sonarr tags", details);
+    this.logger.info("Sonarr tag import complete", details);
+    const parts = [`Enrolled ${enrolled} show${enrolled === 1 ? "" : "s"}`, `ignored ${ignored}`];
+    if (skipped > 0) parts.push(`skipped ${skipped} that changed since the preview`);
+    return { ok: true, message: `${parts.join(", ")}.`, enrolled, ignored };
   }
 
   async beginEnrollment(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }) {
@@ -1061,6 +1142,9 @@ export class PacearrServices {
 
   async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
     try {
+      // First, so a failure later in setup cannot leave the show untagged. Enrolment
+      // clears an ignore, so its tag goes too.
+      await this.sonarrTags.applyChange(series.id, { add: "enrolled", remove: "ignored" });
       let changed = 0;
       // Routine history imports already keep stored viewer progress current. Apply the
       // pilot baseline from that state first so manual enrollment does not wait for a
@@ -1163,6 +1247,7 @@ export class PacearrServices {
       this.db.deleteRollingShow(rollingShowId);
       this.db.completeNewShowTriageEnrollment(show.sonarrSeriesId);
       this.plexArtwork.removeBackups(artwork);
+      await this.sonarrTags.applyChange(show.sonarrSeriesId, { remove: "enrolled" });
       this.db.addHistory("info", "show.unenrolled", show.title, { rollingShowId });
       this.logger.info("Show unenrolled from Pacearr control", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, remonitored: changed, artworkRestored: artwork.length });
       return { ok: true, message: `Unenrolled ${show.title}; all episodes and seasons are monitored again.`, changed };

@@ -14,6 +14,8 @@ import type {
   PlexConfigPayload,
   PlexConnectionOption,
   SettingsResponse,
+  SonarrTagImportPreview,
+  SonarrTagImportResult,
 } from "../../shared/types";
 
 type Tab = "general" | "plex" | "sonarr" | "tautulli" | "logs" | "jobs" | "about";
@@ -509,28 +511,116 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   }
 
   return (
-    <SectionCard title="Sonarr" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
-      <Field label="Base URL" hint="Example: http://sonarr:8989">
-        <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
-      </Field>
-      <Field label="API key" hint="Leave unchanged to keep the configured key.">
-        <input
-          type="password"
-          className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
-          value={apiKeyTouched ? form.apiKey : settings.sonarr?.apiKeyConfigured ? "**************" : ""}
-          onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
-          onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
+    <div className="grid gap-4">
+      <SectionCard title="Sonarr" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
+        <Field label="Base URL" hint="Example: http://sonarr:8989">
+          <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
+        </Field>
+        <Field label="API key" hint="Leave unchanged to keep the configured key.">
+          <input
+            type="password"
+            className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
+            value={apiKeyTouched ? form.apiKey : settings.sonarr?.apiKeyConfigured ? "**************" : ""}
+            onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
+            onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
+          />
+        </Field>
+        <SaveBar
+          saving={saving}
+          success={success}
+          error={error}
+          label="Save Sonarr"
+          onSave={() => void save()}
+          saveDisabled={credentialsIncomplete}
+          test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
         />
-      </Field>
-      <SaveBar
-        saving={saving}
-        success={success}
-        error={error}
-        label="Save Sonarr"
-        onSave={() => void save()}
-        saveDisabled={credentialsIncomplete}
-        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
-      />
+      </SectionCard>
+      <SonarrTagImportCard configured={Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured)} />
+    </div>
+  );
+}
+
+function pluralShows(count: number) {
+  return `${count} show${count === 1 ? "" : "s"}`;
+}
+
+function SonarrTagImportCard({ configured }: { configured: boolean }) {
+  const [preview, setPreview] = useState<SonarrTagImportPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // An import in flight must not be dismissable, as with the schedule dialog.
+  const requestClose = () => { if (!importing) setPreview(null); };
+  const dialogRef = useDialogA11y<HTMLDivElement>(preview !== null, requestClose);
+
+  async function loadPreview() {
+    setLoading(true);
+    setResult(null);
+    try {
+      setPreview(await apiGet<SonarrTagImportPreview>("/api/sonarr/tag-import"));
+    } catch (caught) {
+      setResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runImport() {
+    if (!preview) return;
+    setImporting(true);
+    try {
+      const response = await apiPost<SonarrTagImportResult>("/api/sonarr/tag-import", {
+        enrollSeriesIds: preview.toEnroll.map((show) => show.sonarrSeriesId),
+        ignoreSeriesIds: preview.toIgnore.map((show) => show.sonarrSeriesId),
+      });
+      setResult({ ok: response.ok, message: response.message });
+      setPreview(null);
+    } catch (caught) {
+      setResult({ ok: false, message: caught instanceof Error ? caught.message : String(caught) });
+      setPreview(null);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const nothingToImport = preview !== null && preview.toEnroll.length === 0 && preview.toIgnore.length === 0;
+
+  return (
+    <SectionCard
+      title="Sonarr tags"
+      description="Pacearr tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored in Sonarr. It never touches any other tag. If Pacearr's database is lost, import from those tags to recover your enrolled and ignored shows."
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className={secondaryButtonClass} disabled={!configured || loading} aria-busy={loading} onClick={() => void loadPreview()}>
+          {loading ? "Checking Sonarr..." : "Import from Sonarr tags"}
+        </button>
+        <span aria-live="polite">{result && <span className={`text-[13px] font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>}</span>
+      </div>
+      <p className="text-xs leading-relaxed text-on-surface-variant">
+        Adds only shows Pacearr has no record of, and never changes an existing enrolment or ignore. Imported shows keep their current Sonarr monitoring; they are not reset to pilots. Excluded seasons and episodes cannot be recovered from tags.
+      </p>
+      {preview && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
+          <div ref={dialogRef} className="max-h-[82vh] w-full max-w-[480px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="tag-import-title" tabIndex={-1}>
+            <div className="mb-4 flex items-center justify-between gap-3.5"><h2 id="tag-import-title" className="font-headline text-lg font-semibold">Import from Sonarr tags</h2><button type="button" className={iconButtonClass} disabled={importing} onClick={requestClose} aria-label="Close"><X size={18} /></button></div>
+            <div className="grid gap-2 text-sm">
+              {nothingToImport
+                ? <p>No tagged shows are missing from Pacearr. There is nothing to import.</p>
+                : <p className="font-bold">Enrol {pluralShows(preview.toEnroll.length)}, ignore {pluralShows(preview.toIgnore.length)}.</p>}
+              {preview.alreadyKnown.length > 0 && <p className="text-on-surface-variant">{pluralShows(preview.alreadyKnown.length)} already in Pacearr will be left as they are.</p>}
+              {preview.conflicts.length > 0 && (
+                <p className="text-on-surface-variant">
+                  {pluralShows(preview.conflicts.length)} carrying both Pacearr tags will be skipped: {preview.conflicts.map((show) => show.title).join(", ")}.
+                </p>
+              )}
+            </div>
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button type="button" className={secondaryButtonClass} disabled={importing} onClick={requestClose}>{nothingToImport ? "Close" : "Cancel"}</button>
+              {!nothingToImport && <button type="button" className={primaryButtonClass} disabled={importing} aria-busy={importing} onClick={() => void runImport()}>{importing ? "Importing..." : "Import"}</button>}
+            </div>
+          </div>
+        </div>
+      )}
     </SectionCard>
   );
 }

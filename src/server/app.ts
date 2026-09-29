@@ -124,6 +124,11 @@ function requiredString(value: unknown, name: string) {
   return value.trim();
 }
 
+function seriesIdList(value: unknown): number[] | null {
+  if (!Array.isArray(value) || !value.every((item) => Number.isSafeInteger(item) && item > 0)) return null;
+  return value as number[];
+}
+
 function parseServerUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -402,6 +407,23 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     res.json({ ok: true, sonarr: db.getSonarrSettingsView() });
   }));
 
+  // Import from Sonarr tags is two steps: a read-only preview the administrator confirms,
+  // then the import, which is limited to the series IDs that preview listed.
+  app.get("/api/sonarr/tag-import", requireAuth, asyncRoute(async (_req, res) => {
+    res.json(await services.previewSonarrTagImport());
+  }));
+  app.post("/api/sonarr/tag-import", requireAuth, asyncRoute(async (req, res) => {
+    const enrollSeriesIds = seriesIdList(req.body.enrollSeriesIds);
+    const ignoreSeriesIds = seriesIdList(req.body.ignoreSeriesIds);
+    if (!enrollSeriesIds || !ignoreSeriesIds) {
+      res.status(400).json({ error: "enrollSeriesIds and ignoreSeriesIds must be arrays of series IDs." });
+      return;
+    }
+    const result = await services.importFromSonarrTags({ enrollSeriesIds, ignoreSeriesIds });
+    if (result.enrolled > 0 || result.ignored > 0) runRecommendationRefreshNow();
+    res.json(result);
+  }));
+
   app.post("/api/settings/tautulli/test", requireAuth, asyncRoute(async (req, res) => {
     const existing = db.getTautulliSettings();
     const settings = {
@@ -539,8 +561,10 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       scheduler?.runNowOrQueue("new-show-triage");
     }
     if (previousSettings.dryRun && !appSettings.dryRun) {
-      logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
+      logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation and Sonarr tag catch-up");
       scheduler?.runNow("rolling-reconcile");
+      // The library refresh reconciles Sonarr tags, which dry run left out of date.
+      scheduler?.runNowOrQueue("sonarr-library-refresh");
     }
     res.json({ app: appSettings });
   });
@@ -784,18 +808,22 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/recommendations/refresh", requireAuth, (_req, res) => {
     res.json({ triggered: runRecommendationRefreshNow() });
   });
-  app.post("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
+  app.post("/api/recommendations/:seriesId/ignore", requireAuth, asyncRoute(async (req, res) => {
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
-    if (!title) return res.status(400).json({ error: "A show title is required." });
-    if (!services.ignoreRecommendation(Number(req.params.seriesId), title)) {
-      return res.status(409).json({ error: "An enrolled show cannot be ignored." });
+    if (!title) {
+      res.status(400).json({ error: "A show title is required." });
+      return;
+    }
+    if (!(await services.ignoreRecommendation(Number(req.params.seriesId), title))) {
+      res.status(409).json({ error: "An enrolled show cannot be ignored." });
+      return;
     }
     res.json({ ok: true });
-  });
-  app.delete("/api/recommendations/:seriesId/ignore", requireAuth, (req, res) => {
-    services.unignoreRecommendation(Number(req.params.seriesId));
+  }));
+  app.delete("/api/recommendations/:seriesId/ignore", requireAuth, asyncRoute(async (req, res) => {
+    await services.unignoreRecommendation(Number(req.params.seriesId));
     res.json({ ok: true });
-  });
+  }));
   app.post("/api/rolling-shows/:id/reset", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.resetShow(Number(req.params.id)));
   }));

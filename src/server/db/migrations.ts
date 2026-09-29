@@ -490,6 +490,22 @@ const migrations: Migration[] = [
       db.exec("DELETE FROM ignored_recommendations WHERE sonarr_series_id IN (SELECT sonarr_series_id FROM rolling_shows)");
     },
   },
+  {
+    // Pacearr mirrors enrolments and ignores onto Sonarr series as tags. A tag removal
+    // that could not be sent (Sonarr unreachable, or dry run) is kept here and retried,
+    // so a stale tag cannot survive to be imported back later.
+    version: 26,
+    up(db) {
+      db.exec(`
+        CREATE TABLE sonarr_tag_removals (
+          sonarr_series_id INTEGER NOT NULL,
+          tag TEXT NOT NULL CHECK (tag IN ('enrolled', 'ignored')),
+          queued_at TEXT NOT NULL,
+          PRIMARY KEY (sonarr_series_id, tag)
+        );
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

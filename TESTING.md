@@ -216,7 +216,19 @@ Runs against a temporary SQLite database. Safe to run any time.
 
 | Test | What it checks |
 |---|---|
-| Dry-run blocks Sonarr mutations | Monitoring updates, searches, and file deletions send no HTTP requests while dry-run mode is enabled |
+| Dry-run blocks Sonarr mutations | Monitoring updates, searches, file deletions, tag creation and series-tag edits send no HTTP requests while dry-run mode is enabled |
+
+### `tests/server/sonarr-tags.test.ts` — Sonarr tag mirror and import
+
+Runs against a temporary SQLite database and an in-memory fake Sonarr that applies series-editor tag changes.
+
+| Test | What it checks |
+|---|---|
+| Tag writes add and remove only Pacearr's own tags, through the series editor | Ignore, enrol (ignored → enrolled), unenrol and restore each add or remove the matching Pacearr tag, every editor request uses `add`/`remove` with only Pacearr's tag IDs, and an unrelated tag on the series survives all of it |
+| A reconcile adds missing tags but never removes a tag Pacearr has no record for | With an empty database facing tagged series (the state after database loss), a library refresh sends no removal; an enrolled show missing its tag gets it |
+| A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |
+| Dry run sends no tag request, and queued removals catch up once it is off | No `/tag` or `/series/editor` request in dry run; afterwards queued removals and missing adds are applied, and a removal for a show ignored again before it was sent is dropped rather than stripping the current tag |
+| Importing from Sonarr tags is additive, skips conflicts, and re-adopts without a pilot baseline | The preview splits tagged shows into enrol/ignore/already known/conflict and treats a queued removal as absent; the import only creates records the confirmation listed, never changes an existing one, records still-monitored seasons as expanded, and sends nothing to Sonarr |
 
 ---
 

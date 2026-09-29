@@ -2,6 +2,8 @@ import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeri
 import type { Logger } from "../logger.js";
 import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
 
+export type SonarrTag = { id: number; label: string };
+
 export class SonarrIntegration {
   constructor(private readonly settings: SonarrSettings, private readonly logger: Logger, private readonly dryRun = true) {}
 
@@ -89,6 +91,29 @@ export class SonarrIntegration {
 
   async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
     return this.request<SonarrEpisodeFile[]>(`episodefile?seriesId=${seriesId}`);
+  }
+
+  async getTags(): Promise<SonarrTag[]> {
+    return this.request<SonarrTag[]>("tag");
+  }
+
+  async createTag(label: string): Promise<SonarrTag | null> {
+    if (this.skipMutation("create-tag", { label })) return null;
+    return this.request<SonarrTag>("tag", { method: "POST", body: JSON.stringify({ label }) });
+  }
+
+  /**
+   * Adds or removes tags through Sonarr's bulk series editor. Unlike a full series PUT,
+   * the editor changes only the tags named here, so any other tag on the series is left
+   * as it is and a concurrent monitoring change cannot be overwritten.
+   */
+  async editSeriesTags(seriesIds: number[], tagIds: number[], applyTags: "add" | "remove") {
+    if (seriesIds.length === 0 || tagIds.length === 0) return;
+    if (this.skipMutation("edit-series-tags", { seriesIds, tagIds, applyTags })) return;
+    await this.request("series/editor", {
+      method: "PUT",
+      body: JSON.stringify({ seriesIds, tags: tagIds, applyTags }),
+    });
   }
 
   async updateSeriesMonitoring(seriesId: number, updates: { monitored?: boolean; monitorNewItems?: "all" | "none"; seasons?: SonarrSeries["seasons"] }) {

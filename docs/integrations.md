@@ -114,6 +114,8 @@ Use the final, canonical base URL for every configured integration. Pacearr send
 | Search full season | `POST /api/v3/command` with `SeasonSearch` |
 | Search full series | `POST /api/v3/command` with `SeriesSearch` |
 | Delete episode file | `DELETE /api/v3/episodefile/{id}` |
+| Read / create Pacearr tags | `GET /api/v3/tag`, `POST /api/v3/tag` |
+| Add / remove a Pacearr tag | `PUT /api/v3/series/editor` with `applyTags: "add"` or `"remove"` |
 
 ### Show Review Data
 
@@ -131,6 +133,48 @@ the pilot baseline. Successful live decisions are persisted so a restart does
 not repeat them; dry-run and failed arrivals remain pending for a later poll.
 To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
+
+### Tags
+
+Pacearr mirrors its state onto Sonarr series as tags, for recovery after database
+loss and for filtering in Sonarr. Pacearr's database stays the source of truth.
+
+| Tag | On |
+|---|---|
+| `pacearr-enrolled` | every enrolled show, manual or auto-triaged |
+| `pacearr-ignored` | every ignored show |
+
+| Rule | Detail |
+|---|---|
+| Only Pacearr's tags | Writes go through the bulk series editor with `add`/`remove`, sending only these two tag IDs. Any other tag on a series is never touched. The tags are created in Sonarr if missing. |
+| Adds are reconciled | Each Sonarr library refresh adds any tag an enrolled or ignored show is missing. |
+| Removals need a Pacearr action | Unenrol, restore from ignored, and enrolling an ignored show queue a removal (`sonarr_tag_removals`). A show having no record never removes its tag, so an empty database cannot wipe the recovery data. |
+| Failed removals retry | A queued removal is retried on every library refresh until Sonarr confirms it, or dropped if the show is back in that state or gone from Sonarr. |
+| Dry run | The mirror sends no tag request at all. Turning dry run off triggers a library refresh, which catches up. |
+| Manual edits | Editing a Pacearr tag in Sonarr has no effect on Pacearr. A removed tag is added back on the next refresh. |
+| Series deleted from Sonarr | No removal is sent; its tags went with it. |
+
+A Pacearr tag has no effect in Sonarr unless someone links it to a release profile,
+delay profile, indexer, download client or notification.
+
+#### Import from Sonarr tags
+
+Settings → Sonarr → **Import from Sonarr tags**. Never automatic.
+
+1. `GET /api/sonarr/tag-import` previews: shows to enrol, shows to ignore, tagged
+   shows already in Pacearr (left alone), and shows with both tags (skipped). A tag
+   with a queued removal counts as absent.
+2. After one confirmation, `POST /api/sonarr/tag-import` creates records only for
+   the series IDs that preview listed and Pacearr still has no record of.
+
+Re-adoption skips the enrolment pilot baseline and sends nothing to Sonarr. Seasons
+Sonarr still monitors are recorded as expanded, so the rolling reconcile times them
+out as usual instead of trimming them to pilots. Viewer progress is rebuilt from
+watch history. Tags restore membership only: exclusions, prefetch records and Plex
+poster backups are not recoverable from them.
+
+Allowed in dry run, because it writes only Pacearr's own records, like a manual
+enrolment.
 
 ### Non-Goals
 

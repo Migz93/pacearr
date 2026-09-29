@@ -200,6 +200,8 @@ export interface SonarrSeries {
   added?: string;
   monitored?: boolean;
   monitorNewItems?: "all" | "none";
+  /** Sonarr tag IDs. Pacearr only ever adds or removes its own two tags. */
+  tags?: number[];
   images?: Array<{
     coverType?: string;
     url?: string;
@@ -499,6 +501,31 @@ export interface AboutInfo {
 export interface ConnectionTestResult {
   ok: boolean;
   message: string;
+}
+
+/** Pacearr's own Sonarr tags, mirroring its enrolments and ignores. No other tag is ever touched. */
+export type PacearrSonarrTag = "enrolled" | "ignored";
+
+export interface SonarrTagImportShow {
+  sonarrSeriesId: number;
+  title: string;
+}
+
+/** What an import from Sonarr tags would do, computed before anything is written. */
+export interface SonarrTagImportPreview {
+  toEnroll: SonarrTagImportShow[];
+  toIgnore: SonarrTagImportShow[];
+  /** Tagged shows Pacearr already has a record for; the import leaves them as they are. */
+  alreadyKnown: SonarrTagImportShow[];
+  /** Shows carrying both Pacearr tags, which only a manual edit in Sonarr can cause. */
+  conflicts: SonarrTagImportShow[];
+}
+
+export interface SonarrTagImportResult {
+  ok: boolean;
+  message: string;
+  enrolled: number;
+  ignored: number;
 }
 
 export interface RunResult {

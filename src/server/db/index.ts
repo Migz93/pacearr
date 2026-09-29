@@ -25,6 +25,7 @@ import type {
   DashboardShowActivity,
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
+  PacearrSonarrTag,
 } from "../../shared/types.js";
 import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
@@ -343,6 +344,23 @@ export class PacearrDatabase {
 
   unignoreRecommendation(seriesId: number): void {
     this.db.prepare("DELETE FROM ignored_recommendations WHERE sonarr_series_id = ?").run(seriesId);
+  }
+
+  queueSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare(`
+      INSERT INTO sonarr_tag_removals (sonarr_series_id, tag, queued_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(sonarr_series_id, tag) DO NOTHING
+    `).run(seriesId, tag, now());
+  }
+
+  listSonarrTagRemovals(): Array<{ sonarrSeriesId: number; tag: PacearrSonarrTag }> {
+    return (this.db.prepare("SELECT sonarr_series_id, tag FROM sonarr_tag_removals ORDER BY queued_at, sonarr_series_id").all() as Array<{ sonarr_series_id: number; tag: PacearrSonarrTag }>)
+      .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, tag: row.tag }));
+  }
+
+  clearSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ? AND tag = ?").run(seriesId, tag);
   }
 
   /**
