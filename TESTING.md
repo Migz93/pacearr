@@ -119,6 +119,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 | Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
 | Migration 27 stamps existing watch events with the connection configured at upgrade | Plex rows gain the configured machine identifier and Tautulli rows the configured URL (each moved to the install ID when Tautulli reports the same watch again); the same server's event stays a duplicate while another server's event with the same ID is accepted |
+| Migration 27 treats malformed connection settings as unconfigured instead of failing | A hand-edited setting holding a non-string URL or machine identifier stamps `''` (or the URL fallback) rather than throwing on parameter binding and blocking startup |
 | Migration 25 clears ignore records for shows that are already enrolled | A show can no longer be both enrolled and ignored; an upgrade removes overlaps earlier versions allowed and leaves other ignore records alone |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes

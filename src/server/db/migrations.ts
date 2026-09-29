@@ -524,10 +524,15 @@ const migrations: Migration[] = [
         if (!row) return null;
         try { return JSON.parse(row.value) as T; } catch { return null; }
       };
-      const plex = read<{ serverUrl?: string; machineIdentifier?: string }>("plex");
-      const tautulli = read<{ baseUrl?: string }>("tautulli");
-      const plexConnection = plex?.serverUrl ? plexHistoryConnection({ serverUrl: plex.serverUrl, machineIdentifier: plex.machineIdentifier }) : "";
-      const tautulliConnection = tautulli?.baseUrl ? tautulliHistoryConnection({ baseUrl: tautulli.baseUrl }) : "";
+      // A hand-edited setting can hold any JSON; binding a non-string would throw and block
+      // startup, so it counts as missing, like an unconfigured source.
+      const text = (value: unknown) => typeof value === "string" ? value : "";
+      const plex = read<{ serverUrl?: unknown; machineIdentifier?: unknown }>("plex");
+      const tautulli = read<{ baseUrl?: unknown }>("tautulli");
+      const plexUrl = text(plex?.serverUrl);
+      const tautulliUrl = text(tautulli?.baseUrl);
+      const plexConnection = plexUrl ? plexHistoryConnection({ serverUrl: plexUrl, machineIdentifier: text(plex?.machineIdentifier) }) : "";
+      const tautulliConnection = tautulliUrl ? tautulliHistoryConnection({ baseUrl: tautulliUrl }) : "";
       db.exec(`
         CREATE TABLE watch_events_next (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

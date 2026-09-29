@@ -972,6 +972,34 @@ test("migration 27 stamps existing watch events with the connection configured a
   }
 });
 
+test("migration 27 treats malformed connection settings as unconfigured instead of failing", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-migration-test-"));
+  const raw = new Database(path.join(dir, "pacearr.db"));
+  try {
+    runMigrations(raw, undefined, 26);
+    const stamp = "2026-09-01T09:00:00.000Z";
+    const save = raw.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)");
+    save.run("plex", JSON.stringify({ serverUrl: "http://plex:32400", machineIdentifier: [] }), stamp);
+    save.run("tautulli", JSON.stringify({ baseUrl: {} }), stamp);
+    const insert = raw.prepare(`
+      INSERT INTO watch_events (source, source_event_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("plex-history", "1", "The Expanse", 1, 1, stamp, "{}", stamp);
+    insert.run("tautulli", "1", "The Expanse", 1, 1, stamp, "{}", stamp);
+
+    runMigrations(raw);
+
+    assert.deepEqual(raw.prepare("SELECT source, source_connection AS connection FROM watch_events ORDER BY id").all(), [
+      { source: "plex-history", connection: "http://plex:32400" },
+      { source: "tautulli", connection: "" },
+    ]);
+  } finally {
+    raw.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("watch events with the same source event ID from two connections are both stored", () => {
   const { db, cleanup } = createDb();
   try {
