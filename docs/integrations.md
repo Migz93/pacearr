@@ -151,6 +151,7 @@ Writing is opt-in: Settings → Sonarr → **Write tags to Sonarr**
 |---|---|
 | Only Pacearr's tags | Writes go through the bulk series editor with `add`/`remove`, sending only these two tag IDs. Any other tag on a series is never touched. The tags are created in Sonarr if missing. |
 | Adds are reconciled | Each Sonarr library refresh adds any tag an enrolled or ignored show is missing. |
+| Busy shows | A show another operation is working on (for example the rolling reconcile) is deferred, because that operation's full series save would undo the tag change. The refresh logs the deferred titles, waits up to a minute for them to be free, then applies their changes; any still busy are logged and retried on the next refresh. |
 | Removals need a Pacearr action | Unenrol, restore from ignored, and enrolling an ignored show queue a removal (`sonarr_tag_removals`). A show having no record never removes its tag, so an empty database cannot wipe the recovery data. |
 | Failed removals retry | A queued removal is retried on every library refresh until Sonarr confirms it, or dropped if the show is back in that state or gone from Sonarr. |
 | Off, or dry run | No tag request is sent at all. Removals are still queued, so a tag written before writing was turned off is removed once it is back on. Turning writing on (outside dry run), or dry run off with writing on, triggers a library refresh, which catches up. |

@@ -6,6 +6,8 @@ import path from "node:path";
 import { PacearrDatabase } from "../../src/server/db/index.js";
 import { ImageCacheService } from "../../src/server/image-cache.js";
 import { PacearrServices } from "../../src/server/services.js";
+import { SonarrIntegration } from "../../src/server/integrations/sonarr.js";
+import { SonarrTagMirror } from "../../src/server/sonarr-tags.js";
 import type { Logger } from "../../src/server/logger.js";
 import type { RuntimeConfig } from "../../src/server/config.js";
 import type { SonarrSeries } from "../../src/shared/types.js";
@@ -340,6 +342,40 @@ test("a series confirmed deleted from Sonarr drops its queued tag removals witho
     assert.deepEqual(db.listSonarrTagRemovals(), []);
     assert.equal(db.getRollingShowBySeriesId(91), null);
     assert.deepEqual(sonarr.tagRequests(), []);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
+test("a reconcile defers a show another operation holds, logs it, and tags it once it is free", async () => {
+  const { db, cleanup } = createHarness({ dryRun: false });
+  const sonarr = installFakeSonarr({ series: [series(100, "Xi"), series(101, "Omicron"), series(102, "Pi")] });
+  const messages: Array<{ message: string; meta: unknown }> = [];
+  const record = (message: string, meta: unknown) => { messages.push({ message, meta }); };
+  const logger = { debug() {}, info: record, warn: record, error: record } as unknown as Logger;
+  const busy = new Set([101, 102]);
+  const mirror = new SonarrTagMirror(
+    db,
+    logger,
+    () => new SonarrIntegration(db.getSonarrSettings()!, logger, false),
+    (seriesId) => busy.has(seriesId),
+    { timeoutMs: 300, pollMs: 10 },
+  );
+  try {
+    for (const id of [100, 101, 102]) db.upsertRollingShow({ id, title: String(id) });
+    // 101 finishes its operation while the reconcile waits; 102 stays busy throughout.
+    setTimeout(() => busy.delete(101), 50);
+    const result = await mirror.reconcile([...sonarr.state.series.values()]);
+
+    assert.deepEqual(result && { added: result.added, deferred: result.deferred }, { added: 2, deferred: 1 });
+    assert.deepEqual(sonarr.tagLabels(100), ["kometafranchise", "pacearr-enrolled"]);
+    assert.deepEqual(sonarr.tagLabels(101), ["kometafranchise", "pacearr-enrolled"]);
+    assert.deepEqual(sonarr.tagLabels(102), ["kometafranchise"]);
+    const deferredLog = messages.find((entry) => entry.message.startsWith("Sonarr tag changes deferred"));
+    assert.deepEqual((deferredLog?.meta as { titles: string[] }).titles.sort(), ["Omicron", "Pi"]);
+    const stillDeferredLog = messages.find((entry) => entry.message.startsWith("Sonarr tag changes still deferred"));
+    assert.deepEqual((stillDeferredLog?.meta as { titles: string[] }).titles, ["Pi"]);
   } finally {
     sonarr.restore();
     cleanup();

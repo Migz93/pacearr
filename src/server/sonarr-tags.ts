@@ -32,8 +32,10 @@ export class SonarrTagMirror {
     private readonly db: PacearrDatabase,
     private readonly logger: Logger,
     private readonly getSonarr: () => SonarrIntegration,
-    /** A series with another operation running is left for the next reconcile. */
+    /** A series with another operation running is deferred until it is free. */
     private readonly isSeriesBusy: (seriesId: number) => boolean,
+    /** How long a reconcile waits for deferred series to become free, and how often it checks. */
+    private readonly busyRetry: { timeoutMs: number; pollMs: number } = { timeoutMs: 60_000, pollMs: 2_000 },
   ) {}
 
   /**
@@ -65,7 +67,7 @@ export class SonarrTagMirror {
         this.logger.info("Pacearr tag added in Sonarr", { seriesId, title: series.title, tag: SONARR_TAG_LABELS[change.add] });
       }
       if (change.remove) {
-        await this.processRemovals(sonarr, tagIds, [{ sonarrSeriesId: seriesId, tag: change.remove }], async () => series, false);
+        await this.processRemovals(sonarr, tagIds, [{ sonarrSeriesId: seriesId, tag: change.remove }], async () => series, null);
       }
     } catch (error) {
       this.logger.warn("Sonarr tag change failed; it will be retried", { seriesId, add: change.add ?? null, remove: change.remove ?? null, error: errorMessage(error) });
@@ -77,7 +79,7 @@ export class SonarrTagMirror {
    * Sonarr series list read in the same pass, so each series' current tags are known
    * without another request per show.
    */
-  async reconcile(series: SonarrSeries[]): Promise<{ added: number; removed: number; pendingRemovals: number } | null> {
+  async reconcile(series: SonarrSeries[]): Promise<{ added: number; removed: number; pendingRemovals: number; deferred: number } | null> {
     const blockedBy = this.writeBlocker();
     if (blockedBy) {
       this.logger.debug("Skipped Sonarr tag reconcile", { reason: blockedBy, pendingRemovals: this.db.listSonarrTagRemovals().length });
@@ -91,42 +93,97 @@ export class SonarrTagMirror {
       const sonarr = this.getSonarr();
       const tagIds = await this.resolveTagIds(sonarr, true);
       const byId = new Map(series.map((item) => [item.id, item]));
-      const removed = await this.processRemovals(
+      // A series another operation is working on is deferred: that operation's full
+      // series PUT carries the tag list it read earlier, and would undo a tag write
+      // made in between.
+      const busy = new Set<number>();
+      let removed = await this.processRemovals(
         sonarr,
         tagIds,
         this.db.listSonarrTagRemovals(),
         async (seriesId) => byId.get(seriesId) ?? getSeriesOrNull(sonarr, seriesId),
-        true,
+        busy,
       );
+      let added = await this.addMissingTags(sonarr, tagIds, byId, busy);
 
-      const expected: Record<PacearrSonarrTag, number[]> = {
-        enrolled: this.db.listRollingShows().map((show) => show.sonarrSeriesId),
-        ignored: this.db.listIgnoredRecommendationIds(),
-      };
-      let added = 0;
-      for (const tag of PACEARR_TAGS) {
-        const tagId = tagIds[tag];
-        if (tagId === undefined) continue;
-        const missing = expected[tag].filter((seriesId) => {
-          const item = byId.get(seriesId);
-          return item && !item.tags?.includes(tagId) && !this.isSeriesBusy(seriesId);
-        });
-        if (missing.length === 0) continue;
-        try {
-          await sonarr.editSeriesTags(missing, [tagId], "add");
-          added += missing.length;
-          this.logger.info("Missing Pacearr tags added in Sonarr", { tag: SONARR_TAG_LABELS[tag], shows: missing.length });
-        } catch (error) {
-          this.logger.warn("Failed to add missing Pacearr tags in Sonarr; the next reconcile retries", { tag: SONARR_TAG_LABELS[tag], shows: missing.length, error: errorMessage(error) });
+      let deferred = 0;
+      if (busy.size > 0) {
+        const titles = (ids: Iterable<number>) => [...ids].map((seriesId) => byId.get(seriesId)?.title ?? String(seriesId));
+        this.logger.info("Sonarr tag changes deferred for shows with another operation running; retrying once they finish", { shows: busy.size, titles: titles(busy) });
+        const freed = await this.waitForSeries(busy);
+        if (freed.size > 0) {
+          // Re-read each freed series: its operation may have changed its tags or its
+          // Pacearr state while this reconcile waited.
+          const fresh = new Map<number, SonarrSeries>();
+          for (const seriesId of freed) {
+            const item = await getSeriesOrNull(sonarr, seriesId).catch(() => null);
+            if (item) fresh.set(seriesId, item);
+          }
+          const stillBusy = new Set<number>();
+          removed += await this.processRemovals(
+            sonarr,
+            tagIds,
+            this.db.listSonarrTagRemovals().filter((entry) => freed.has(entry.sonarrSeriesId)),
+            async (seriesId) => fresh.get(seriesId) ?? getSeriesOrNull(sonarr, seriesId),
+            stillBusy,
+          );
+          added += await this.addMissingTags(sonarr, tagIds, fresh, stillBusy);
+          for (const seriesId of stillBusy) busy.add(seriesId);
+          for (const seriesId of freed) if (!stillBusy.has(seriesId)) busy.delete(seriesId);
+        }
+        deferred = busy.size;
+        if (deferred > 0) {
+          this.logger.warn("Sonarr tag changes still deferred for shows with another operation running; the next library refresh retries", { shows: deferred, titles: titles(busy) });
         }
       }
       const pendingRemovals = this.db.listSonarrTagRemovals().length;
-      this.logger.info("Sonarr tag reconcile complete", { added, removed, pendingRemovals });
-      return { added, removed, pendingRemovals };
+      this.logger.info("Sonarr tag reconcile complete", { added, removed, pendingRemovals, deferred });
+      return { added, removed, pendingRemovals, deferred };
     } catch (error) {
       this.logger.warn("Sonarr tag reconcile failed", { error: errorMessage(error) });
       return null;
     }
+  }
+
+  /**
+   * Adds each Pacearr tag a show in `seriesById` is missing. A busy series is recorded
+   * in `busy` instead. Returns how many tags were added.
+   */
+  private async addMissingTags(sonarr: SonarrIntegration, tagIds: TagIds, seriesById: Map<number, SonarrSeries>, busy: Set<number>): Promise<number> {
+    const expected: Record<PacearrSonarrTag, number[]> = {
+      enrolled: this.db.listRollingShows().map((show) => show.sonarrSeriesId),
+      ignored: this.db.listIgnoredRecommendationIds(),
+    };
+    let added = 0;
+    for (const tag of PACEARR_TAGS) {
+      const tagId = tagIds[tag];
+      if (tagId === undefined) continue;
+      const missing: number[] = [];
+      for (const seriesId of expected[tag]) {
+        const item = seriesById.get(seriesId);
+        if (!item || item.tags?.includes(tagId)) continue;
+        if (this.isSeriesBusy(seriesId)) busy.add(seriesId);
+        else missing.push(seriesId);
+      }
+      if (missing.length === 0) continue;
+      try {
+        await sonarr.editSeriesTags(missing, [tagId], "add");
+        added += missing.length;
+        this.logger.info("Missing Pacearr tags added in Sonarr", { tag: SONARR_TAG_LABELS[tag], shows: missing.length });
+      } catch (error) {
+        this.logger.warn("Failed to add missing Pacearr tags in Sonarr; the next reconcile retries", { tag: SONARR_TAG_LABELS[tag], shows: missing.length, error: errorMessage(error) });
+      }
+    }
+    return added;
+  }
+
+  /** Waits, up to the retry timeout, for busy series to be free. Returns those that are. */
+  private async waitForSeries(seriesIds: Set<number>): Promise<Set<number>> {
+    const deadline = Date.now() + this.busyRetry.timeoutMs;
+    while ([...seriesIds].some((seriesId) => this.isSeriesBusy(seriesId)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, this.busyRetry.pollMs));
+    }
+    return new Set([...seriesIds].filter((seriesId) => !this.isSeriesBusy(seriesId)));
   }
 
   /**
@@ -186,7 +243,8 @@ export class SonarrTagMirror {
     tagIds: TagIds,
     entries: Array<{ sonarrSeriesId: number; tag: PacearrSonarrTag }>,
     lookup: SeriesLookup,
-    skipBusy: boolean,
+    /** When given, a busy series is recorded here and skipped rather than processed. */
+    busy: Set<number> | null,
   ): Promise<number> {
     if (entries.length === 0) return 0;
     const enrolled = new Set(this.db.listRollingShows().map((show) => show.sonarrSeriesId));
@@ -207,7 +265,10 @@ export class SonarrTagMirror {
         this.db.clearSonarrTagRemoval(seriesId, tag);
         continue;
       }
-      if (skipBusy && this.isSeriesBusy(seriesId)) continue;
+      if (busy && this.isSeriesBusy(seriesId)) {
+        busy.add(seriesId);
+        continue;
+      }
       let series: SonarrSeries | null;
       try {
         series = await lookup(seriesId);
