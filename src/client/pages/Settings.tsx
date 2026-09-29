@@ -631,7 +631,7 @@ function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSa
         <span aria-live="polite">{result && <span className={`text-[13px] font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>}</span>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        Restores enrolled and ignored shows from their Sonarr tags. Only needed when setting Pacearr up again from scratch.
+        Restores enrolled and ignored shows from their Sonarr tags. Useful when recovering missing Pacearr records.
       </p>
       {preview && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
