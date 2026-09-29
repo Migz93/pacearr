@@ -2602,7 +2602,7 @@ export class PacearrServices {
       if (awaitingHistory.has(show.id)) {
         // Re-adopted from a Sonarr tag with no viewer progress yet. Reconciling now could
         // trim seasons someone is watching; its Sonarr monitoring is left as found.
-        this.logger.info("Skipped reconciliation of a re-adopted show until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title });
+        this.logger.info("Skipped reconciliation of a re-adopted show until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
         continue;
       }
       const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
@@ -2611,6 +2611,8 @@ export class PacearrServices {
           rollingShowId: show.id,
           seriesId: show.sonarrSeriesId,
           title: show.title,
+          position: index + 1,
+          total: shows.length,
         });
         continue;
       }
