@@ -6,8 +6,9 @@
  * were recorded, so all of them must agree.
  *
  * Each prefers an ID the server keeps across address changes and falls back to its URL.
- * Data stamped with the fallback is moved to the ID once it is known (see
- * PacearrServices.adoptSourceConnection).
+ * An event stored under the fallback moves to the ID only when the server reports the
+ * same watch again (PacearrDatabase.insertWatchEvent), since a different install can
+ * have replaced the one behind that URL.
  */
 export function plexHistoryConnection(settings: { serverUrl: string; machineIdentifier?: string }): string {
   return settings.machineIdentifier || settings.serverUrl;

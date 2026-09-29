@@ -77,6 +77,11 @@ export interface NormalizedWatchEventInput {
   source: EventSourceKind;
   /** The server the event came from (see history-sync.ts); its ID is only unique there. */
   sourceConnection: string;
+  /**
+   * The URL fallback the same server's events may already be stored under (migration 27,
+   * or while its stable ID was unknown). Set only when it differs from sourceConnection.
+   */
+  fallbackConnection?: string;
   sourceEventId: string;
   userId: number | null;
   plexAccountId: string | null;
@@ -240,6 +245,7 @@ function historyFromRow(row: any): HistoryEvent {
 
 export class PacearrDatabase {
   private readonly db: Database.Database;
+  private adoptFallbackStatement?: Database.Statement;
   private readonly logger?: Logger;
 
   constructor(config: RuntimeConfig, logger?: Logger) {
@@ -676,32 +682,6 @@ export class PacearrDatabase {
       UPDATE watch_events SET sonarr_series_id = ?
       WHERE source = ? AND source_connection = ? AND source_event_id = ? AND sonarr_series_id IS NULL
     `).run(seriesId, source, sourceConnection, sourceEventId).changes > 0;
-  }
-
-  /**
-   * Moves watch events stamped with a server's fallback connection (its URL) to its
-   * stable ID once that is known, so reading the same server again under the ID does
-   * not import its history a second time. A row already stored under both is a
-   * duplicate of the same event, so the fallback copy is removed.
-   */
-  adoptWatchEventConnection(sources: EventSourceKind[], from: string, to: string): { moved: number; duplicates: number } {
-    const placeholders = sources.map(() => "?").join(", ");
-    return this.db.transaction(() => {
-      const duplicates = this.db.prepare(`
-        DELETE FROM watch_events
-        WHERE source IN (${placeholders}) AND source_connection = ?
-          AND EXISTS (
-            SELECT 1 FROM watch_events AS adopted
-            WHERE adopted.source = watch_events.source AND adopted.source_connection = ?
-              AND adopted.source_event_id = watch_events.source_event_id
-          )
-      `).run(...sources, from, to).changes;
-      const moved = this.db.prepare(`
-        UPDATE watch_events SET source_connection = ?
-        WHERE source IN (${placeholders}) AND source_connection = ?
-      `).run(to, ...sources, from).changes;
-      return { moved, duplicates };
-    })();
   }
 
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
@@ -1246,31 +1226,50 @@ export class PacearrDatabase {
     }>;
   }
 
-  insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null } {
-    const result = this.db.prepare(`
-      INSERT OR IGNORE INTO watch_events
-        (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.source,
-      input.sourceConnection,
-      input.sourceEventId,
-      input.userId,
-      input.plexAccountId,
-      input.username,
-      input.sonarrSeriesId,
-      input.showTitle,
-      input.seasonNumber,
-      input.episodeNumber,
-      input.watchedAt,
-      JSON.stringify(input.rawPayload),
-      now()
-    );
-    // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
-    // whatever a previous successful insert on this connection left it as. Gate on
-    // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
-    // event would incorrectly report some unrelated earlier row's id as its own.
-    return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+  /**
+   * Moves this event's row from its server's URL fallback to the stable connection, so it
+   * is recognised as a duplicate rather than imported again. Only a row recording the
+   * same watch moves: a different install behind the same URL can reuse the ID for
+   * another watch, and that row must stay where it is rather than absorb the new event.
+   */
+  private adoptFallbackWatchEvent(input: NormalizedWatchEventInput): boolean {
+    if (!input.fallbackConnection || input.fallbackConnection === input.sourceConnection) return false;
+    this.adoptFallbackStatement ??= this.db.prepare(`
+      UPDATE OR IGNORE watch_events SET source_connection = ?
+      WHERE source = ? AND source_connection = ? AND source_event_id = ?
+        AND watched_at = ? AND season_number = ? AND episode_number = ?
+    `);
+    return this.adoptFallbackStatement.run(input.sourceConnection, input.source, input.fallbackConnection, input.sourceEventId, input.watchedAt, input.seasonNumber, input.episodeNumber).changes > 0;
+  }
+
+  insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null; adopted: boolean } {
+    return this.db.transaction(() => {
+      const adopted = this.adoptFallbackWatchEvent(input);
+      const result = this.db.prepare(`
+        INSERT OR IGNORE INTO watch_events
+          (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.source,
+        input.sourceConnection,
+        input.sourceEventId,
+        input.userId,
+        input.plexAccountId,
+        input.username,
+        input.sonarrSeriesId,
+        input.showTitle,
+        input.seasonNumber,
+        input.episodeNumber,
+        input.watchedAt,
+        JSON.stringify(input.rawPayload),
+        now()
+      );
+      // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
+      // whatever a previous successful insert on this connection left it as. Gate on
+      // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
+      // event would incorrectly report some unrelated earlier row's id as its own.
+      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null, adopted };
+    })();
   }
 
   /**
@@ -1279,7 +1278,7 @@ export class PacearrDatabase {
    * process thousands of rows in one run; measured on this exact pattern, 2000 unwrapped
    * inserts took ~212ms versus ~3ms wrapped in one transaction.
    */
-  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): Array<{ inserted: boolean; id: number | null }> {
+  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): Array<{ inserted: boolean; id: number | null; adopted: boolean }> {
     if (inputs.length === 0) return [];
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO watch_events
@@ -1288,6 +1287,7 @@ export class PacearrDatabase {
     `);
     const stamp = now();
     const insertAll = this.db.transaction((items: NormalizedWatchEventInput[]) => items.map((item) => {
+      const adopted = this.adoptFallbackWatchEvent(item);
       const result = insert.run(
         item.source,
         item.sourceConnection,
@@ -1303,7 +1303,7 @@ export class PacearrDatabase {
         JSON.stringify(item.rawPayload),
         stamp
       );
-      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null, adopted };
     }));
     return insertAll(inputs);
   }

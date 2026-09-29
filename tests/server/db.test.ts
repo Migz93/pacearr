@@ -995,27 +995,29 @@ test("watch events with the same source event ID from two connections are both s
   }
 });
 
-test("watch events stamped with a server's URL move to its stable ID without duplicating", () => {
+test("a watch event stored under its server's URL moves to the stable ID only when it is the same watch", () => {
   const { db, cleanup } = createDb();
   try {
-    const event = (source: "tautulli" | "tautulli-session" | "plex-history", sourceConnection: string, sourceEventId: string) => ({
-      source, sourceConnection, sourceEventId, userId: null, plexAccountId: null, username: "alice",
-      sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber: 1, watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
+    const event = (source: "tautulli" | "plex-history", sourceConnection: string, sourceEventId: string, episodeNumber: number, fallbackConnection?: string) => ({
+      source, sourceConnection, fallbackConnection, sourceEventId, userId: null, plexAccountId: null, username: "alice",
+      sonarrSeriesId: null, showTitle: "The Expanse", seasonNumber: 1, episodeNumber, watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
     });
-    db.insertWatchEvent(event("tautulli", "http://tautulli:8181", "1"));
-    db.insertWatchEvent(event("tautulli", "http://tautulli:8181", "2"));
-    db.insertWatchEvent(event("tautulli-session", "http://tautulli:8181", "session:a:1"));
-    // Already stored under the ID too, e.g. after a read where the ID was briefly unknown.
-    db.insertWatchEvent(event("tautulli", "tautulli-install", "2"));
+    const url = "http://tautulli:8181";
+    // Stored under the URL, as migration 27 stamps rows imported before this change.
+    db.insertWatchEvent(event("tautulli", url, "1", 1));
+    db.insertWatchEvent(event("tautulli", url, "2", 2));
     // Another source at the same URL is not this Tautulli.
-    db.insertWatchEvent(event("plex-history", "http://tautulli:8181", "1"));
+    db.insertWatchEvent(event("plex-history", url, "1", 1));
 
-    assert.deepEqual(db.adoptWatchEventConnection(["tautulli", "tautulli-session"], "http://tautulli:8181", "tautulli-install"), { moved: 2, duplicates: 1 });
+    // The same install reports the same watch: recognised, not imported again.
+    const same = db.insertWatchEvent(event("tautulli", "install-a", "1", 1, url));
+    assert.deepEqual(same, { inserted: false, id: null, adopted: true });
+    // A different install behind the URL reused ID 2 for another watch: it is kept, and
+    // the old row stays under the URL rather than being claimed by the new install.
+    assert.deepEqual(db.insertWatchEventsBatch([event("tautulli", "install-a", "2", 5, url)]).map((result) => [result.inserted, result.adopted]), [[true, false]]);
     assert.equal(db.countWatchEvents(), 4);
-    for (const [source, id] of [["tautulli", "1"], ["tautulli", "2"], ["tautulli-session", "session:a:1"]] as const) {
-      assert.equal(db.insertWatchEvent(event(source, "tautulli-install", id)).inserted, false, `${source} ${id} is stored under the install ID`);
-    }
-    assert.equal(db.insertWatchEvent(event("plex-history", "http://tautulli:8181", "1")).inserted, false, "other sources keep their connection");
+    assert.equal(db.insertWatchEvent(event("tautulli", url, "2", 2)).inserted, false, "the unmatched row is still stored under the URL");
+    assert.equal(db.insertWatchEvent(event("plex-history", url, "1", 1)).inserted, false, "other sources keep their connection");
   } finally {
     cleanup();
   }

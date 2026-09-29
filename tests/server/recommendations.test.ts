@@ -1442,9 +1442,9 @@ test("history import reads a changed or unknown Tautulli server in full instead 
   assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "tautulli-install" });
   assert.deepEqual(await importedFrom("other-install"), { imported: 1, syncedConnection: "tautulli-install" }, "another install is read in full");
   assert.deepEqual(await importedFrom("tautulli-install"), { imported: 0, syncedConnection: "tautulli-install" }, "the same install resumes from its cursor");
-  // A cursor stamped with the configured URL (migration 23, or before the install ID
-  // was known) belongs to the Tautulli at that URL, so it resumes under the install ID.
-  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "tautulli-install" }, "the URL fallback resumes from its cursor");
+  // A cursor stamped with the configured URL (migration 23, or before the install ID was
+  // known) may come from an install since replaced behind that URL, so it is read in full.
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 1, syncedConnection: "tautulli-install" }, "a URL-stamped cursor is read in full");
   // Migration 23 stamps cursors saved before connections were recorded, so one still
   // unstamped is treated as belonging to another server.
   assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "tautulli-install" }, "an unstamped cursor is read in full");
@@ -1496,6 +1496,34 @@ test("history import identifies Tautulli by its install ID, across URL changes a
     await importFrom("http://tautulli-new:8181", "install-b", [watch("1", 2), watch("2", 3)]);
     assert.equal(db.countWatchEvents(), 3, "a new install's events are kept even when they reuse reference IDs");
     assert.equal(db.getHistorySyncState().tautulli.connection, "install-b");
+
+    // Reinstalled behind the same URL and API key while Pacearr keeps running, with no
+    // settings save: the install ID is asked for on every run, not cached.
+    const restoreFetch = installFetchStub({ tautulliHistory: [watch("1", 4)], tautulliInstallId: "install-c", tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+    assert.equal(db.countWatchEvents(), 4, "a reinstalled Tautulli's events are kept without a settings change");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-c");
+  } finally {
+    cleanup();
+  }
+});
+
+test("history import does not attribute a replaced Tautulli's history to the install now at its URL", async () => {
+  const { db, services, cleanup } = createHarness();
+  const watch = (date: number, episode: number) => ({ reference_id: "1", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: episode, date, rating_key: "episode", grandparent_rating_key: "118306" });
+  const importFrom = async (tautulliInstallId: string | null, history: unknown[]) => {
+    const restoreFetch = installFetchStub({ tautulliHistory: history, tautulliInstallId, tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+    // The old install's watch, stored under the URL as migration 27 stamps it.
+    await importFrom(null, [watch(1784220000, 1)]);
+    // A fresh install replaced it behind the same URL before the upgrade, and numbers its
+    // history from 1 again. Its watch is kept; the old row is not moved to its install ID.
+    await importFrom("install-new", [watch(1784300000, 9)]);
+    assert.equal(db.countWatchEvents(), 2);
+    assert.deepEqual(db.listUnmatchedWatchEvents().map((event) => event.episodeNumber).sort((a, b) => a - b), [1, 9]);
   } finally {
     cleanup();
   }
