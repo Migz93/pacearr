@@ -155,7 +155,7 @@ Writing is opt-in: Settings → Sonarr → **Write tags to Sonarr**
 | Failed removals retry | A queued removal is retried on every library refresh until Sonarr confirms it, or dropped if the show is back in that state or gone from Sonarr. |
 | Off, or dry run | No tag request is sent at all. Removals are still queued, so a tag written before writing was turned off is removed once it is back on. Turning writing on (outside dry run), or dry run off with writing on, triggers a library refresh, which catches up. |
 | Manual edits | Editing a Pacearr tag in Sonarr has no effect on Pacearr. A removed tag is added back on the next refresh. |
-| Series deleted from Sonarr | No removal is sent; its tags went with it. |
+| Series deleted from Sonarr | No removal is sent; its tags went with it. When the library refresh's deleted-series check confirms the 404 (outside dry run), any queued removal for it is dropped, including one whose record is already gone. |
 
 A Pacearr tag has no effect in Sonarr unless someone links it to a release profile,
 delay profile, indexer, download client or notification.

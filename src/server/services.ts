@@ -488,9 +488,12 @@ export class PacearrServices {
     const present = new Set(series.map((item) => item.id));
     const rollingBySeries = new Map(this.db.listRollingShows().filter((show) => !present.has(show.sonarrSeriesId)).map((show) => [show.sonarrSeriesId, show]));
     const ignoredBySeries = new Map(this.db.listIgnoredRecommendations().filter((record) => !present.has(record.sonarrSeriesId)).map((record) => [record.sonarrSeriesId, record]));
-    const candidateIds = [...new Set([...rollingBySeries.keys(), ...ignoredBySeries.keys()])];
+    // A queued tag removal outlives the record that queued it (restore deletes the ignore
+    // record), so a series with only a queued removal is checked too.
+    const queuedRemovalIds = new Set(this.db.listSonarrTagRemovals().map((entry) => entry.sonarrSeriesId).filter((seriesId) => !present.has(seriesId)));
+    const candidateIds = [...new Set([...rollingBySeries.keys(), ...ignoredBySeries.keys(), ...queuedRemovalIds])];
     if (candidateIds.length === 0) {
-      this.logger.debug("No Pacearr records reference a series missing from Sonarr");
+      this.logger.debug("No Pacearr records or queued tag removals reference a series missing from Sonarr");
       return;
     }
 
@@ -507,6 +510,8 @@ export class PacearrServices {
           if (!isNotFoundError(error)) throw error;
         }
         const details = { seriesId, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) };
+        const hasRecord = details.enrolled || details.ignored;
+        if (dryRun && !hasRecord) continue;
         if (dryRun) {
           // Dry run changes nothing, Pacearr's own records included; it only previews.
           this.db.addHistory("info", "dry_run.show.removed_from_sonarr", title, { ...details, dryRun });
@@ -515,6 +520,12 @@ export class PacearrServices {
         }
         if (rolling && !(await this.removeEnrollmentOfDeletedSeries(rolling))) continue;
         // No Sonarr tag removal: the series, and its tags, are already gone from Sonarr.
+        // Drop any queued one without sending it, so it cannot apply to a reused ID later.
+        const droppedTagRemovals = this.db.clearSonarrTagRemovalsForSeries(seriesId);
+        if (!hasRecord) {
+          this.logger.info("Dropped queued Sonarr tag removals for a series deleted from Sonarr", { seriesId, droppedTagRemovals });
+          continue;
+        }
         this.db.unignoreRecommendation(seriesId);
         this.db.removeRecommendationFromCache(seriesId);
         this.db.addHistory("info", "show.removed_from_sonarr", title, { ...details, dryRun });

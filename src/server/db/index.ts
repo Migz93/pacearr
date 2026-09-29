@@ -360,6 +360,10 @@ export class PacearrDatabase {
       .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, tag: row.tag }));
   }
 
+  clearSonarrTagRemovalsForSeries(seriesId: number): number {
+    return this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ?").run(seriesId).changes;
+  }
+
   clearSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
     this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ? AND tag = ?").run(seriesId, tag);
   }

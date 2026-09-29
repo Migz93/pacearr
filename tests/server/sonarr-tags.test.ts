@@ -317,3 +317,31 @@ test("a re-adopted show is not reconciled or cleaned up until a full history rea
     cleanup();
   }
 });
+
+test("a series confirmed deleted from Sonarr drops its queued tag removals without sending them", async () => {
+  const { db, services, cleanup } = createHarness({ dryRun: false, tagsEnabled: false });
+  const sonarr = installFakeSonarr({
+    series: [series(90, "Lambda", [1, 51]), series(91, "Mu", [1, 50]), series(92, "Nu")],
+    tags: [{ id: 50, label: "pacearr-enrolled" }, { id: 51, label: "pacearr-ignored" }],
+  });
+  try {
+    // Restored while tag writing is off: the removal is queued, and no record remains.
+    db.ignoreRecommendation(90, "Lambda");
+    await services.unignoreRecommendation(90);
+    // Still enrolled, with a leftover queued removal of the other tag.
+    db.upsertRollingShow({ id: 91, title: "Mu" });
+    db.queueSonarrTagRemoval(91, "ignored");
+    assert.equal(db.listSonarrTagRemovals().length, 2);
+
+    sonarr.state.series.delete(90);
+    sonarr.state.series.delete(91);
+    await services.refreshSonarrLibrary();
+
+    assert.deepEqual(db.listSonarrTagRemovals(), []);
+    assert.equal(db.getRollingShowBySeriesId(91), null);
+    assert.deepEqual(sonarr.tagRequests(), []);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
