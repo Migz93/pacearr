@@ -71,13 +71,21 @@ export class TautulliIntegration {
     return installId || null;
   }
 
+  /** Whether Tautulli can currently reach Plex: it asks Plex for its identity live. */
+  private async canReachPlex(): Promise<boolean> {
+    return this.command<{ machine_identifier?: string }>("get_server_identity").then((data) => Boolean(data?.machine_identifier), () => false);
+  }
+
   /** Throws IntegrationNotFoundError when the rating key no longer exists in Plex. */
   async getShowGuids(ratingKey: string): Promise<ExternalIds> {
-    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey }).catch((error: unknown) => {
-      // Only Tautulli's own command errors can mean a deleted item: a 400, or a 200 with
-      // result "error" from older versions. Any other status is a failed request.
+    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey }).catch(async (error: unknown) => {
+      // Tautulli answers "Unable to retrieve metadata" (a 400, or a 200 with result "error"
+      // from older versions) both for a rating key Plex no longer has and when it cannot
+      // reach Plex at all. Only when Plex is reachable does it mean the item is gone.
       const commandError = !(error instanceof IntegrationHttpError) || error.status === 400;
-      if (commandError && error instanceof Error && /unable to retrieve metadata/i.test(error.message)) throw new IntegrationNotFoundError(error.message);
+      if (commandError && error instanceof Error && /unable to retrieve metadata/i.test(error.message) && await this.canReachPlex()) {
+        throw new IntegrationNotFoundError(error.message);
+      }
       throw error;
     });
     const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];

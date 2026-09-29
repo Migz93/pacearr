@@ -63,6 +63,7 @@ function installFetchStub(routes: {
   tautulliMetadataError?: boolean;
   tautulliMetadataNotFound?: string[];
   tautulliMetadataErrorKeys?: string[];
+  tautulliPlexUnreachable?: boolean;
   requests?: Array<{ method: string; pathname: string; search?: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -83,6 +84,10 @@ function installFetchStub(routes: {
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_settings") {
       return jsonResponse({ response: { result: "success", data: { pms_uuid: routes.tautulliInstallId === undefined ? "tautulli-install" : routes.tautulliInstallId } } });
+    }
+    if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_server_identity") {
+      if (routes.tautulliPlexUnreachable) return new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve server identity.", data: {} } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } });
+      return jsonResponse({ response: { result: "success", data: { machine_identifier: "plex-id", version: "1.40" } } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
@@ -365,6 +370,24 @@ test("deleted Plex shows do not stop identity lookups and are asked about once p
     assert.equal(result.matched, 1);
     assert.equal(requests.filter((request) => request.pathname === "/library/metadata/gone-1").length, 1);
     assert.equal(requests.filter((request) => request.pathname === "/library/metadata/118306").length, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("Tautulli losing Plex still stops identity lookups, though its answer looks like a deleted show", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const keys = ["show-1", "show-2", "show-3", "show-4", "show-5"];
+  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, tautulliPlexUnreachable: true });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.unmatched, 5);
+    assert.equal(tautulliMetadataRequests(requests), 3);
   } finally {
     restoreFetch();
     cleanup();

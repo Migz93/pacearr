@@ -137,17 +137,29 @@ test("getActiveSessions parses real get_activity rows, which carry no start time
   }
 });
 
-test("getShowGuids reports a deleted rating key as not found, and other errors as failures", async () => {
+test("getShowGuids reports a deleted rating key as not found only while Tautulli can reach Plex", async () => {
   const originalFetch = globalThis.fetch;
-  const responses: Record<string, Response> = {
-    // What Tautulli returns for a rating key Plex no longer has (#208).
-    deleted: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'deleted'", data: {} } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }),
-    legacy: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'legacy'" } }), { status: 200, headers: { "content-type": "application/json" } }),
-    badRequest: new Response(JSON.stringify({ response: { result: "error", message: "Invalid apikey" } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }),
-    down: new Response("Service Unavailable", { status: 503, statusText: "Service Unavailable" }),
-    proxyDown: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'proxyDown'" } }), { status: 503, statusText: "Service Unavailable", headers: { "content-type": "application/json" } }),
+  const json = (body: unknown, status: number, statusText = "") => new Response(JSON.stringify(body), { status, statusText, headers: { "content-type": "application/json" } });
+  // Tautulli sends this for a rating key Plex no longer has, and equally when it cannot
+  // reach Plex at all (#208): as a 400, or as a 200 from older versions.
+  const noMetadata = (ratingKey: string, status: number) => json({ response: { result: "error", message: `Unable to retrieve metadata for rating_key '${ratingKey}'`, data: {} } }, status, status === 400 ? "Bad Request" : "OK");
+  let plexReachable = true;
+  const responses: Record<string, () => Response> = {
+    deleted: () => noMetadata("deleted", 400),
+    legacy: () => noMetadata("legacy", 200),
+    badRequest: () => json({ response: { result: "error", message: "Invalid apikey" } }, 400, "Bad Request"),
+    down: () => new Response("Service Unavailable", { status: 503, statusText: "Service Unavailable" }),
+    proxyDown: () => json({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'proxyDown'" } }, 503, "Service Unavailable"),
   };
-  globalThis.fetch = (async (input: RequestInfo | URL) => responses[new URL(String(input)).searchParams.get("rating_key")!]!) as typeof fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get("cmd") === "get_server_identity") {
+      return plexReachable
+        ? json({ response: { result: "success", data: { machine_identifier: "plex-id", version: "1.40" } } }, 200, "OK")
+        : json({ response: { result: "error", message: "Unable to retrieve server identity.", data: {} } }, 400, "Bad Request");
+    }
+    return responses[url.searchParams.get("rating_key")!]!();
+  }) as typeof fetch;
   try {
     const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger);
     for (const key of ["deleted", "legacy"]) {
@@ -157,6 +169,12 @@ test("getShowGuids reports a deleted rating key as not found, and other errors a
     await assert.rejects(tautulli.getShowGuids("down"), (error) => !isNotFoundError(error) && error instanceof Error && error.message === "Tautulli 503 Service Unavailable");
     // The not-found message only counts from Tautulli's own command errors, never a 5xx.
     await assert.rejects(tautulli.getShowGuids("proxyDown"), (error) => !isNotFoundError(error));
+
+    // With Plex down behind Tautulli, the same answers are failures, not deleted items.
+    plexReachable = false;
+    for (const key of ["deleted", "legacy"]) {
+      await assert.rejects(tautulli.getShowGuids(key), (error) => !isNotFoundError(error) && error instanceof Error && /unable to retrieve metadata/i.test(error.message));
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
