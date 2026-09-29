@@ -239,8 +239,8 @@ Logs reads, combined with the in-memory ring — see `readRecentLogEntries` in
 `app.ts`.
 
 Long jobs log progress through `createProgressLog` (`progress-log.ts`): at most
-one info line every 30 seconds, with `processed` and `total`, and none for a
-run that finishes sooner.
+one info line every 30 seconds, with `processed` and, when known, `total`, and
+none for a run that finishes sooner.
 
 | Job | Progress message | Extra fields |
 |---|---|---|
