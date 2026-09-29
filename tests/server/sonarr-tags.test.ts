@@ -42,6 +42,8 @@ function installFakeSonarr(initial: { series: SonarrSeries[]; tags?: Array<{ id:
     tags: [OTHER_TAG, ...(initial.tags ?? [])],
     requests: [] as Request[],
     failEditor: false,
+    /** Series IDs whose direct read returns 503, as a transient Sonarr failure. */
+    failSeriesRead: new Set<number>(),
   };
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const originalFetch = globalThis.fetch;
@@ -73,6 +75,7 @@ function installFakeSonarr(initial: { series: SonarrSeries[]; tags?: Array<{ id:
     if (url.pathname === "/api/v3/series" && method === "GET") return json([...state.series.values()]);
     const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
     if (byId) {
+      if (method === "GET" && state.failSeriesRead.has(Number(byId[1]))) return json({ message: "unavailable" }, 503);
       const series = state.series.get(Number(byId[1]));
       if (!series) return json({ message: "NotFound" }, 404);
       if (method === "PUT") {
@@ -376,6 +379,36 @@ test("a reconcile defers a show another operation holds, logs it, and tags it on
     assert.deepEqual((deferredLog?.meta as { titles: string[] }).titles.sort(), ["Omicron", "Pi"]);
     const stillDeferredLog = messages.find((entry) => entry.message.startsWith("Sonarr tag changes still deferred"));
     assert.deepEqual((stillDeferredLog?.meta as { titles: string[] }).titles, ["Pi"]);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
+test("a deferred show whose re-read fails stays deferred instead of being counted as done", async () => {
+  const { db, cleanup } = createHarness({ dryRun: false });
+  const sonarr = installFakeSonarr({ series: [series(110, "Rho")] });
+  const warnings: string[] = [];
+  const logger = { debug() {}, info() {}, warn: (message: string) => { warnings.push(message); }, error() {} } as unknown as Logger;
+  const busy = new Set([110]);
+  const mirror = new SonarrTagMirror(
+    db,
+    logger,
+    () => new SonarrIntegration(db.getSonarrSettings()!, logger, false),
+    (seriesId) => busy.has(seriesId),
+    { timeoutMs: 300, pollMs: 10 },
+  );
+  try {
+    db.upsertRollingShow({ id: 110, title: "Rho" });
+    sonarr.state.failSeriesRead.add(110);
+    setTimeout(() => busy.delete(110), 30);
+    const result = await mirror.reconcile([...sonarr.state.series.values()]);
+
+    assert.equal(result?.deferred, 1);
+    assert.equal(result?.added, 0);
+    assert.deepEqual(sonarr.tagLabels(110), ["kometafranchise"]);
+    assert.ok(warnings.some((message) => message.startsWith("Could not re-read a deferred Sonarr series")));
+    assert.ok(warnings.some((message) => message.startsWith("Sonarr tag changes still deferred")));
   } finally {
     sonarr.restore();
     cleanup();

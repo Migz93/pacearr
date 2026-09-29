@@ -115,25 +115,31 @@ export class SonarrTagMirror {
           // Re-read each freed series: its operation may have changed its tags or its
           // Pacearr state while this reconcile waited.
           const fresh = new Map<number, SonarrSeries>();
+          // A failed read stays deferred; only a 404 means the series is gone.
+          const stillDeferred = new Set<number>();
           for (const seriesId of freed) {
-            const item = await getSeriesOrNull(sonarr, seriesId).catch(() => null);
-            if (item) fresh.set(seriesId, item);
+            try {
+              const item = await getSeriesOrNull(sonarr, seriesId);
+              if (item) fresh.set(seriesId, item);
+            } catch (error) {
+              stillDeferred.add(seriesId);
+              this.logger.warn("Could not re-read a deferred Sonarr series; its tag change waits for the next library refresh", { seriesId, title: byId.get(seriesId)?.title ?? null, error: errorMessage(error) });
+            }
           }
-          const stillBusy = new Set<number>();
           removed += await this.processRemovals(
             sonarr,
             tagIds,
-            this.db.listSonarrTagRemovals().filter((entry) => freed.has(entry.sonarrSeriesId)),
+            this.db.listSonarrTagRemovals().filter((entry) => freed.has(entry.sonarrSeriesId) && !stillDeferred.has(entry.sonarrSeriesId)),
             async (seriesId) => fresh.get(seriesId) ?? getSeriesOrNull(sonarr, seriesId),
-            stillBusy,
+            stillDeferred,
           );
-          added += await this.addMissingTags(sonarr, tagIds, fresh, stillBusy);
-          for (const seriesId of stillBusy) busy.add(seriesId);
-          for (const seriesId of freed) if (!stillBusy.has(seriesId)) busy.delete(seriesId);
+          added += await this.addMissingTags(sonarr, tagIds, fresh, stillDeferred);
+          for (const seriesId of stillDeferred) busy.add(seriesId);
+          for (const seriesId of freed) if (!stillDeferred.has(seriesId)) busy.delete(seriesId);
         }
         deferred = busy.size;
         if (deferred > 0) {
-          this.logger.warn("Sonarr tag changes still deferred for shows with another operation running; the next library refresh retries", { shows: deferred, titles: titles(busy) });
+          this.logger.warn("Sonarr tag changes still deferred, for shows still busy or unreadable; the next library refresh retries", { shows: deferred, titles: titles(busy) });
         }
       }
       const pendingRemovals = this.db.listSonarrTagRemovals().length;
