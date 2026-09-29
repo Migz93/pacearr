@@ -47,6 +47,7 @@ export const MAX_SAFE_RETENTION_DAYS = 100_000_000;
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
+  sonarrTagsEnabled: false,
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,

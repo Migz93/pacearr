@@ -421,6 +421,15 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     }
     const result = await services.importFromSonarrTags({ enrollSeriesIds, ignoreSeriesIds });
     if (result.enrolled > 0 || result.ignored > 0) runRecommendationRefreshNow();
+    if (result.enrolled > 0 && scheduler) {
+      // Re-adopted shows are reconciled against the latest playback history rather than
+      // waiting for the next scheduled runs: read Plex and Tautulli in full first, then
+      // reconcile, so the reconcile sees every viewer's current position.
+      logger.info("Sonarr tag import re-adopted shows; scheduling full history reconciliation then rolling reconciliation", { enrolled: result.enrolled });
+      void scheduler.runNowAndWait("full-history-reconcile")
+        .then(() => scheduler.runNowOrQueue("rolling-reconcile"))
+        .catch((error) => logger.warn("Post-import reconciliation failed to start", { error: error instanceof Error ? error.message : String(error) }));
+    }
     res.json(result);
   }));
 
@@ -461,6 +470,7 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     const patch: Partial<AppSettings> = {};
     if (body.dryRun !== undefined) patch.dryRun = Boolean(body.dryRun);
     if (body.artworkEnabled !== undefined) patch.artworkEnabled = Boolean(body.artworkEnabled);
+    if (body.sonarrTagsEnabled !== undefined) patch.sonarrTagsEnabled = Boolean(body.sonarrTagsEnabled);
     if (body.viewerActivityWindowDays !== undefined) patch.viewerActivityWindowDays = Math.max(1, Math.floor(Number(body.viewerActivityWindowDays) || 30));
     if (body.historyRetentionDays !== undefined) {
       const retentionDays = Number(body.historyRetentionDays);
@@ -561,9 +571,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       scheduler?.runNowOrQueue("new-show-triage");
     }
     if (previousSettings.dryRun && !appSettings.dryRun) {
-      logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation and Sonarr tag catch-up");
+      logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
       scheduler?.runNow("rolling-reconcile");
-      // The library refresh reconciles Sonarr tags, which dry run left out of date.
+    }
+    // The library refresh reconciles Sonarr tags, which were left out of date while
+    // tag writing was off or dry run was on.
+    const tagsWereWritable = previousSettings.sonarrTagsEnabled && !previousSettings.dryRun;
+    if (!tagsWereWritable && appSettings.sonarrTagsEnabled && !appSettings.dryRun) {
+      logger.info("Sonarr tag writing is now active; scheduling a library refresh to catch tags up");
       scheduler?.runNowOrQueue("sonarr-library-refresh");
     }
     res.json({ app: appSettings });

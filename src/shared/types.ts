@@ -79,6 +79,8 @@ export interface TautulliSettingsView {
 export interface AppSettings {
   dryRun: boolean;
   artworkEnabled: boolean;
+  /** Opt-in: mirror enrolments and ignores onto Sonarr series as Pacearr tags. */
+  sonarrTagsEnabled: boolean;
   viewerActivityWindowDays: number;
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;

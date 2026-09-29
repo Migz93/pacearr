@@ -228,6 +228,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | A reconcile adds missing tags but never removes a tag Pacearr has no record for | With an empty database facing tagged series (the state after database loss), a library refresh sends no removal; an enrolled show missing its tag gets it |
 | A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |
 | Dry run sends no tag request, and queued removals catch up once it is off | No `/tag` or `/series/editor` request in dry run; afterwards queued removals and missing adds are applied, and a removal for a show ignored again before it was sent is dropped rather than stripping the current tag |
+| Tag writing is off by default: nothing is sent, removals queue, and import still works | `sonarrTagsEnabled` defaults to false; while off, no `/tag` or `/series/editor` request is sent but removals are queued, the import preview still works, and turning writing on applies the queued removal and missing adds |
 | Importing from Sonarr tags is additive, skips conflicts, and re-adopts without a pilot baseline | The preview splits tagged shows into enrol/ignore/already known/conflict and treats a queued removal as absent; the import only creates records the confirmation listed, never changes an existing one, records still-monitored seasons as expanded, and sends nothing to Sonarr |
 
 ---

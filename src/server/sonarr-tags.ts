@@ -23,8 +23,9 @@ type SeriesLookup = (seriesId: number) => Promise<SonarrSeries | null>;
  * - A tag is removed only after a Pacearr action queued that removal. A series having
  *   no record never removes its tag: after a database loss every record is gone, and
  *   removing "unexpected" tags would destroy the only recovery data.
- * - Dry run sends nothing. Removals stay queued and the add reconcile catches up once
- *   dry run is turned off.
+ * - Writing is opt-in (`sonarrTagsEnabled`), and dry run sends nothing. While either
+ *   blocks writes, removals stay queued and the add reconcile catches up afterwards.
+ * - Import only reads, so it works whatever the setting, as a fresh install needs.
  */
 export class SonarrTagMirror {
   constructor(
@@ -40,9 +41,12 @@ export class SonarrTagMirror {
    * good by the next reconcile, and a removal is queued before it is attempted.
    */
   async applyChange(seriesId: number, change: { add?: PacearrSonarrTag; remove?: PacearrSonarrTag }): Promise<void> {
+    // Queued even while tag writing is off, so turning it on later cannot leave behind
+    // a tag written before it was turned off.
     if (change.remove) this.db.queueSonarrTagRemoval(seriesId, change.remove);
-    if (this.db.getAppSettings().dryRun) {
-      this.logger.info("Dry run: Sonarr tag change deferred", { seriesId, add: change.add ?? null, remove: change.remove ?? null });
+    const blockedBy = this.writeBlocker();
+    if (blockedBy) {
+      this.logger.debug("Sonarr tag change deferred", { seriesId, add: change.add ?? null, remove: change.remove ?? null, reason: blockedBy });
       return;
     }
     try {
@@ -74,8 +78,9 @@ export class SonarrTagMirror {
    * without another request per show.
    */
   async reconcile(series: SonarrSeries[]): Promise<{ added: number; removed: number; pendingRemovals: number } | null> {
-    if (this.db.getAppSettings().dryRun) {
-      this.logger.debug("Dry run: skipped Sonarr tag reconcile", { pendingRemovals: this.db.listSonarrTagRemovals().length });
+    const blockedBy = this.writeBlocker();
+    if (blockedBy) {
+      this.logger.debug("Skipped Sonarr tag reconcile", { reason: blockedBy, pendingRemovals: this.db.listSonarrTagRemovals().length });
       return null;
     }
     if (series.length === 0) {
@@ -152,6 +157,13 @@ export class SonarrTagMirror {
     }
     for (const list of [preview.toEnroll, preview.toIgnore, preview.alreadyKnown, preview.conflicts]) list.sort((a, b) => a.title.localeCompare(b.title));
     return { preview, seriesById: new Map(series.map((item) => [item.id, item])) };
+  }
+
+  /** Tag writing is opt-in, and dry run sends nothing to Sonarr. */
+  private writeBlocker(): "disabled" | "dry-run" | null {
+    const settings = this.db.getAppSettings();
+    if (!settings.sonarrTagsEnabled) return "disabled";
+    return settings.dryRun ? "dry-run" : null;
   }
 
   /** Looks up Pacearr's tag IDs, creating a missing tag only when something will be added. */

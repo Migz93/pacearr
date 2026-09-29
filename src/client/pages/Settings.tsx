@@ -535,7 +535,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
           test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
         />
       </SectionCard>
-      <SonarrTagImportCard configured={Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured)} />
+      <SonarrTagsCard settings={settings} onSave={onSave} />
     </div>
   );
 }
@@ -544,7 +544,12 @@ function pluralShows(count: number) {
   return `${count} show${count === 1 ? "" : "s"}`;
 }
 
-function SonarrTagImportCard({ configured }: { configured: boolean }) {
+function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
+  const configured = Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured);
+  const [tagsEnabled, setTagsEnabled] = useState(settings.app.sonarrTagsEnabled);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SonarrTagImportPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -583,13 +588,42 @@ function SonarrTagImportCard({ configured }: { configured: boolean }) {
     }
   }
 
+  async function saveTagSetting() {
+    setSaving(true);
+    setSaved(false);
+    setSaveError(null);
+    try {
+      await apiPatch("/api/settings/app", { sonarrTagsEnabled: tagsEnabled });
+      setSaved(true);
+      await onSave();
+    } catch (caught) {
+      setSaveError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const nothingToImport = preview !== null && preview.toEnroll.length === 0 && preview.toIgnore.length === 0;
 
   return (
     <SectionCard
       title="Sonarr tags"
-      description="Pacearr tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored in Sonarr. It never touches any other tag. If Pacearr's database is lost, import from those tags to recover your enrolled and ignored shows."
+      description="Mirror enrolled and ignored shows onto Sonarr as tags, so they can be recovered if Pacearr's database is lost."
     >
+      <ToggleField
+        label="Write tags to Sonarr"
+        hint="Tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored. Pacearr never adds or removes any other tag. Nothing is written while dry run is on."
+        checked={tagsEnabled}
+        onChange={(value) => { setTagsEnabled(value); setSaved(false); }}
+      />
+      <SaveBar
+        saving={saving}
+        success={saved}
+        error={saveError}
+        label="Save tag setting"
+        onSave={() => void saveTagSetting()}
+        saveDisabled={tagsEnabled === settings.app.sonarrTagsEnabled}
+      />
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" className={secondaryButtonClass} disabled={!configured || loading} aria-busy={loading} onClick={() => void loadPreview()}>
           {loading ? "Checking Sonarr..." : "Import from Sonarr tags"}
@@ -597,7 +631,7 @@ function SonarrTagImportCard({ configured }: { configured: boolean }) {
         <span aria-live="polite">{result && <span className={`text-[13px] font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>}</span>
       </div>
       <p className="text-xs leading-relaxed text-on-surface-variant">
-        Adds only shows Pacearr has no record of, and never changes an existing enrolment or ignore. Imported shows keep their current Sonarr monitoring; they are not reset to pilots. Excluded seasons and episodes cannot be recovered from tags.
+        Works whether or not tag writing is on. Adds only shows Pacearr has no record of, and never changes an existing enrolment or ignore. Imported shows are not reset to pilots: Pacearr reads the latest Plex and Tautulli history, then reconciles them as usual. Excluded seasons and episodes cannot be recovered from tags.
       </p>
       {preview && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">

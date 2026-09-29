@@ -17,14 +17,14 @@ function silentLogger(): Logger {
   return { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 }
 
-function createHarness(options: { dryRun: boolean }) {
+function createHarness(options: { dryRun: boolean; tagsEnabled?: boolean }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-tags-test-"));
   const config: RuntimeConfig = { port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1000, logLevel: "error" };
   const logger = silentLogger();
   const db = new PacearrDatabase(config);
   const services = new PacearrServices(db, logger, new ImageCacheService(dir, logger), dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
-  db.updateAppSettings({ dryRun: options.dryRun });
+  db.updateAppSettings({ dryRun: options.dryRun, sonarrTagsEnabled: options.tagsEnabled ?? true });
   return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -192,6 +192,37 @@ test("dry run sends no tag request, and queued removals catch up once it is off"
     assert.deepEqual(sonarr.tagLabels(41), ["kometafranchise", "pacearr-ignored"]);
     assert.deepEqual(sonarr.tagLabels(42), ["kometafranchise", "pacearr-ignored"], "a stale removal must not strip a current tag");
     assert.deepEqual(db.listSonarrTagRemovals(), []);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
+test("tag writing is off by default: nothing is sent, removals queue, and import still works", async () => {
+  const { db, services, cleanup } = createHarness({ dryRun: false, tagsEnabled: false });
+  const sonarr = installFakeSonarr({
+    series: [series(70, "Eta", [1, 51]), series(71, "Theta"), series(72, "Iota", [50])],
+    tags: [{ id: 50, label: "pacearr-enrolled" }, { id: 51, label: "pacearr-ignored" }],
+  });
+  try {
+    // A fresh install must not opt in on its own.
+    db.updateAppSettings({ sonarrTagsEnabled: undefined });
+    assert.equal(db.getAppSettings().sonarrTagsEnabled, false);
+
+    db.ignoreRecommendation(70, "Eta");
+    await services.unignoreRecommendation(70);
+    await services.ignoreRecommendation(71, "Theta");
+    await services.refreshSonarrLibrary();
+    assert.deepEqual(sonarr.tagRequests(), []);
+    assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 70, tag: "ignored" }]);
+
+    const preview = await services.previewSonarrTagImport();
+    assert.deepEqual(preview.toEnroll.map((show) => show.sonarrSeriesId), [72]);
+
+    db.updateAppSettings({ sonarrTagsEnabled: true });
+    await services.refreshSonarrLibrary();
+    assert.deepEqual(sonarr.tagLabels(70), ["kometafranchise"]);
+    assert.deepEqual(sonarr.tagLabels(71), ["kometafranchise", "pacearr-ignored"]);
   } finally {
     sonarr.restore();
     cleanup();

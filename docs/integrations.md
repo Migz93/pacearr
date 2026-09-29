@@ -136,8 +136,11 @@ To minimise downloads that Pacearr subsequently purges, disable
 
 ### Tags
 
-Pacearr mirrors its state onto Sonarr series as tags, for recovery after database
+Pacearr can mirror its state onto Sonarr series as tags, for recovery after database
 loss and for filtering in Sonarr. Pacearr's database stays the source of truth.
+
+Writing is opt-in: Settings → Sonarr → **Write tags to Sonarr**
+(`sonarrTagsEnabled`, off by default).
 
 | Tag | On |
 |---|---|
@@ -150,7 +153,7 @@ loss and for filtering in Sonarr. Pacearr's database stays the source of truth.
 | Adds are reconciled | Each Sonarr library refresh adds any tag an enrolled or ignored show is missing. |
 | Removals need a Pacearr action | Unenrol, restore from ignored, and enrolling an ignored show queue a removal (`sonarr_tag_removals`). A show having no record never removes its tag, so an empty database cannot wipe the recovery data. |
 | Failed removals retry | A queued removal is retried on every library refresh until Sonarr confirms it, or dropped if the show is back in that state or gone from Sonarr. |
-| Dry run | The mirror sends no tag request at all. Turning dry run off triggers a library refresh, which catches up. |
+| Off, or dry run | No tag request is sent at all. Removals are still queued, so a tag written before writing was turned off is removed once it is back on. Turning writing on (outside dry run), or dry run off with writing on, triggers a library refresh, which catches up. |
 | Manual edits | Editing a Pacearr tag in Sonarr has no effect on Pacearr. A removed tag is added back on the next refresh. |
 | Series deleted from Sonarr | No removal is sent; its tags went with it. |
 
@@ -159,7 +162,8 @@ delay profile, indexer, download client or notification.
 
 #### Import from Sonarr tags
 
-Settings → Sonarr → **Import from Sonarr tags**. Never automatic.
+Settings → Sonarr → **Import from Sonarr tags**. Never automatic. Available whether
+or not tag writing is on, since a fresh install starts with it off.
 
 1. `GET /api/sonarr/tag-import` previews: shows to enrol, shows to ignore, tagged
    shows already in Pacearr (left alone), and shows with both tags (skipped). A tag
@@ -169,8 +173,9 @@ Settings → Sonarr → **Import from Sonarr tags**. Never automatic.
 
 Re-adoption skips the enrolment pilot baseline and sends nothing to Sonarr. Seasons
 Sonarr still monitors are recorded as expanded, so the rolling reconcile times them
-out as usual instead of trimming them to pilots. Viewer progress is rebuilt from
-watch history. Tags restore membership only: exclusions, prefetch records and Plex
+out as usual instead of trimming them to pilots. When any show was re-adopted, the
+import then runs a full history reconciliation (Plex and Tautulli) followed by a
+rolling reconciliation, so viewer progress is rebuilt before the shows are reconciled. Tags restore membership only: exclusions, prefetch records and Plex
 poster backups are not recoverable from them.
 
 Allowed in dry run, because it writes only Pacearr's own records, like a manual
