@@ -237,3 +237,15 @@ matching hubarr: a human-readable `pacearr-*.log` (7 days, manual inspection
 only) and a machine-readable `.machinelogs-*.json` (3 days) that Settings →
 Logs reads, combined with the in-memory ring — see `readRecentLogEntries` in
 `app.ts`.
+
+Long jobs log progress through `createProgressLog` (`progress-log.ts`): at most
+one info line every 30 seconds, with `processed` and `total`, and none for a
+run that finishes sooner.
+
+| Job | Progress message | Extra fields |
+|---|---|---|
+| `history-import` | `History import progress` | `source` (`plex`/`tautulli`), `phase` (`matching`/`rolling`) |
+| `full-history-reconcile` | `Full history reconciliation progress` | same as above |
+| `sonarr-library-refresh` | `Sonarr library refresh progress` | `phase: "posters"` |
+| `recommendation-refresh` | `Recommendation refresh progress` | — |
+| `rolling-reconcile` | no progress line; `Applying Sonarr monitoring plan` carries `position` and `total` | — |

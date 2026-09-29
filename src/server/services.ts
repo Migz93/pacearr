@@ -35,6 +35,7 @@ import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
 import { PlexSessionMonitor, type PlexSessionMonitorStatus } from "./plex-session-monitor.js";
+import { createProgressLog } from "./progress-log.js";
 import { SonarrTagMirror } from "./sonarr-tags.js";
 
 function isRealSeasonEpisode(episode: SonarrEpisode) {
@@ -494,14 +495,16 @@ export class PacearrServices {
     const sonarr = this.getSonarr();
     const series = await sonarr.getSeries();
     const limit = pLimit(5);
-    const items: SonarrLibraryCacheItem[] = await Promise.all(series.map((item) => limit(async () => ({
-      series: item,
-      posterUrl: await this.imageCache.ensureSonarrPosterCached(
+    const progress = createProgressLog(this.logger, "Sonarr library refresh progress", series.length, { phase: "posters" });
+    const items: SonarrLibraryCacheItem[] = await Promise.all(series.map((item) => limit(async () => {
+      const posterUrl = await this.imageCache.ensureSonarrPosterCached(
         item.id,
         sonarr.getPosterUrl(item),
         sonarr.getPosterRequestHeaders(item)
-      ),
-    }))));
+      );
+      progress.tick();
+      return { series: item, posterUrl };
+    })));
     const generatedAt = this.db.saveSonarrLibraryCache(items);
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
     await this.removeSeriesDeletedFromSonarr(series, sonarr);
@@ -1015,6 +1018,7 @@ export class PacearrServices {
     // bound concurrency so a large un-enrolled library doesn't fire hundreds of
     // simultaneous requests at Sonarr on one page load.
     const limit = pLimit(5);
+    const refreshProgress = createProgressLog(this.logger, "Recommendation refresh progress", candidates.length);
     const built = await Promise.all(candidates.map((series) => limit(async () => {
       try {
         const progress = this.db.listLatestUserProgressForSeries(series.id, cutoff);
@@ -1056,6 +1060,8 @@ export class PacearrServices {
           error: error instanceof Error ? error.message : String(error),
         });
         return { recommendation: null, skipped: true };
+      } finally {
+        refreshProgress.tick();
       }
     })));
 
@@ -1550,7 +1556,7 @@ export class PacearrServices {
     return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots, [], deleteFiles);
   }
 
-  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = [], deleteFiles?: boolean): Promise<number> {
+  private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = [], deleteFiles?: boolean, sweepPosition?: { position: number; total: number }): Promise<number> {
     const settings = this.db.getAppSettings();
     const sonarr = this.getSonarr(settings.dryRun);
     const series = await sonarr.getSeriesById(seriesId);
@@ -1569,7 +1575,7 @@ export class PacearrServices {
     const resetExcludedEpisodes = storedExclusions.episodes.filter((episode) => trimmedSeasons.has(episode.seasonNumber));
     const exclusions = { seasons: storedExclusions.seasons, episodes: storedExclusions.episodes.filter((episode) => !trimmedSeasons.has(episode.seasonNumber)) };
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, fileDeletionEnabled, prefetchedEpisodeIds, exclusions);
-    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
+    this.logger.info("Applying Sonarr monitoring plan", { seriesId, title: series.title, reason, ...sweepPosition, retainedSeasons: plan.retainedSeasons, dryRun: settings.dryRun, fileDeletionEnabled, episodeUpdates: plan.episodesToMonitor.length + plan.episodesToUnmonitor.length, filesToDelete: plan.filesToDelete.length });
 
     if (plan.seriesMonitoringUpdate) {
       await sonarr.updateSeriesMonitoring(seriesId, { monitored: true, monitorNewItems: "none" });
@@ -2219,6 +2225,7 @@ export class PacearrServices {
 
   async importHistory(options: { full?: boolean; reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
     const full = options.full === true;
+    const progressMessage = full ? "Full history reconciliation progress" : "History import progress";
     this.logger.info(full ? "Full history reconciliation started" : "History import started");
     const errors: string[] = [];
     let processed = 0;
@@ -2257,6 +2264,7 @@ export class PacearrServices {
       const { connection: plexConnection, fallbackConnection: plexFallback } = this.plexConnection(plexSettings);
       const plexEvents = await plex.getPlaybackHistory(full ? undefined : resumeFrom(syncState.plex, plexConnection));
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
+      const matchingProgress = createProgressLog(this.logger, progressMessage, plexEvents.length, { source: "plex", phase: "matching" });
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
         const series = await this.matchPlexSeries(event, seriesIndex, plex, plexIdentityScope, identityLookups);
@@ -2278,6 +2286,7 @@ export class PacearrServices {
           },
           applyRolling: !full && new Date(event.watchedAt).getTime() >= activityCutoff,
         });
+        matchingProgress.tick();
       }
       processed += prepared.length;
       const counts = this.insertImmediateWatchEvents(prepared);
@@ -2290,6 +2299,7 @@ export class PacearrServices {
         this.logUnmatchedWatchEvent(input);
       });
       this.refreshRollingProgressForUsers(counts.repairedUserIds);
+      const rollingProgress = createProgressLog(this.logger, progressMessage, counts.rolling.length, { source: "plex", phase: "rolling" });
       for (const input of counts.rolling) {
         const result = await this.processWatchEvent(input, "plex-history", true, episodeCache, dryRunExpandedSeasons);
         if (result.inserted) {
@@ -2297,6 +2307,7 @@ export class PacearrServices {
           if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
         }
         if (result.changed) changed++;
+        rollingProgress.tick();
       }
       if (!full) {
         syncState.plex = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("plex-history", plexConnection), connection: plexConnection };
@@ -2319,6 +2330,7 @@ export class PacearrServices {
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         const findTautulliUser = this.db.createTautulliUserResolver();
+        const matchingProgress = createProgressLog(this.logger, progressMessage, tautulliEvents.length, { source: "tautulli", phase: "matching" });
         for (const event of tautulliEvents) {
           const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
@@ -2342,6 +2354,7 @@ export class PacearrServices {
             },
             applyRolling: !full && new Date(event.watchedAt).getTime() >= activityCutoff,
           });
+          matchingProgress.tick();
         }
         this.db.fillMissingTautulliUsernames(tautulliUsernames);
         processed += prepared.length;
@@ -2365,6 +2378,7 @@ export class PacearrServices {
             changed++;
           }
         }
+        const rollingProgress = createProgressLog(this.logger, progressMessage, counts.rolling.length, { source: "tautulli", phase: "rolling" });
         for (const input of counts.rolling) {
           const result = await this.processWatchEvent(input, "tautulli", true, episodeCache, dryRunExpandedSeasons);
           if (result.inserted) {
@@ -2375,6 +2389,7 @@ export class PacearrServices {
             changed++;
           }
           if (result.changed) changed++;
+          rollingProgress.tick();
         }
         // A repaired event may be the most recent watch a viewer has for its series, so
         // rolling progress needs the same refresh discoverPlexUsers does after linking
@@ -2576,7 +2591,8 @@ export class PacearrServices {
     const errors: string[] = [];
     const episodeCache: EpisodeCache = new Map();
     const awaitingHistory = new Set(this.db.listRollingShowIdsAwaitingHistory());
-    for (const show of this.db.listRollingShows()) {
+    const shows = this.db.listRollingShows();
+    for (const [index, show] of shows.entries()) {
       if (awaitingHistory.has(show.id)) {
         // Re-adopted from a Sonarr tag with no viewer progress yet. Reconciling now could
         // trim seasons someone is watching; its Sonarr monitoring is left as found.
@@ -2619,7 +2635,7 @@ export class PacearrServices {
             dryRun: settings.dryRun,
           });
         }
-        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false, stalePrefetchedSeasons);
+        changed += await this.applyMonitoringPlan(show.sonarrSeriesId, "scheduled-reconcile", retainedSeasons, false, stalePrefetchedSeasons, undefined, { position: index + 1, total: shows.length });
         if (eligibleForCleanup.length > 0) {
           this.logger.info("Scheduled reconciliation applied inactive-season cleanup", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, eligibleForCleanup });
         }
