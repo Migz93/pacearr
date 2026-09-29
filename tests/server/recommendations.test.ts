@@ -56,6 +56,7 @@ function installFetchStub(routes: {
   plexHistoryXml?: string;
   plexMetadataXml?: string;
   plexMetadataNotFound?: string[];
+  plexMetadataErrorKeys?: string[];
   plexTitleSearchXml?: string;
   tautulliHistory?: unknown[];
   tautulliInstallId?: string | null;
@@ -63,7 +64,7 @@ function installFetchStub(routes: {
   tautulliMetadataError?: boolean;
   tautulliMetadataNotFound?: string[];
   tautulliMetadataErrorKeys?: string[];
-  tautulliPlexUnreachable?: boolean;
+  tautulliPlexServerId?: string;
   requests?: Array<{ method: string; pathname: string; search?: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -77,17 +78,14 @@ function installFetchStub(routes: {
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/metadata/")) {
       if (routes.plexMetadataNotFound?.includes(url.pathname.split("/").pop()!)) return new Response("Not Found", { status: 404, statusText: "Not Found" });
+      if (routes.plexMetadataErrorKeys?.includes(url.pathname.split("/").pop()!)) return new Response("Internal Server Error", { status: 500, statusText: "Internal Server Error" });
       return new Response(routes.plexMetadataXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/sections/") && url.pathname.endsWith("/all")) {
       return new Response(routes.plexTitleSearchXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_settings") {
-      return jsonResponse({ response: { result: "success", data: { pms_uuid: routes.tautulliInstallId === undefined ? "tautulli-install" : routes.tautulliInstallId } } });
-    }
-    if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_server_identity") {
-      if (routes.tautulliPlexUnreachable) return new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve server identity.", data: {} } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } });
-      return jsonResponse({ response: { result: "success", data: { machine_identifier: "plex-id", version: "1.40" } } });
+      return jsonResponse({ response: { result: "success", data: { pms_uuid: routes.tautulliInstallId === undefined ? "tautulli-install" : routes.tautulliInstallId, pms_identifier: routes.tautulliPlexServerId ?? "plex-id" } } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
@@ -322,7 +320,7 @@ test("deleted Tautulli shows do not stop identity lookups and are asked about on
   const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
   // Four deleted shows ahead of a live one, the first with several watches (#208).
   const history = tautulliHistoryRows(["gone-1", "gone-1", "gone-2", "gone-3", "gone-4", "gone-1", "118306"]);
-  const route = { series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://208111"] }, tautulliMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"] };
+  const route = { series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://208111"] }, tautulliMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"], plexMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"] };
   const identityKey = (ratingKey: string) => `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:${ratingKey}`;
   const firstRequests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
   const firstFetch = installFetchStub({ ...route, requests: firstRequests });
@@ -331,6 +329,8 @@ test("deleted Tautulli shows do not stop identity lookups and are asked about on
 
     assert.equal(result.matched, 1);
     assert.equal(tautulliMetadataRequests(firstRequests, "gone-1"), 1);
+    // Tautulli cannot tell a deleted show from a Plex failure, so Plex confirms it.
+    assert.equal(firstRequests.filter((request) => request.pathname === "/library/metadata/gone-1").length, 1);
     assert.equal(tautulliMetadataRequests(firstRequests), 5);
     assert.equal(db.getSourceIdentity("tautulli", identityKey("gone-1")), null);
   } finally {
@@ -376,18 +376,60 @@ test("deleted Plex shows do not stop identity lookups and are asked about once p
   }
 });
 
-test("Tautulli losing Plex still stops identity lookups, though its answer looks like a deleted show", async () => {
-  const { db, services, cleanup } = createHarness();
-  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
-  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+function tautulliAmbiguousHarness() {
+  const harness = createHarness();
+  harness.db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  harness.db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  harness.db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  return harness;
+}
+
+test("an item Tautulli cannot read still counts as a failed lookup when Plex fails too", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
   const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
   const keys = ["show-1", "show-2", "show-3", "show-4", "show-5"];
-  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, tautulliPlexUnreachable: true });
+  // Tautulli gives the same answer when its own request to Plex fails (#208).
+  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, plexMetadataErrorKeys: keys });
   try {
     const result = await services.importHistory();
 
     assert.equal(result.unmatched, 5);
     assert.equal(tautulliMetadataRequests(requests), 3);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("an item Tautulli cannot read counts as a failed lookup when Tautulli reads a different Plex server", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const keys = ["show-1", "show-2", "show-3", "show-4", "show-5"];
+  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, plexMetadataNotFound: keys, tautulliPlexServerId: "another-plex" });
+  try {
+    await services.importHistory();
+
+    // The rating keys belong to another server, so Pacearr's Plex is never asked.
+    assert.equal(tautulliMetadataRequests(requests), 3);
+    assert.equal(requests.some((request) => request.pathname.startsWith("/library/metadata/")), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("an item Tautulli cannot read is matched from Plex when Plex still has it", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
+  const restoreFetch = installFetchStub({
+    series: [{ id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] }],
+    tautulliHistory: tautulliHistoryRows(["118306"]),
+    tautulliMetadataNotFound: ["118306"],
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://208111" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 1);
   } finally {
     restoreFetch();
     cleanup();
@@ -405,6 +447,7 @@ test("deleted shows between real metadata failures do not keep identity lookups 
     tautulliHistory: tautulliHistoryRows(["gone-1", "down-1", "gone-2", "down-2", "gone-3", "down-3", "118306"]),
     tautulliMetadata: { guids: ["tvdb://208111"] },
     tautulliMetadataNotFound: ["gone-1", "gone-2", "gone-3"],
+    plexMetadataNotFound: ["gone-1", "gone-2", "gone-3"],
     tautulliMetadataErrorKeys: ["down-1", "down-2", "down-3"],
   });
   try {

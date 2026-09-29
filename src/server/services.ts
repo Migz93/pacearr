@@ -30,7 +30,7 @@ import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.j
 import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
 import { isNotFoundError } from "./integrations/request.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
-import { TautulliIntegration, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
+import { TautulliIntegration, TautulliMetadataUnavailableError, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
 import type { Logger } from "./logger.js";
 import { PlexArtworkService } from "./plex-artwork.js";
@@ -1832,10 +1832,38 @@ export class PacearrServices {
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
   }
 
-  private async matchTautulliSeries(event: TautulliEpisodeRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, lookups: SourceIdentityLookups): Promise<SonarrSeries | null> {
+  /**
+   * Pacearr's own Plex connection, when it is the server this Tautulli reads, so a rating
+   * key from Tautulli can be asked about there. Checked at most once per job, and only once
+   * something needs it.
+   */
+  private plexBehindTautulli(tautulli: TautulliIntegration): () => Promise<PlexIntegration | null> {
+    let plex: Promise<PlexIntegration | null> | undefined;
+    return () => plex ??= (async () => {
+      const plexSettings = this.db.getPlexSettings();
+      if (!plexSettings?.machineIdentifier) return null;
+      const tautulliServerId = await tautulli.getPlexServerId().catch((error: unknown) => {
+        this.logger.warn("Could not read which Plex server Tautulli uses", { error: error instanceof Error ? error.message : String(error) });
+        return null;
+      });
+      if (tautulliServerId === plexSettings.machineIdentifier) return new PlexIntegration(plexSettings, this.logger);
+      this.logger.info("Tautulli is not confirmed to read Pacearr's Plex server; items it cannot read count as failed lookups", { tautulliServerId, plexServerId: plexSettings.machineIdentifier });
+      return null;
+    })();
+  }
+
+  private async matchTautulliSeries(event: TautulliEpisodeRecord, index: SeriesMatchIndex, tautulli: TautulliIntegration, identityScope: string, lookups: SourceIdentityLookups, plexBehindTautulli: () => Promise<PlexIntegration | null>): Promise<SonarrSeries | null> {
     if (!event.grandparentRatingKey) return null;
     const resolved = await this.resolveIdentity("tautulli", `${identityScope}:rating:${event.grandparentRatingKey}`, async () => {
-      const ids = await tautulli.getShowGuids(event.grandparentRatingKey!);
+      const ids = await tautulli.getShowGuids(event.grandparentRatingKey!).catch(async (error: unknown) => {
+        // Tautulli cannot say whether the show was deleted or Plex failed to answer, so ask
+        // Plex itself: a 404 there is a deleted show (see resolveIdentity), and any other
+        // error, or no way to ask, counts as a failed lookup.
+        if (!(error instanceof TautulliMetadataUnavailableError)) throw error;
+        const plex = await plexBehindTautulli();
+        if (!plex) throw error;
+        return plex.getShowGuids(event.grandparentRatingKey!);
+      });
       return { status: ids.tvdbId || ids.imdbId ? "resolved" : "missing", ...ids };
     }, lookups);
     return resolved?.status === "resolved" ? this.matchExternalIds(resolved, index) : null;
@@ -2287,6 +2315,7 @@ export class PacearrServices {
         const tautulliIdentityScope = this.sourceIdentityScope("tautulli", tautulliSettings.baseUrl, tautulliSettings.apiKey);
         const { connection: tautulliConnection, fallbackConnection: tautulliFallback } = await this.tautulliConnection(tautulliSettings, tautulli);
         const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliConnection));
+        const plexBehindTautulli = this.plexBehindTautulli(tautulli);
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         const findTautulliUser = this.db.createTautulliUserResolver();
@@ -2294,7 +2323,7 @@ export class PacearrServices {
           const user = findTautulliUser(event.userId, event.username, event.friendlyName);
           const tautulliUsername = event.username?.trim() || event.friendlyName?.trim() || null;
           if (user) tautulliUsernames.push({ userId: user.id, username: tautulliUsername });
-          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, tautulliIdentityScope, identityLookups);
+          const series = await this.matchTautulliSeries(event, seriesIndex, tautulli, tautulliIdentityScope, identityLookups, plexBehindTautulli);
           prepared.push({
             input: {
               source: "tautulli",
@@ -2472,7 +2501,8 @@ export class PacearrServices {
     const findTautulliUser = this.db.createTautulliUserResolver();
     const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
     const matched: Array<{ event: TautulliEpisodeRecord; series: SonarrSeries | null }> = [];
-    const resolve = async (event: TautulliEpisodeRecord) => this.matchTautulliSeries(event, seriesIndex, tautulli, identityScope, identityLookups);
+    const plexBehindTautulli = this.plexBehindTautulli(tautulli);
+    const resolve = async (event: TautulliEpisodeRecord) => this.matchTautulliSeries(event, seriesIndex, tautulli, identityScope, identityLookups, plexBehindTautulli);
     for (const event of events) matched.push({ event, series: await resolve(event) });
     // As with Plex sessions, retry misses against one fresh library snapshot so a recent
     // Sonarr addition can recover from a missed live-playback notification immediately.
