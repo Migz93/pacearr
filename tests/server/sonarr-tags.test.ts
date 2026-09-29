@@ -48,6 +48,10 @@ function installFakeSonarr(initial: { series: SonarrSeries[]; tags?: Array<{ id:
     const method = (init?.method ?? "GET").toUpperCase();
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     state.requests.push({ method, pathname: url.pathname, body });
+    if (url.hostname === "plex") {
+      // An empty Plex history, for tests that need a full history read to succeed.
+      return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
     if (url.pathname === "/api/v3/tag" && method === "GET") return json(state.tags);
     if (url.pathname === "/api/v3/tag" && method === "POST") {
       const tag = { id: Math.max(...state.tags.map((item) => item.id)) + 1, label: body.label };
@@ -275,6 +279,39 @@ test("importing from Sonarr tags is additive, skips conflicts, and re-adopts wit
     assert.ok(!db.listIgnoredRecommendationIds().includes(65));
     const writes = sonarr.state.requests.slice(requestsBeforeImport).filter((request) => request.method !== "GET");
     assert.deepEqual(writes, [], "re-adoption sends nothing to Sonarr, so no pilot baseline");
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
+test("a re-adopted show is not reconciled or cleaned up until a full history read completes", async () => {
+  const { db, services, cleanup } = createHarness({ dryRun: false });
+  // Immediate cleanup: without the guard, a reconcile before history is rebuilt would
+  // trim the still-monitored season straight away.
+  db.updateAppSettings({ progressiveCleanupDelayDays: 0 });
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const sonarr = installFakeSonarr({
+    series: [series(80, "Kappa", [50], [{ seasonNumber: 1, monitored: false }, { seasonNumber: 2, monitored: true }])],
+    tags: [{ id: 50, label: "pacearr-enrolled" }],
+  });
+  const seriesWrites = () => sonarr.state.requests.filter((request) => request.method === "PUT" && request.pathname === "/api/v3/series/80");
+  try {
+    await services.importFromSonarrTags({ enrollSeriesIds: [80], ignoreSeriesIds: [] });
+    const rollingId = db.getRollingShowBySeriesId(80)!.id;
+    assert.deepEqual(db.listRollingShowIdsAwaitingHistory(), [rollingId]);
+
+    await services.reconcileRollingShows();
+    assert.deepEqual(seriesWrites(), [], "an intervening reconcile leaves the show as found");
+    assert.deepEqual(db.getRollingShow(rollingId)!.expandedSeasons, [2]);
+
+    const history = await services.reconcileFullHistory();
+    assert.equal(history.ok, true);
+    assert.deepEqual(db.listRollingShowIdsAwaitingHistory(), []);
+
+    // Released: with no viewer and a zero-day delay, the normal reconcile now trims it.
+    await services.reconcileRollingShows();
+    assert.ok(seriesWrites().length > 0);
   } finally {
     sonarr.restore();
     cleanup();

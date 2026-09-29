@@ -1086,6 +1086,7 @@ export class PacearrServices {
           continue;
         }
         const rolling = this.db.upsertRollingShow(series);
+        this.db.markRollingShowAwaitingHistory(rolling.id);
         // Re-adoption, not enrolment: no pilot baseline. Seasons Sonarr still monitors
         // were expanded before the database was lost, so they are recorded as expanded
         // and the rolling reconcile times them out as usual, instead of trimming them
@@ -2067,6 +2068,9 @@ export class PacearrServices {
     const settings = this.db.getAppSettings();
     const rolling = this.db.getRollingShow(rollingShowId);
     if (!rolling) return;
+    // During the history read that rebuilds a re-adopted show's progress, early events
+    // would otherwise trim seasons that later events show are still being watched.
+    if (this.db.listRollingShowIdsAwaitingHistory().includes(rollingShowId)) return;
     const { eligibleForCleanup } = this.getCleanupRetention(rolling, observedAt);
     if (!settings.progressiveCleanupEnabled) return;
     const cleanupSeasons = eligibleForCleanup.filter((season) => season < currentSeason);
@@ -2309,7 +2313,17 @@ export class PacearrServices {
   }
 
   async reconcileFullHistory(options: { reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
-    return this.importHistory({ full: true, ...options });
+    // Only a complete read that started after a show was re-adopted has rebuilt its
+    // viewer progress, so only those shows are released for cleanup here.
+    const awaitingHistory = this.db.listRollingShowIdsAwaitingHistory();
+    const result = await this.importHistory({ full: true, ...options });
+    if (result.ok && awaitingHistory.length > 0) {
+      this.db.clearRollingShowsAwaitingHistory(awaitingHistory);
+      this.logger.info("Re-adopted shows released for rolling cleanup after full history reconciliation", { shows: awaitingHistory.length });
+    } else if (awaitingHistory.length > 0) {
+      this.logger.warn("Full history reconciliation did not complete; re-adopted shows stay protected from cleanup", { shows: awaitingHistory.length });
+    }
+    return result;
   }
 
   async checkSessions(): Promise<RunResult> {
@@ -2455,7 +2469,14 @@ export class PacearrServices {
     let changed = 0;
     const errors: string[] = [];
     const episodeCache: EpisodeCache = new Map();
+    const awaitingHistory = new Set(this.db.listRollingShowIdsAwaitingHistory());
     for (const show of this.db.listRollingShows()) {
+      if (awaitingHistory.has(show.id)) {
+        // Re-adopted from a Sonarr tag with no viewer progress yet. Reconciling now could
+        // trim seasons someone is watching; its Sonarr monitoring is left as found.
+        this.logger.info("Skipped reconciliation of a re-adopted show until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title });
+        continue;
+      }
       const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
       if (operation === null) {
         this.logger.info("Skipped reconciliation while another show operation is running", {

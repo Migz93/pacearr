@@ -176,9 +176,13 @@ Sonarr still monitors are recorded as expanded, so the rolling reconcile times t
 out as usual instead of trimming them to pilots. When any show was re-adopted, the
 import then runs a full history reconciliation (Plex and Tautulli; a run already in
 progress is waited out and a fresh one started) and only after it finishes a rolling
-reconciliation, so viewer progress is rebuilt before the shows are reconciled. A
-scheduled rolling reconcile can still land in between; the recorded expanded seasons
-are what keep that one from trimming them. Tags restore membership only: exclusions, prefetch records and Plex
+reconciliation, so viewer progress is rebuilt before the shows are reconciled.
+
+Until a full history reconciliation that started after the import completes
+successfully, a re-adopted show is flagged (`rolling_shows.awaiting_history_since`):
+the rolling reconcile skips it and watch events do not run progressive cleanup on it,
+so its Sonarr monitoring is left as found. If that read fails, the show stays
+protected until a later full reconciliation succeeds. Tags restore membership only: exclusions, prefetch records and Plex
 poster backups are not recoverable from them.
 
 Allowed in dry run, because it writes only Pacearr's own records, like a manual

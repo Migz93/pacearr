@@ -230,6 +230,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |
 | Dry run sends no tag request, and queued removals catch up once it is off | No `/tag` or `/series/editor` request in dry run; afterwards queued removals and missing adds are applied, and a removal for a show ignored again before it was sent is dropped rather than stripping the current tag |
 | Tag writing is off by default: nothing is sent, removals queue, and import still works | `sonarrTagsEnabled` defaults to false; while off, no `/tag` or `/series/editor` request is sent but removals are queued, the import preview still works, and turning writing on applies the queued removal and missing adds |
+| A re-adopted show is not reconciled or cleaned up until a full history read completes | With a zero-day cleanup delay, a rolling reconcile before history is rebuilt sends nothing for an imported show; a successful full history reconciliation clears the guard and the next reconcile treats it normally |
 | Importing from Sonarr tags is additive, skips conflicts, and re-adopts without a pilot baseline | The preview splits tagged shows into enrol/ignore/already known/conflict and treats a queued removal as absent; the import only creates records the confirmation listed, never changes an existing one, records still-monitored seasons as expanded, and sends nothing to Sonarr |
 
 ---

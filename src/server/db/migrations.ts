@@ -494,9 +494,12 @@ const migrations: Migration[] = [
     // Pacearr mirrors enrolments and ignores onto Sonarr series as tags. A tag removal
     // that could not be sent (Sonarr unreachable, or dry run) is kept here and retried,
     // so a stale tag cannot survive to be imported back later.
+    // A show re-adopted from its tag has no viewer progress until a full history read
+    // completes; awaiting_history_since keeps cleanup off it until then.
     version: 26,
     up(db) {
       db.exec(`
+        ALTER TABLE rolling_shows ADD COLUMN awaiting_history_since TEXT;
         CREATE TABLE sonarr_tag_removals (
           sonarr_series_id INTEGER NOT NULL,
           tag TEXT NOT NULL CHECK (tag IN ('enrolled', 'ignored')),
