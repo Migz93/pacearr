@@ -547,6 +547,7 @@ function pluralShows(count: number) {
 function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
   const configured = Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured);
   const [tagsEnabled, setTagsEnabled] = useState(settings.app.sonarrTagsEnabled);
+  useEffect(() => setTagsEnabled(settings.app.sonarrTagsEnabled), [settings.app.sonarrTagsEnabled]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);

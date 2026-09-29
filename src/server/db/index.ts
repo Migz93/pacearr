@@ -811,6 +811,10 @@ export class PacearrDatabase {
     this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = ? WHERE id = ?").run(now(), id);
   }
 
+  isRollingShowAwaitingHistory(id: number): boolean {
+    return this.db.prepare("SELECT 1 FROM rolling_shows WHERE id = ? AND awaiting_history_since IS NOT NULL").get(id) !== undefined;
+  }
+
   listRollingShowIdsAwaitingHistory(): number[] {
     return (this.db.prepare("SELECT id FROM rolling_shows WHERE awaiting_history_since IS NOT NULL").all() as Array<{ id: number }>).map((row) => row.id);
   }

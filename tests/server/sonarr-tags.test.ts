@@ -376,9 +376,11 @@ test("a reconcile defers a show another operation holds, logs it, and tags it on
     assert.deepEqual(sonarr.tagLabels(101), ["kometafranchise", "pacearr-enrolled"]);
     assert.deepEqual(sonarr.tagLabels(102), ["kometafranchise"]);
     const deferredLog = messages.find((entry) => entry.message.startsWith("Sonarr tag changes deferred"));
-    assert.deepEqual((deferredLog?.meta as { titles: string[] }).titles.sort(), ["Omicron", "Pi"]);
+    assert.ok(deferredLog, "the deferral is logged");
+    assert.deepEqual((deferredLog.meta as { titles: string[] }).titles.sort(), ["Omicron", "Pi"]);
     const stillDeferredLog = messages.find((entry) => entry.message.startsWith("Sonarr tag changes still deferred"));
-    assert.deepEqual((stillDeferredLog?.meta as { titles: string[] }).titles, ["Pi"]);
+    assert.ok(stillDeferredLog, "the show still deferred is logged");
+    assert.deepEqual((stillDeferredLog.meta as { titles: string[] }).titles, ["Pi"]);
   } finally {
     sonarr.restore();
     cleanup();

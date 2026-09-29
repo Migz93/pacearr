@@ -429,7 +429,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       // runAfterActiveAndWait waits out a full read already in progress and then runs a
       // fresh one, so the rolling reconcile never starts ahead of the history it needs.
       void scheduler.runAfterActiveAndWait("full-history-reconcile")
-        .then(() => scheduler.runNowOrQueue("rolling-reconcile"))
+        .then((completed) => {
+          if (!completed) {
+            logger.warn("Full history reconciliation after the Sonarr tag import did not complete; re-adopted shows stay protected from cleanup until one succeeds", { enrolled: result.enrolled });
+          }
+          // Still run: it reconciles every other show, and skips the protected ones.
+          scheduler.runNowOrQueue("rolling-reconcile");
+        })
         .catch((error) => logger.warn("Post-import reconciliation failed to start", { error: error instanceof Error ? error.message : String(error) }));
     }
     res.json(result);

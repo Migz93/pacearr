@@ -2081,7 +2081,7 @@ export class PacearrServices {
     if (!rolling) return;
     // During the history read that rebuilds a re-adopted show's progress, early events
     // would otherwise trim seasons that later events show are still being watched.
-    if (this.db.listRollingShowIdsAwaitingHistory().includes(rollingShowId)) return;
+    if (this.db.isRollingShowAwaitingHistory(rollingShowId)) return;
     const { eligibleForCleanup } = this.getCleanupRetention(rolling, observedAt);
     if (!settings.progressiveCleanupEnabled) return;
     const cleanupSeasons = eligibleForCleanup.filter((season) => season < currentSeason);
