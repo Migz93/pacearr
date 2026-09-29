@@ -509,6 +509,64 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Plex history keys and Tautulli reference IDs are only unique within one server, so
+    // a watch event's identity now includes the connection it came from. Otherwise a new
+    // server's event that reused an old server's ID was dropped as a duplicate. Existing
+    // rows are stamped with the connection configured at upgrade, which is the server
+    // they came from, so re-reading it does not import them again. Tautulli's install ID
+    // needs a network call, so its rows get the URL fallback here and the services layer
+    // moves them to the install ID on the next Tautulli read.
+    version: 27,
+    up(db) {
+      const read = <T>(key: string): T | null => {
+        const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+        if (!row) return null;
+        try { return JSON.parse(row.value) as T; } catch { return null; }
+      };
+      const plex = read<{ serverUrl?: string; machineIdentifier?: string }>("plex");
+      const tautulli = read<{ baseUrl?: string }>("tautulli");
+      const plexConnection = plex?.serverUrl ? plexHistoryConnection({ serverUrl: plex.serverUrl, machineIdentifier: plex.machineIdentifier }) : "";
+      const tautulliConnection = tautulli?.baseUrl ? tautulliHistoryConnection({ baseUrl: tautulli.baseUrl }) : "";
+      db.exec(`
+        CREATE TABLE watch_events_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL CHECK(source IN ('plex-history', 'plex-session', 'tautulli', 'tautulli-session')),
+          source_connection TEXT NOT NULL,
+          source_event_id TEXT NOT NULL,
+          user_id INTEGER,
+          plex_account_id TEXT,
+          username TEXT,
+          sonarr_series_id INTEGER,
+          show_title TEXT NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          watched_at TEXT NOT NULL,
+          raw_payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source, source_connection, source_event_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+      `);
+      db.prepare(`
+        INSERT INTO watch_events_next
+          SELECT id, source,
+            CASE WHEN source IN ('plex-history', 'plex-session') THEN ? ELSE ? END,
+            source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at
+          FROM watch_events
+      `).run(plexConnection, tautulliConnection);
+      db.exec(`
+        DROP TABLE watch_events;
+        ALTER TABLE watch_events_next RENAME TO watch_events;
+        CREATE INDEX idx_watch_events_user ON watch_events(user_id);
+        CREATE INDEX idx_watch_events_show ON watch_events(sonarr_series_id);
+        CREATE INDEX idx_watch_events_series_user_watched
+          ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+          ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

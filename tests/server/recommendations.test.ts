@@ -57,6 +57,7 @@ function installFetchStub(routes: {
   plexMetadataXml?: string;
   plexTitleSearchXml?: string;
   tautulliHistory?: unknown[];
+  tautulliInstallId?: string | null;
   tautulliMetadata?: unknown;
   tautulliMetadataError?: boolean;
   requests?: Array<{ method: string; pathname: string; search?: string; body?: string }>;
@@ -75,6 +76,9 @@ function installFetchStub(routes: {
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/sections/") && url.pathname.endsWith("/all")) {
       return new Response(routes.plexTitleSearchXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
+    }
+    if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_settings") {
+      return jsonResponse({ response: { result: "success", data: { pms_uuid: routes.tautulliInstallId === undefined ? "tautulli-install" : routes.tautulliInstallId } } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
@@ -112,7 +116,7 @@ test("stored watch events are not associated by title alone during history impor
   const restoreFetch = installFetchStub({ series: [theWire] });
   try {
     const stored = db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "unmatched-1",
       userId: null,
       plexAccountId: "1",
@@ -496,7 +500,7 @@ test("a full history reconciliation repairs a previously orphaned Tautulli event
   // Simulates a row imported before #75's fix: Tautulli's friendly name at the time didn't
   // resolve to any Pacearr user, so it landed with user_id = NULL.
   const stored = db.insertWatchEvent({
-    source: "tautulli", sourceEventId: "ref-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+    source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "ref-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
     sonarrSeriesId: 960, showTitle: "Repair Test", seasonNumber: 1, episodeNumber: 2,
     watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
   });
@@ -540,7 +544,7 @@ test("a full history reconciliation refreshes rolling progress after repairing a
   const series: SonarrSeries = { id: 962, title: "Plex Repair Test", tvdbId: 9620, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: true }] };
   const rolling = db.upsertRollingShow(series);
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "plex-orphan-1", userId: viewer!.id, plexAccountId: "1", username: "viewer",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "plex-orphan-1", userId: viewer!.id, plexAccountId: "1", username: "viewer",
     sonarrSeriesId: null, showTitle: "Plex Repair Test", seasonNumber: 2, episodeNumber: 3,
     watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: {},
   });
@@ -572,7 +576,7 @@ test("manual Tautulli mapping refreshes rolling progress from relinked history",
     const [dave] = db.upsertUsers([{ plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave", displayName: "Dave", avatarUrl: null }]);
     const rolling = db.upsertRollingShow({ id: 961, title: "Manual Mapping Test" });
     db.insertWatchEvent({
-      source: "tautulli", sourceEventId: "manual-map-orphan", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "manual-map-orphan", userId: null, plexAccountId: null, username: "Different Tautulli Name",
       sonarrSeriesId: 961, showTitle: "Manual Mapping Test", seasonNumber: 2, episodeNumber: 4,
       watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: { user_id: 47 },
     });
@@ -740,7 +744,7 @@ test("enrolling a show seeds rolling progress from watch history that was alread
     // Simulate matching having already happened via a routine history-import run,
     // long before the show is enrolled.
     db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "pre-matched-1",
       userId: user.id,
       plexAccountId: "1",
@@ -841,7 +845,7 @@ test("enrollment repairs and seeds previously unmatched history with a full veri
   const otherRolling = db.upsertRollingShow(other);
   db.upsertRollingUserProgress(otherRolling.id, user.id, 2, 3, new Date().toISOString());
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "pre-enrollment-orphan", userId: user.id, plexAccountId: "1", username: "bob",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "pre-enrollment-orphan", userId: user.id, plexAccountId: "1", username: "bob",
     sonarrSeriesId: null, showTitle: "Fringe", seasonNumber: 2, episodeNumber: 4,
     watchedAt: "2026-04-05T10:00:00.000Z", rawPayload: {},
   });
@@ -1158,7 +1162,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     { id: 9102, seriesId: 600, seasonNumber: 2, size: 400_000_000 },
   ];
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "continuum-1", userId: user.id, plexAccountId: "2", username: "carol",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "continuum-1", userId: user.id, plexAccountId: "2", username: "carol",
     sonarrSeriesId: 600, showTitle: "Continuum", seasonNumber: 2, episodeNumber: 1,
     watchedAt: new Date().toISOString(), rawPayload: {},
   });
@@ -1178,7 +1182,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     { id: 501, seriesId: 650, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 9201 },
   ];
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "firefly-1", userId: user2.id, plexAccountId: "3", username: "dave",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "firefly-1", userId: user2.id, plexAccountId: "3", username: "dave",
     sonarrSeriesId: 650, showTitle: "Firefly", seasonNumber: 1, episodeNumber: 1,
     watchedAt: new Date().toISOString(), rawPayload: {},
   });
@@ -1435,11 +1439,66 @@ test("history import reads a changed or unknown Tautulli server in full instead 
     }
   };
 
-  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "http://tautulli:8181" });
-  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
+  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "tautulli-install" });
+  assert.deepEqual(await importedFrom("other-install"), { imported: 1, syncedConnection: "tautulli-install" }, "another install is read in full");
+  assert.deepEqual(await importedFrom("tautulli-install"), { imported: 0, syncedConnection: "tautulli-install" }, "the same install resumes from its cursor");
+  // A cursor stamped with the configured URL (migration 23, or before the install ID
+  // was known) belongs to the Tautulli at that URL, so it resumes under the install ID.
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "tautulli-install" }, "the URL fallback resumes from its cursor");
   // Migration 23 stamps cursors saved before connections were recorded, so one still
   // unstamped is treated as belonging to another server.
-  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "http://tautulli:8181" }, "an unstamped cursor is read in full");
+  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "tautulli-install" }, "an unstamped cursor is read in full");
+});
+
+test("history import keeps a new Plex server's events that reuse an old server's history keys", async () => {
+  const { db, services, cleanup } = createHarness();
+  const historyXml = (episode: number) => `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Gold Rush: Alaska" parentIndex="16" index="${episode}" viewedAt="1784220000" historyKey="/status/sessions/history/1" ratingKey="episode" grandparentRatingKey="118306" accountID="1" user="viewer"/></MediaContainer>`;
+  const importFrom = async (machineIdentifier: string, episode: number) => {
+    db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier, token: "tok" });
+    services.invalidateSourceIdentityScope("plex");
+    const restoreFetch = installFetchStub({ plexHistoryXml: historyXml(episode) });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    // Until its machine identifier is known, the server is identified by URL. Learning
+    // the identifier must not import the same history a second time.
+    await importFrom("", 23);
+    await importFrom("plex-one", 23);
+    assert.equal(db.countWatchEvents(), 1);
+    // A different server at the same address numbers its history from 1 as well.
+    await importFrom("plex-two", 24);
+    assert.equal(db.countWatchEvents(), 2);
+    assert.deepEqual(db.listUnmatchedWatchEvents().map((event) => event.episodeNumber).sort(), [23, 24]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("history import identifies Tautulli by its install ID, across URL changes and upgrades", async () => {
+  const { db, services, cleanup } = createHarness();
+  const watch = (referenceId: string, episode: number) => ({ reference_id: referenceId, user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: episode, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" });
+  const importFrom = async (baseUrl: string, tautulliInstallId: string | null, history: unknown[]) => {
+    db.saveTautulliSettings({ enabled: true, baseUrl, apiKey: "secret" });
+    services.invalidateSourceIdentityScope("tautulli");
+    const restoreFetch = installFetchStub({ tautulliHistory: history, tautulliInstallId, tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    // Stamped with the URL, as migration 27 stamps rows imported before this change.
+    await importFrom("http://tautulli:8181", null, [watch("1", 1)]);
+    await importFrom("http://tautulli:8181", "install-a", [watch("1", 1)]);
+    assert.equal(db.countWatchEvents(), 1, "reading the same Tautulli under its install ID imports no duplicates");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-a");
+
+    await importFrom("https://tautulli.example", "install-a", [watch("1", 1)]);
+    assert.equal(db.countWatchEvents(), 1, "a new URL for the same install imports no duplicates");
+
+    await importFrom("http://tautulli-new:8181", "install-b", [watch("1", 2), watch("2", 3)]);
+    assert.equal(db.countWatchEvents(), 3, "a new install's events are kept even when they reuse reference IDs");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-b");
+  } finally {
+    cleanup();
+  }
 });
 
 test("discovering Plex users links history imported before they were known and refreshes their progress", async () => {
@@ -1450,7 +1509,7 @@ test("discovering Plex users links history imported before they were known and r
   // Imported while neither viewer existed: the friend by Plex.tv account ID, the owner
   // by the server-local ID "1" that Plex's history endpoint reports.
   const orphan = (sourceEventId: string, plexAccountId: string, seasonNumber: number, episodeNumber: number) => db.insertWatchEvent({
-    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
     showTitle: "The Wire", seasonNumber, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
   });
   orphan("friend-watch", "4242", 2, 3);
@@ -1485,7 +1544,7 @@ test("discovering Plex users leaves history unlinked when its account ID belongs
   db.upsertUsers([{ plexUserId: "legacy-4242", plexAccountId: "4242", tautulliUserId: null, username: "legacy", displayName: "Legacy", avatarUrl: null }]);
   db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
   const orphan = (sourceEventId: string, plexAccountId: string) => db.insertWatchEvent({
-    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
     showTitle: "The Wire", seasonNumber: 1, episodeNumber: 2, watchedAt: new Date().toISOString(), rawPayload: {},
   });
   // "1" is both the owner's server-local ID and, here, a friend's Plex.tv account ID.

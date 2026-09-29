@@ -80,6 +80,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | Rolling show enrollment is idempotent | A Sonarr series can only create one Pacearr rolling-show row |
 | Watch event import is idempotent | Duplicate source events are ignored and do not inflate watch history |
+| Watch events with the same source event ID from two connections are both stored | Plex history keys and Tautulli reference IDs are only unique per server, so another server's event with the same ID is stored rather than dropped, and a user or series repair only touches the row from its own connection |
+| Watch events stamped with a server's URL move to its stable ID without duplicating | Rows stored under the URL fallback move to the install or machine ID; a row already stored under both keeps only the ID copy, and other sources at the same URL are untouched |
 | Expanded seasons are monotonic and not duplicated | Expansion state is sorted and duplicate-safe |
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
@@ -116,6 +118,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 | Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
+| Migration 27 stamps existing watch events with the connection configured at upgrade | Plex rows gain the configured machine identifier and Tautulli rows the configured URL (moved to the install ID on the next Tautulli read); the same server's event stays a duplicate while another server's event with the same ID is accepted |
 | Migration 25 clears ignore records for shows that are already enrolled | A show can no longer be both enrolled and ignored; an upgrade removes overlaps earlier versions allowed and leaves other ignore records alone |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
@@ -351,7 +354,9 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
 | A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
-| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different server or records no server; the same server still resumes incrementally |
+| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different install or records no server; the same install, or a cursor stamped with the configured URL, still resumes incrementally |
+| History import keeps a new Plex server's events that reuse an old server's history keys | A second server's event with the same `historyKey` is imported rather than dropped, and learning a server's machine identifier after it was identified by URL imports no duplicates |
+| History import identifies Tautulli by its install ID, across URL changes and upgrades | Rows stored under the URL (as after upgrading) move to Tautulli's `pms_uuid` with no duplicates, a new URL for the same install imports nothing again, and a new install's events are kept even when they reuse reference IDs |
 | Discovering Plex users links history imported before they were known and refreshes their progress | A friend's orphaned event (Plex.tv account ID) and the owner's (server-local ID `1`) are linked on discovery, and both viewers' rolling progress reflects them |
 | Discovering Plex users leaves history unlinked when its account ID belongs to more than one user | A friend whose Plex.tv ID is `1` (the owner's server-local ID) and two stored users sharing an account ID: neither event is linked, so no viewer's progress moves |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |

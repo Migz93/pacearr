@@ -75,6 +75,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 
 export interface NormalizedWatchEventInput {
   source: EventSourceKind;
+  /** The server the event came from (see history-sync.ts); its ID is only unique there. */
+  sourceConnection: string;
   sourceEventId: string;
   userId: number | null;
   plexAccountId: string | null;
@@ -650,30 +652,56 @@ export class PacearrDatabase {
 
   /**
    * Repairs one previously-imported Tautulli watch event whose user_id is still NULL.
-   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_event_id), so a
+   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_connection, source_event_id), so a
    * duplicate — including an event first imported before the #75 matching fix, when the
    * resolved name didn't match anything yet — is silently skipped on every later import and
    * never revisited on its own. Scoped to a single event by its unique key rather than a
    * broader relink like linkUnassignedWatchEventsByPlexAccount, since Tautulli events carry
    * no stable account identifier to relink by.
    */
-  repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
-    return this.repairUnmatchedWatchEventUser("tautulli", sourceEventId, userId);
+  repairUnmatchedTautulliWatchEvent(sourceConnection: string, sourceEventId: string, userId: number): boolean {
+    return this.repairUnmatchedWatchEventUser("tautulli", sourceConnection, sourceEventId, userId);
   }
 
-  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceEventId: string, userId: number): boolean {
+  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceConnection: string, sourceEventId: string, userId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events
       SET user_id = ?
-      WHERE source = ? AND source_event_id = ? AND user_id IS NULL
-    `).run(userId, source, sourceEventId).changes > 0;
+      WHERE source = ? AND source_connection = ? AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, source, sourceConnection, sourceEventId).changes > 0;
   }
 
-  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceEventId: string, seriesId: number): boolean {
+  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceConnection: string, sourceEventId: string, seriesId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events SET sonarr_series_id = ?
-      WHERE source = ? AND source_event_id = ? AND sonarr_series_id IS NULL
-    `).run(seriesId, source, sourceEventId).changes > 0;
+      WHERE source = ? AND source_connection = ? AND source_event_id = ? AND sonarr_series_id IS NULL
+    `).run(seriesId, source, sourceConnection, sourceEventId).changes > 0;
+  }
+
+  /**
+   * Moves watch events stamped with a server's fallback connection (its URL) to its
+   * stable ID once that is known, so reading the same server again under the ID does
+   * not import its history a second time. A row already stored under both is a
+   * duplicate of the same event, so the fallback copy is removed.
+   */
+  adoptWatchEventConnection(sources: EventSourceKind[], from: string, to: string): { moved: number; duplicates: number } {
+    const placeholders = sources.map(() => "?").join(", ");
+    return this.db.transaction(() => {
+      const duplicates = this.db.prepare(`
+        DELETE FROM watch_events
+        WHERE source IN (${placeholders}) AND source_connection = ?
+          AND EXISTS (
+            SELECT 1 FROM watch_events AS adopted
+            WHERE adopted.source = watch_events.source AND adopted.source_connection = ?
+              AND adopted.source_event_id = watch_events.source_event_id
+          )
+      `).run(...sources, from, to).changes;
+      const moved = this.db.prepare(`
+        UPDATE watch_events SET source_connection = ?
+        WHERE source IN (${placeholders}) AND source_connection = ?
+      `).run(to, ...sources, from).changes;
+      return { moved, duplicates };
+    })();
   }
 
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
@@ -1221,10 +1249,11 @@ export class PacearrDatabase {
   insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null } {
     const result = this.db.prepare(`
       INSERT OR IGNORE INTO watch_events
-        (source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.source,
+      input.sourceConnection,
       input.sourceEventId,
       input.userId,
       input.plexAccountId,
@@ -1254,13 +1283,14 @@ export class PacearrDatabase {
     if (inputs.length === 0) return [];
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO watch_events
-        (source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const stamp = now();
     const insertAll = this.db.transaction((items: NormalizedWatchEventInput[]) => items.map((item) => {
       const result = insert.run(
         item.source,
+        item.sourceConnection,
         item.sourceEventId,
         item.userId,
         item.plexAccountId,
@@ -1348,8 +1378,8 @@ export class PacearrDatabase {
     return this.db.prepare(`SELECT COALESCE(SUM(bytes_reclaimed), 0) AS bytesReclaimed, COALESCE(SUM(file_count), 0) AS fileCount FROM reclaimed_storage_events`).get() as { bytesReclaimed: number; fileCount: number };
   }
 
-  getLatestWatchEventAt(source: EventSourceKind): string | null {
-    return (this.db.prepare("SELECT MAX(watched_at) AS watchedAt FROM watch_events WHERE source = ?").get(source) as { watchedAt: string | null }).watchedAt;
+  getLatestWatchEventAt(source: EventSourceKind, sourceConnection: string): string | null {
+    return (this.db.prepare("SELECT MAX(watched_at) AS watchedAt FROM watch_events WHERE source = ? AND source_connection = ?").get(source, sourceConnection) as { watchedAt: string | null }).watchedAt;
   }
 
   addHistory(level: HistoryEvent["level"], action: string, title: string, details: unknown): void {

@@ -20,6 +20,9 @@ import type {
   UserListItem,
   UserShowActivity,
   UnmappedTautulliUser,
+  EventSourceKind,
+  PlexSettingsInput,
+  TautulliSettings,
 } from "../shared/types.js";
 import crypto from "node:crypto";
 import pLimit from "p-limit";
@@ -222,6 +225,8 @@ export class PacearrServices {
   private readonly activeSeriesOperations = new Map<number, number>();
   private readonly sourceIdentityThrottles = new Map<"plex" | "tautulli", ResolutionThrottle>();
   private readonly sourceIdentityScopes = new Map<"plex" | "tautulli", string>();
+  /** Each source's resolved watch-event connection, with the settings it was resolved for. */
+  private readonly sourceConnections = new Map<"plex" | "tautulli", { settingsKey: string; connection: string }>();
   /** Event-side rolling work deferred while another job owns the same series. */
   private readonly pendingRollingRetries = new Set<string>();
   private nextEnrollmentOperation = 0;
@@ -333,6 +338,41 @@ export class PacearrServices {
 
   invalidateSourceIdentityScope(source: "plex" | "tautulli"): void {
     this.sourceIdentityScopes.delete(source);
+    this.sourceConnections.delete(source);
+  }
+
+  private plexConnection(settings: PlexSettingsInput): string {
+    const settingsKey = JSON.stringify([settings.serverUrl, settings.machineIdentifier]);
+    const cached = this.sourceConnections.get("plex");
+    if (cached?.settingsKey === settingsKey) return cached.connection;
+    const connection = plexHistoryConnection(settings);
+    this.adoptSourceConnection("plex", ["plex-history", "plex-session"], settings.serverUrl, connection);
+    this.sourceConnections.set("plex", { settingsKey, connection });
+    return connection;
+  }
+
+  /** Asks Tautulli for its install ID once per settings change; it never changes otherwise. */
+  private async tautulliConnection(settings: TautulliSettings, tautulli: TautulliIntegration): Promise<string> {
+    const settingsKey = JSON.stringify([settings.baseUrl, settings.apiKey]);
+    const cached = this.sourceConnections.get("tautulli");
+    if (cached?.settingsKey === settingsKey) return cached.connection;
+    const installId = await tautulli.getInstallId();
+    if (!installId) this.logger.warn("Tautulli did not report an install ID; identifying its watch events by URL", { baseUrl: settings.baseUrl });
+    const connection = tautulliHistoryConnection({ baseUrl: settings.baseUrl, installId });
+    this.adoptSourceConnection("tautulli", ["tautulli", "tautulli-session"], settings.baseUrl, connection);
+    this.sourceConnections.set("tautulli", { settingsKey, connection });
+    return connection;
+  }
+
+  /**
+   * Watch events stamped with a server's URL (at upgrade, or while its ID was unknown)
+   * came from the server at that URL now, so they move to its stable ID rather than
+   * being imported again under it.
+   */
+  private adoptSourceConnection(source: "plex" | "tautulli", sources: EventSourceKind[], fallback: string, connection: string): void {
+    if (connection === fallback) return;
+    const { moved, duplicates } = this.db.adoptWatchEventConnection(sources, fallback, connection);
+    if (moved > 0 || duplicates > 0) this.logger.info("Watch events moved from a server's URL to its stable ID", { source, moved, duplicates });
   }
 
   async discoverPlexUsers() {
@@ -1822,7 +1862,7 @@ export class PacearrServices {
       if (immediate[index]!.userId && immediate[index]!.sonarrSeriesId) matched++; else { unmatched++; unmatchedInputs.push(immediate[index]!); }
     }
     for (const duplicate of duplicates) {
-      if (duplicate.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(duplicate.source, duplicate.sourceEventId, duplicate.sonarrSeriesId)) {
+      if (duplicate.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(duplicate.source, duplicate.sourceConnection, duplicate.sourceEventId, duplicate.sonarrSeriesId)) {
         repairedSeriesCount++;
         if (duplicate.userId) repairedUserIds.add(duplicate.userId);
       }
@@ -1990,7 +2030,7 @@ export class PacearrServices {
 
   private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
-    const retryKey = `${input.source}:${input.sourceEventId}`;
+    const retryKey = JSON.stringify([input.source, input.sourceConnection, input.sourceEventId]);
     let repaired = false;
     if (!stored.inserted) {
       // Live polls see an ongoing playback on every run, so a duplicate is normal there;
@@ -1998,7 +2038,7 @@ export class PacearrServices {
       if (input.source === "plex-session" || input.source === "tautulli-session") {
         this.logger.debug("Live watch event already stored; treating as the same playback", { source: input.source, sourceEventId: input.sourceEventId, showTitle: input.showTitle, seasonNumber: input.seasonNumber, episodeNumber: input.episodeNumber });
       }
-      if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceEventId, input.sonarrSeriesId)) {
+      if (input.sonarrSeriesId && this.db.repairUnmatchedWatchEventSeries(input.source, input.sourceConnection, input.sourceEventId, input.sonarrSeriesId)) {
         repaired = true;
         const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
         if (rolling && input.userId && this.db.getUser(input.userId)?.enabled) {
@@ -2163,9 +2203,10 @@ export class PacearrServices {
     // A cursor from a different server says nothing about this one's history, so a
     // changed connection reads its history in full before resuming incrementally.
     // Migration 23 stamped cursors saved before connections were recorded, so an
-    // unknown connection is treated as a different server.
-    const resumeFrom = (state: { backfillComplete: boolean; cursor: string | null; connection?: string }, connection: string) =>
-      state.backfillComplete && state.connection === connection ? withOverlap(state.cursor) : undefined;
+    // unknown connection is treated as a different server. A cursor stamped with the
+    // server's URL fallback belongs to it, as its watch events do (adoptSourceConnection).
+    const resumeFrom = (state: { backfillComplete: boolean; cursor: string | null; connection?: string }, connection: string, fallback: string) =>
+      state.backfillComplete && (state.connection === connection || state.connection === fallback) ? withOverlap(state.cursor) : undefined;
     const activityCutoff = Date.now() - this.db.getAppSettings().viewerActivityWindowDays * 24 * 60 * 60 * 1000;
     const episodeCache: EpisodeCache = new Map();
     const dryRunExpandedSeasons = new Set<string>();
@@ -2175,8 +2216,8 @@ export class PacearrServices {
       if (!plexSettings) throw new Error("Plex is not configured.");
       const plex = new PlexIntegration(plexSettings, this.logger);
       const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
-      const plexConnection = plexHistoryConnection(plexSettings);
-      const plexEvents = await plex.getPlaybackHistory(full ? undefined : resumeFrom(syncState.plex, plexConnection));
+      const plexConnection = this.plexConnection(plexSettings);
+      const plexEvents = await plex.getPlaybackHistory(full ? undefined : resumeFrom(syncState.plex, plexConnection, plexSettings.serverUrl));
       const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
       for (const event of plexEvents) {
         const user = this.db.findUserByAccount(event.plexAccountId, event.username);
@@ -2184,6 +2225,7 @@ export class PacearrServices {
         prepared.push({
           input: {
             source: "plex-history",
+            sourceConnection: plexConnection,
             sourceEventId: event.sourceEventId,
             userId: user?.id ?? null,
             plexAccountId: event.plexAccountId,
@@ -2217,7 +2259,7 @@ export class PacearrServices {
         if (result.changed) changed++;
       }
       if (!full) {
-        syncState.plex = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("plex-history"), connection: plexConnection };
+        syncState.plex = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("plex-history", plexConnection), connection: plexConnection };
         this.db.saveHistorySyncState(syncState);
       }
     } catch (error) {
@@ -2231,8 +2273,8 @@ export class PacearrServices {
       try {
         const tautulli = new TautulliIntegration(tautulliSettings, this.logger);
         const tautulliIdentityScope = this.sourceIdentityScope("tautulli", tautulliSettings.baseUrl, tautulliSettings.apiKey);
-        const tautulliConnection = tautulliHistoryConnection(tautulliSettings);
-        const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliConnection));
+        const tautulliConnection = await this.tautulliConnection(tautulliSettings, tautulli);
+        const tautulliEvents = await tautulli.getHistory(full ? undefined : resumeFrom(syncState.tautulli, tautulliConnection, tautulliSettings.baseUrl));
         const prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }> = [];
         const tautulliUsernames: Array<{ userId: number; username: string | null }> = [];
         const findTautulliUser = this.db.createTautulliUserResolver();
@@ -2244,6 +2286,7 @@ export class PacearrServices {
           prepared.push({
             input: {
               source: "tautulli",
+              sourceConnection: tautulliConnection,
               sourceEventId: event.referenceId,
               userId: user?.id ?? null,
               plexAccountId: null,
@@ -2274,7 +2317,7 @@ export class PacearrServices {
         // preference silently drop the match. INSERT OR IGNORE alone would leave that row
         // orphaned forever; repair it now that a match resolved.
         for (const duplicate of counts.duplicates) {
-          if (duplicate.userId && this.db.repairUnmatchedTautulliWatchEvent(duplicate.sourceEventId, duplicate.userId)) {
+          if (duplicate.userId && this.db.repairUnmatchedTautulliWatchEvent(tautulliConnection, duplicate.sourceEventId, duplicate.userId)) {
             repairedUserIds.add(duplicate.userId);
             changed++;
           }
@@ -2284,7 +2327,7 @@ export class PacearrServices {
           if (result.inserted) {
             imported++;
             if (input.userId && input.sonarrSeriesId) matched++; else unmatched++;
-          } else if (input.userId && this.db.repairUnmatchedTautulliWatchEvent(input.sourceEventId, input.userId)) {
+          } else if (input.userId && this.db.repairUnmatchedTautulliWatchEvent(tautulliConnection, input.sourceEventId, input.userId)) {
             repairedUserIds.add(input.userId);
             changed++;
           }
@@ -2295,7 +2338,7 @@ export class PacearrServices {
         // previously-orphaned Plex owner history.
         this.refreshRollingProgressForUsers(repairedUserIds);
         if (!full) {
-          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli"), connection: tautulliConnection };
+          syncState.tautulli = { backfillComplete: true, cursor: this.db.getLatestWatchEventAt("tautulli", tautulliConnection), connection: tautulliConnection };
           this.db.saveHistorySyncState(syncState);
         }
       } catch (error) {
@@ -2348,6 +2391,7 @@ export class PacearrServices {
     if (!plexSettings) throw new Error("Plex is not configured.");
     const plex = new PlexIntegration(plexSettings, this.logger);
     const plexIdentityScope = this.sourceIdentityScope("plex", plexSettings.serverUrl, plexSettings.machineIdentifier, plexSettings.token);
+    const plexConnection = this.plexConnection(plexSettings);
     const events = await plex.getActiveSessions();
     const episodeCache: EpisodeCache = new Map();
     const dryRunExpandedSeasons = new Set<string>();
@@ -2372,6 +2416,7 @@ export class PacearrServices {
       const user = this.db.findUserByAccount(event.plexAccountId, event.username);
       const result = await this.processWatchEvent({
         source: "plex-session",
+        sourceConnection: plexConnection,
         sourceEventId: event.sourceEventId,
         userId: user?.id ?? null,
         plexAccountId: event.plexAccountId,
@@ -2406,6 +2451,7 @@ export class PacearrServices {
     let seriesIndex = this.buildSeriesMatchIndex(this.db.getSonarrLibraryCache()?.items.map((item) => item.series) ?? await this.getSonarr().getSeries());
     const tautulli = new TautulliIntegration(settings, this.logger);
     const identityScope = this.sourceIdentityScope("tautulli", settings.baseUrl, settings.apiKey);
+    const tautulliConnection = await this.tautulliConnection(settings, tautulli);
     const events = await tautulli.getActiveSessions();
     const failures: SourceIdentityFailures = new Map();
     const findTautulliUser = this.db.createTautulliUserResolver();
@@ -2430,6 +2476,7 @@ export class PacearrServices {
       if (user) tautulliUsernames.push({ userId: user.id, username });
       const result = await this.processWatchEvent({
         source: "tautulli-session",
+        sourceConnection: tautulliConnection,
         sourceEventId: event.referenceId,
         userId: user?.id ?? null,
         plexAccountId: null,
@@ -2442,13 +2489,14 @@ export class PacearrServices {
         rawPayload: event.raw,
       }, "tautulli-active-session", true, episodeCache, dryRunExpandedSeasons);
       if (result.changed) changed++;
-      if (!result.inserted && user && this.db.repairUnmatchedWatchEventUser("tautulli-session", event.referenceId, user.id)) {
+      if (!result.inserted && user && this.db.repairUnmatchedWatchEventUser("tautulli-session", tautulliConnection, event.referenceId, user.id)) {
         this.refreshRollingProgressForUsers([user.id]);
         changed++;
         progressUpdated = true;
         if (!result.changed) {
           const retried = await this.processWatchEvent({
             source: "tautulli-session",
+            sourceConnection: tautulliConnection,
             sourceEventId: event.referenceId,
             userId: user.id,
             plexAccountId: null,
