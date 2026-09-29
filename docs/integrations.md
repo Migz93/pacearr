@@ -174,8 +174,11 @@ or not tag writing is on, since a fresh install starts with it off.
 Re-adoption skips the enrolment pilot baseline and sends nothing to Sonarr. Seasons
 Sonarr still monitors are recorded as expanded, so the rolling reconcile times them
 out as usual instead of trimming them to pilots. When any show was re-adopted, the
-import then runs a full history reconciliation (Plex and Tautulli) followed by a
-rolling reconciliation, so viewer progress is rebuilt before the shows are reconciled. Tags restore membership only: exclusions, prefetch records and Plex
+import then runs a full history reconciliation (Plex and Tautulli; a run already in
+progress is waited out and a fresh one started) and only after it finishes a rolling
+reconciliation, so viewer progress is rebuilt before the shows are reconciled. A
+scheduled rolling reconcile can still land in between; the recorded expanded seasons
+are what keep that one from trimming them. Tags restore membership only: exclusions, prefetch records and Plex
 poster backups are not recoverable from them.
 
 Allowed in dry run, because it writes only Pacearr's own records, like a manual

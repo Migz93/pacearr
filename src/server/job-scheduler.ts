@@ -15,6 +15,8 @@ type ScheduledJob = {
   lastRunStatus: "success" | "error" | null;
   activeRuns: number;
   pendingManualRun: boolean;
+  /** Callers of runAfterActiveAndWait, resolved when the queued manual run finishes. */
+  queuedRunWaiters: Array<(completed: boolean) => void>;
   // Set when a run was skipped because setup is incomplete. Such a run is not
   // recorded, and the job is rescheduled by resumeAfterSetup().
   waitingForSetup: boolean;
@@ -89,6 +91,7 @@ export class JobScheduler {
       lastRunStatus: persisted?.lastRunStatus ?? null,
       activeRuns: 0,
       pendingManualRun: false,
+      queuedRunWaiters: [],
       waitingForSetup: false,
       timeout: null,
       anchorMs: Number.isFinite(lastRunMs) ? lastRunMs : null,
@@ -111,7 +114,10 @@ export class JobScheduler {
     if (patch.intervalMs !== undefined) job.intervalMs = patch.intervalMs;
     if (patch.enabled !== undefined) {
       job.enabled = patch.enabled;
-      if (!job.enabled) job.pendingManualRun = false;
+      if (!job.enabled) {
+        job.pendingManualRun = false;
+        for (const resolve of job.queuedRunWaiters.splice(0)) resolve(false);
+      }
     }
     this.reschedule(job);
     this.logger?.info("Scheduled job updated", { id: job.id, intervalMs: job.intervalMs, enabled: job.enabled, nextRunAt: job.nextRunAt });
@@ -146,6 +152,20 @@ export class JobScheduler {
     job.pendingManualRun = true;
     this.logger?.info("Queued manual job run after active run", { id, activeRuns: job.activeRuns });
     return true;
+  }
+
+  /**
+   * Runs the job and resolves when that run finishes. If a run is already active, a
+   * fresh run is queued after it, so the result reflects work started after this call
+   * rather than a run that began earlier. Resolves false if the job did not complete.
+   */
+  runAfterActiveAndWait(id: string): Promise<boolean> {
+    const job = this.jobs.get(id);
+    if (!job || !job.enabled) return Promise.resolve(false);
+    if (job.activeRuns === 0) return this.execute(job, false);
+    job.pendingManualRun = true;
+    this.logger?.info("Queued manual job run after active run", { id, activeRuns: job.activeRuns });
+    return new Promise((resolve) => { job.queuedRunWaiters.push(resolve); });
   }
 
   async runNowAndWait(id: string) {
@@ -275,8 +295,9 @@ export class JobScheduler {
       job.activeRuns = Math.max(0, job.activeRuns - 1);
       if (job.activeRuns === 0 && job.enabled && job.pendingManualRun) {
         job.pendingManualRun = false;
+        const waiters = job.queuedRunWaiters.splice(0);
         this.logger?.info("Running queued manual job", { id: job.id });
-        void this.execute(job, false);
+        void this.execute(job, false).then((completed) => { for (const resolve of waiters) resolve(completed); });
       }
     }
   }

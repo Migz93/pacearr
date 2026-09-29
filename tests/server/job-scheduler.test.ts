@@ -268,3 +268,30 @@ test("a failed catch-up run waits a full interval before retrying", async (t) =>
   assert.equal(runs, 1);
   assert.ok(nextRunMs(scheduler, "history-import") > Date.now() + 23 * HOUR_MS);
 });
+
+test("runAfterActiveAndWait waits for a fresh run after an active one, not the active run", async (t) => {
+  const scheduler = disableJobsAfterTest(t, new JobScheduler());
+  let releaseFirst!: () => void;
+  const runs: string[] = [];
+  let call = 0;
+  scheduler.registerRecurringJob({
+    id: "full-history-reconcile",
+    intervalMs: 24 * HOUR_MS,
+    task: async () => {
+      const run = ++call;
+      runs.push(`start ${run}`);
+      if (run === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      runs.push(`end ${run}`);
+    },
+  });
+
+  assert.equal(scheduler.runNow("full-history-reconcile"), true);
+  await waitFor(() => runs.length === 1);
+  const waited = scheduler.runAfterActiveAndWait("full-history-reconcile").then((completed) => { runs.push(`resolved ${completed}`); });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(runs, ["start 1"], "does not resolve while the earlier run is still active");
+
+  releaseFirst();
+  await waited;
+  assert.deepEqual(runs, ["start 1", "end 1", "start 2", "end 2", "resolved true"]);
+});

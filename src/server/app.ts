@@ -426,7 +426,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       // waiting for the next scheduled runs: read Plex and Tautulli in full first, then
       // reconcile, so the reconcile sees every viewer's current position.
       logger.info("Sonarr tag import re-adopted shows; scheduling full history reconciliation then rolling reconciliation", { enrolled: result.enrolled });
-      void scheduler.runNowAndWait("full-history-reconcile")
+      // runAfterActiveAndWait waits out a full read already in progress and then runs a
+      // fresh one, so the rolling reconcile never starts ahead of the history it needs.
+      void scheduler.runAfterActiveAndWait("full-history-reconcile")
         .then(() => scheduler.runNowOrQueue("rolling-reconcile"))
         .catch((error) => logger.warn("Post-import reconciliation failed to start", { error: error instanceof Error ? error.message : String(error) }));
     }
