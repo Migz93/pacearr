@@ -145,6 +145,7 @@ test("getShowGuids reports a deleted rating key as not found, and other errors a
     legacy: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'legacy'" } }), { status: 200, headers: { "content-type": "application/json" } }),
     badRequest: new Response(JSON.stringify({ response: { result: "error", message: "Invalid apikey" } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }),
     down: new Response("Service Unavailable", { status: 503, statusText: "Service Unavailable" }),
+    proxyDown: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'proxyDown'" } }), { status: 503, statusText: "Service Unavailable", headers: { "content-type": "application/json" } }),
   };
   globalThis.fetch = (async (input: RequestInfo | URL) => responses[new URL(String(input)).searchParams.get("rating_key")!]!) as typeof fetch;
   try {
@@ -154,6 +155,8 @@ test("getShowGuids reports a deleted rating key as not found, and other errors a
     }
     await assert.rejects(tautulli.getShowGuids("badRequest"), (error) => !isNotFoundError(error) && error instanceof Error && error.message === "Tautulli 400 Bad Request: Invalid apikey");
     await assert.rejects(tautulli.getShowGuids("down"), (error) => !isNotFoundError(error) && error instanceof Error && error.message === "Tautulli 503 Service Unavailable");
+    // The not-found message only counts from Tautulli's own command errors, never a 5xx.
+    await assert.rejects(tautulli.getShowGuids("proxyDown"), (error) => !isNotFoundError(error));
   } finally {
     globalThis.fetch = originalFetch;
   }

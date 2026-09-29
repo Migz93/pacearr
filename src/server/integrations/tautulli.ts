@@ -74,8 +74,10 @@ export class TautulliIntegration {
   /** Throws IntegrationNotFoundError when the rating key no longer exists in Plex. */
   async getShowGuids(ratingKey: string): Promise<ExternalIds> {
     const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey }).catch((error: unknown) => {
-      // Older Tautulli versions return the same message with a 200 and result "error".
-      if (error instanceof Error && /unable to retrieve metadata/i.test(error.message)) throw new IntegrationNotFoundError(error.message);
+      // Only Tautulli's own command errors can mean a deleted item: a 400, or a 200 with
+      // result "error" from older versions. Any other status is a failed request.
+      const commandError = !(error instanceof IntegrationHttpError) || error.status === 400;
+      if (commandError && error instanceof Error && /unable to retrieve metadata/i.test(error.message)) throw new IntegrationNotFoundError(error.message);
       throw error;
     });
     const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];
