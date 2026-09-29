@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TautulliIntegration } from "../../src/server/integrations/tautulli.js";
+import { isNotFoundError } from "../../src/server/integrations/request.js";
 import type { Logger } from "../../src/server/logger.js";
 
 test("getHistory maps valid records independently and skips malformed rows", async () => {
@@ -131,6 +132,28 @@ test("getActiveSessions parses real get_activity rows, which carry no start time
     const watchedAt = new Date(sessions[0]!.watchedAt).getTime();
     assert.ok(watchedAt >= before && watchedAt <= after, "watchedAt is when Pacearr observed the session");
     assert.equal(sessions[1]!.referenceId, `key:47:43:1000:${sessions[1]!.watchedAt.slice(0, 10)}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("getShowGuids reports a deleted rating key as not found, and other errors as failures", async () => {
+  const originalFetch = globalThis.fetch;
+  const responses: Record<string, Response> = {
+    // What Tautulli returns for a rating key Plex no longer has (#208).
+    deleted: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'deleted'", data: {} } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }),
+    legacy: new Response(JSON.stringify({ response: { result: "error", message: "Unable to retrieve metadata for rating_key 'legacy'" } }), { status: 200, headers: { "content-type": "application/json" } }),
+    badRequest: new Response(JSON.stringify({ response: { result: "error", message: "Invalid apikey" } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }),
+    down: new Response("Service Unavailable", { status: 503, statusText: "Service Unavailable" }),
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => responses[new URL(String(input)).searchParams.get("rating_key")!]!) as typeof fetch;
+  try {
+    const tautulli = new TautulliIntegration({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" }, { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger);
+    for (const key of ["deleted", "legacy"]) {
+      await assert.rejects(tautulli.getShowGuids(key), (error) => isNotFoundError(error));
+    }
+    await assert.rejects(tautulli.getShowGuids("badRequest"), (error) => !isNotFoundError(error) && error instanceof Error && error.message === "Tautulli 400 Bad Request: Invalid apikey");
+    await assert.rejects(tautulli.getShowGuids("down"), (error) => !isNotFoundError(error) && error instanceof Error && error.message === "Tautulli 503 Service Unavailable");
   } finally {
     globalThis.fetch = originalFetch;
   }

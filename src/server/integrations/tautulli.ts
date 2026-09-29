@@ -1,7 +1,7 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError, IntegrationNotFoundError } from "./request.js";
 
 export interface TautulliEpisodeRecord {
   referenceId: string;
@@ -38,7 +38,12 @@ export class TautulliIntegration {
 
   private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}, timeoutMs?: number): Promise<T> {
     const response = await fetchIntegration(this.buildUrl({ cmd, ...params }), {}, timeoutMs);
-    if (!response.ok) throw new Error(`Tautulli ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      // Tautulli reports command errors, such as an unknown rating key, as a 400 whose
+      // body carries the reason; keep it so callers can tell those apart.
+      const detail = await response.json().then((body: { response?: { message?: string } }) => body?.response?.message, () => undefined);
+      throw new IntegrationHttpError(`Tautulli ${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`, response.status);
+    }
     const body = await response.json() as { response?: { result?: string; message?: string; data?: T } };
     if (body.response?.result === "error") throw new Error(body.response.message || "Tautulli API error");
     return body.response?.data as T;
@@ -66,8 +71,13 @@ export class TautulliIntegration {
     return installId || null;
   }
 
+  /** Throws IntegrationNotFoundError when the rating key no longer exists in Plex. */
   async getShowGuids(ratingKey: string): Promise<ExternalIds> {
-    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey });
+    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey }).catch((error: unknown) => {
+      // Older Tautulli versions return the same message with a 200 and result "error".
+      if (error instanceof Error && /unable to retrieve metadata/i.test(error.message)) throw new IntegrationNotFoundError(error.message);
+      throw error;
+    });
     const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];
     let tvdbId: number | null = null;
     let imdbId: string | null = null;

@@ -33,8 +33,19 @@ export class IntegrationHttpError extends Error {
   }
 }
 
+/**
+ * An integration that reports a missing record some other way than a 404, such as
+ * Tautulli answering a deleted rating key with a 400 and an error message.
+ */
+export class IntegrationNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IntegrationNotFoundError";
+  }
+}
+
 export function isNotFoundError(error: unknown): boolean {
-  return error instanceof IntegrationHttpError && error.status === 404;
+  return error instanceof IntegrationNotFoundError || (error instanceof IntegrationHttpError && error.status === 404);
 }
 
 /**
