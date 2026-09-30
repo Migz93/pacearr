@@ -30,7 +30,9 @@ Use `gh` for all GitHub operations:
 - `gh pr create --draft --base develop --title "..." --body "..."`
 - Ordinary PRs into `develop`: `gh pr merge --squash --delete-branch`
 - Release and ancestry-reconciliation PRs: `gh pr merge --merge`
-- Publish the release-drafter draft once the tag is pushed: `gh release edit vX.Y.Z --draft=false`
+- Edit the release-drafter draft into the [Release Notes](#release-notes)
+  format, then publish it once the tag is pushed:
+  `gh release edit vX.Y.Z --draft=false`
 - `gh issue create --title "..." --body "..."`
 
 PRs are opened as drafts and only marked ready-for-review once finished (see
@@ -201,6 +203,9 @@ release: release and version-bump pull requests, test-only pull requests,
 internal review-fix pull requests, documentation pull requests, and dependency
 pull requests. Group the list consistently under headings such as Features,
 Fixes, Maintenance, Documentation, and Dependencies.
+
+Check the list against GitHub's compare range from the previous tag to
+`vX.Y.Z`; Release Drafter omits pull requests labelled `skip-changelog`.
 
 Do not add empty sections or a permanent "Known issues" section. Mention a
 known limitation only when it is relevant to that specific release.
