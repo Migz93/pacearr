@@ -73,6 +73,14 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   newShowTriageEnabledAt: null,
 };
 
+export interface WatchEventInsertResult {
+  inserted: boolean;
+  id: number | null;
+  adopted: boolean;
+  /** Set when a duplicate moved the stored event to a later date; carries the stored row's user. */
+  advanced?: { userId: number | null };
+}
+
 export interface NormalizedWatchEventInput {
   source: EventSourceKind;
   /** The server the event came from (see history-sync.ts); its ID is only unique there. */
@@ -246,6 +254,7 @@ function historyFromRow(row: any): HistoryEvent {
 export class PacearrDatabase {
   private readonly db: Database.Database;
   private adoptFallbackStatement?: Database.Statement;
+  private advanceTautulliStatement?: Database.Statement;
   private readonly logger?: Logger;
 
   constructor(config: RuntimeConfig, logger?: Logger) {
@@ -1249,7 +1258,30 @@ export class PacearrDatabase {
     ).changes > 0;
   }
 
-  insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null; adopted: boolean } {
+  /**
+   * Tautulli merges a resumed play into the earlier unfinished play of the same episode and
+   * reports the group under the first play's reference ID with the latest play's date, so
+   * an already-stored event can come back later. Moves the stored date forward to it; never
+   * back, so an older re-read cannot undo it. Only a row recording the same episode for the
+   * same Tautulli user moves, as adoptFallbackWatchEvent guards against a reused ID.
+   * Returns the stored row's user, or undefined when nothing moved.
+   */
+  private advanceTautulliWatchEvent(input: NormalizedWatchEventInput, rawPayload: string): { userId: number | null } | undefined {
+    if (input.source !== "tautulli") return undefined;
+    this.advanceTautulliStatement ??= this.db.prepare(`
+      UPDATE watch_events SET watched_at = ?, raw_payload = ?
+      WHERE source = 'tautulli' AND source_connection = ? AND source_event_id = ?
+        AND watched_at < ? AND season_number = ? AND episode_number = ? AND show_title = ?
+        AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) IS CAST(json_extract(?, '$.user_id') AS TEXT)
+      RETURNING user_id AS userId
+    `);
+    return this.advanceTautulliStatement.get(
+      input.watchedAt, rawPayload, input.sourceConnection, input.sourceEventId,
+      input.watchedAt, input.seasonNumber, input.episodeNumber, input.showTitle, rawPayload,
+    ) as { userId: number | null } | undefined;
+  }
+
+  insertWatchEvent(input: NormalizedWatchEventInput): WatchEventInsertResult {
     return this.db.transaction(() => {
       const adopted = this.adoptFallbackWatchEvent(input);
       const result = this.db.prepare(`
@@ -1275,7 +1307,9 @@ export class PacearrDatabase {
       // whatever a previous successful insert on this connection left it as. Gate on
       // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
       // event would incorrectly report some unrelated earlier row's id as its own.
-      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null, adopted };
+      if (result.changes > 0) return { inserted: true, id: Number(result.lastInsertRowid), adopted };
+      const advanced = this.advanceTautulliWatchEvent(input, JSON.stringify(input.rawPayload));
+      return advanced ? { inserted: false, id: null, adopted, advanced } : { inserted: false, id: null, adopted };
     })();
   }
 
@@ -1285,7 +1319,7 @@ export class PacearrDatabase {
    * process thousands of rows in one run; measured on this exact pattern, 2000 unwrapped
    * inserts took ~212ms versus ~3ms wrapped in one transaction.
    */
-  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): Array<{ inserted: boolean; id: number | null; adopted: boolean }> {
+  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): WatchEventInsertResult[] {
     if (inputs.length === 0) return [];
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO watch_events
@@ -1295,6 +1329,7 @@ export class PacearrDatabase {
     const stamp = now();
     const insertAll = this.db.transaction((items: NormalizedWatchEventInput[]) => items.map((item) => {
       const adopted = this.adoptFallbackWatchEvent(item);
+      const rawPayload = JSON.stringify(item.rawPayload);
       const result = insert.run(
         item.source,
         item.sourceConnection,
@@ -1307,10 +1342,12 @@ export class PacearrDatabase {
         item.seasonNumber,
         item.episodeNumber,
         item.watchedAt,
-        JSON.stringify(item.rawPayload),
+        rawPayload,
         stamp
       );
-      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null, adopted };
+      if (result.changes > 0) return { inserted: true, id: Number(result.lastInsertRowid), adopted };
+      const advanced = this.advanceTautulliWatchEvent(item, rawPayload);
+      return advanced ? { inserted: false, id: null, adopted, advanced } : { inserted: false, id: null, adopted };
     }));
     return insertAll(inputs);
   }

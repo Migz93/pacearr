@@ -625,6 +625,90 @@ test("history import batches events outside the activity window while still appl
   }
 });
 
+test("history import moves a Tautulli event to the later date of a resumed play and applies it as a new watch", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  db.updateAppSettings({ dryRun: false, viewerActivityWindowDays: 30 });
+  const [viewer] = db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const series: SonarrSeries = {
+    id: 970,
+    title: "Resumed Show",
+    tvdbId: 9700,
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9701, seriesId: 970, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 97001 },
+    { id: 9702, seriesId: 970, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true, episodeFileId: 97002 },
+  ];
+  const rolling = db.upsertRollingShow(series);
+  const firstPlay = Math.floor((Date.now() - 60 * 24 * 60 * 60 * 1000) / 1000);
+  const resumed = Math.floor((Date.now() - 1 * 24 * 60 * 60 * 1000) / 1000);
+  // Tautulli reports the merged play under the first play's reference ID, dated by its latest play.
+  const play = (date: number, userId = 7) => ({ reference_id: "102506", user_id: userId, username: "viewer", user: "Viewer", grandparent_title: "Resumed Show", parent_media_index: 2, media_index: 1, date, rating_key: "episode", grandparent_rating_key: "970" });
+  const importWith = async (history: unknown[], full = false) => {
+    const restoreFetch = installFetchStub({
+      series: [series],
+      seriesById: { 970: series },
+      episodesBySeries: { 970: episodes },
+      episodeFilesBySeries: { 970: [] },
+      tautulliHistory: history,
+      tautulliMetadata: { guids: ["tvdb://9700"] },
+    });
+    try { return full ? await services.reconcileFullHistory() : await services.importHistory(); } finally { restoreFetch(); }
+  };
+  const latestWatch = () => db.listLatestWatchProgressForUser(viewer!.id).map((item) => item.watchedAt);
+  const progressAt = () => db.listProgressForShow(rolling.id).map((item) => item.lastWatchedAt);
+  try {
+    await importWith([play(firstPlay)]);
+    assert.deepEqual(latestWatch(), [new Date(firstPlay * 1000).toISOString()]);
+    assert.deepEqual(db.getRollingShowBySeriesId(970)?.expandedSeasons, [], "an unfinished play outside the activity window expands nothing");
+
+    // The viewer finishes the episode a year later; the incremental read resumes from the
+    // first play's date and sees the same reference ID with the later date.
+    const result = await importWith([play(resumed)]);
+    assert.equal(result.imported, 0);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(latestWatch(), [new Date(resumed * 1000).toISOString()]);
+    assert.deepEqual(progressAt(), [new Date(resumed * 1000).toISOString()]);
+    assert.deepEqual(db.getRollingShowBySeriesId(970)?.expandedSeasons, [2], "the resumed play inside the window is applied as a new watch");
+    assert.equal(db.getHistorySyncState().tautulli.cursor, new Date(resumed * 1000).toISOString());
+
+    // An older re-read never moves the date back, and another Tautulli user's play that
+    // reuses the ID is not taken as this one.
+    await importWith([play(firstPlay)], true);
+    await importWith([play(resumed + 3600, 8)], true);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(latestWatch(), [new Date(resumed * 1000).toISOString()]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a full history read moves a stored Tautulli event to a resumed play's date and refreshes progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const [viewer] = db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const series: SonarrSeries = { id: 971, title: "Resumed Show", tvdbId: 9710, seasons: [] };
+  const rolling = db.upsertRollingShow(series);
+  const play = (date: number) => ({ reference_id: "55", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Resumed Show", parent_media_index: 1, media_index: 4, date, rating_key: "episode", grandparent_rating_key: "971" });
+  const readInFull = async (history: unknown[]) => {
+    const restoreFetch = installFetchStub({ series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://9710"] } });
+    try { await services.reconcileFullHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    await readInFull([play(1750000000)]);
+    await readInFull([play(1784220000)]);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(db.listProgressForShow(rolling.id).map((item) => item.lastWatchedAt), [new Date(1784220000 * 1000).toISOString()]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a dry-run history import expands an unexpanded season only once", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
