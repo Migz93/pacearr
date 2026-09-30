@@ -249,4 +249,4 @@ none for a run that finishes sooner.
 | both history jobs, while reading pages | `Plex playback history fetch progress`, `Tautulli history fetch progress` | no `total` for Plex, for an incremental Tautulli read, or when Tautulli reports no row count |
 | `sonarr-library-refresh` | `Sonarr library refresh progress` | `phase: "posters"` |
 | `recommendation-refresh` | `Recommendation refresh progress` | — |
-| `rolling-reconcile` | no progress line; `Applying Sonarr monitoring plan` and the skipped-show lines carry `position` and `total` | — |
+| `rolling-reconcile` | no progress line; `Applying Sonarr monitoring plan` and the skipped- and failed-show lines carry `position` and `total` | — |

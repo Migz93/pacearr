@@ -2650,7 +2650,7 @@ export class PacearrServices {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push(`${show.title}: ${message}`);
-        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, error: message });
+        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length, error: message });
       } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
     }
     // history_events is Pacearr's audit log, not operational state — nothing else depends
