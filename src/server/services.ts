@@ -1885,7 +1885,7 @@ export class PacearrServices {
    */
   private insertImmediateWatchEvents(
     prepared: Array<{ input: NormalizedWatchEventInput; applyRolling: boolean }>
-  ): { imported: number; matched: number; unmatched: number; adopted: number; unmatchedInputs: NormalizedWatchEventInput[]; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[]; repairedUserIds: Set<number>; repairedSeriesCount: number } {
+  ): { imported: number; matched: number; unmatched: number; adopted: number; advanced: number; unmatchedInputs: NormalizedWatchEventInput[]; rolling: NormalizedWatchEventInput[]; duplicates: NormalizedWatchEventInput[]; repairedUserIds: Set<number>; repairedSeriesCount: number } {
     const immediate = prepared.filter((item) => !item.applyRolling).map((item) => item.input);
     const rolling = prepared.filter((item) => item.applyRolling).map((item) => item.input);
     const results = this.db.insertWatchEventsBatch(immediate);
@@ -1897,8 +1897,16 @@ export class PacearrServices {
     const duplicates: NormalizedWatchEventInput[] = [];
     const repairedUserIds = new Set<number>();
     let repairedSeriesCount = 0;
+    let advanced = 0;
     for (let index = 0; index < immediate.length; index++) {
-      if (!results[index]!.inserted) { duplicates.push(immediate[index]!); continue; }
+      const result = results[index]!;
+      // A later date for a stored event (see insertWatchEvent) can be the viewer's newest
+      // watch of the series, so their progress is refreshed like a repair.
+      if (result.advanced) {
+        advanced++;
+        for (const userId of [result.advanced.userId, immediate[index]!.userId]) if (userId) repairedUserIds.add(userId);
+      }
+      if (!result.inserted) { duplicates.push(immediate[index]!); continue; }
       imported++;
       if (immediate[index]!.userId && immediate[index]!.sonarrSeriesId) matched++; else { unmatched++; unmatchedInputs.push(immediate[index]!); }
     }
@@ -1908,7 +1916,7 @@ export class PacearrServices {
         if (duplicate.userId) repairedUserIds.add(duplicate.userId);
       }
     }
-    return { imported, matched, unmatched, adopted, unmatchedInputs, rolling, duplicates, repairedUserIds, repairedSeriesCount };
+    return { imported, matched, unmatched, adopted, advanced, unmatchedInputs, rolling, duplicates, repairedUserIds, repairedSeriesCount };
   }
 
   private refreshRollingProgressForUsers(userIds: Iterable<number>): void {
@@ -2069,9 +2077,13 @@ export class PacearrServices {
     return changed;
   }
 
-  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; changed: boolean; progressUpdated: boolean }> {
+  private async processWatchEvent(input: NormalizedWatchEventInput, sourceLabel: string, applyRolling = true, episodeCache?: EpisodeCache, dryRunExpandedSeasons?: Set<string>, retryDuplicateRolling = false): Promise<{ inserted: boolean; advanced: { userId: number | null } | undefined; changed: boolean; progressUpdated: boolean }> {
     const stored = this.db.insertWatchEvent(input);
     const retryKey = JSON.stringify([input.source, input.sourceConnection, input.sourceEventId]);
+    // A stored event moved to a later date (a resumed Tautulli play) is a new watch for
+    // progress and rolling purposes.
+    const advanced = stored.advanced;
+    const fresh = stored.inserted || advanced !== undefined;
     let repaired = false;
     if (!stored.inserted) {
       // Live polls see an ongoing playback on every run, so a duplicate is normal there;
@@ -2089,38 +2101,38 @@ export class PacearrServices {
     } else this.logUnmatchedWatchEvent(input);
     // Complete history is retained for audit and the History tab, but replaying
     // old pilot watches must not expand seasons or retrigger Sonarr actions.
-    if (!applyRolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
-    if (!input.userId || !input.sonarrSeriesId) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    if (!applyRolling) return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated: false };
+    if (!input.userId || !input.sonarrSeriesId) return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated: false };
     const user = this.db.getUser(input.userId);
     const rolling = this.db.getRollingShowBySeriesId(input.sonarrSeriesId);
-    if (!user?.enabled || !rolling) return { inserted: stored.inserted, changed: repaired, progressUpdated: false };
+    if (!user?.enabled || !rolling) return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated: false };
     // Duplicate live polls ordinarily mean the same playback is still in progress and
     // must stay silent. Only a prior operation collision places an event in this set,
     // letting its next duplicate complete the deferred rolling work exactly once.
-    if (!stored.inserted && !repaired && !retryDuplicateRolling && !this.pendingRollingRetries.has(retryKey)) {
-      return { inserted: false, changed: repaired, progressUpdated: false };
+    if (!fresh && !repaired && !retryDuplicateRolling && !this.pendingRollingRetries.has(retryKey)) {
+      return { inserted: false, advanced, changed: repaired, progressUpdated: false };
     }
 
     const progressUpdated = this.db.upsertRollingUserProgress(rolling.id, user.id, input.seasonNumber, input.episodeNumber, input.watchedAt);
-    if (!progressUpdated && stored.inserted) return { inserted: true, changed: repaired, progressUpdated: false };
+    if (!progressUpdated && fresh) return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated: false };
     // Progress still records where the viewer is, but an excluded item triggers no Sonarr work.
     if (exclusionCheck(this.db.getRollingExclusions(rolling.id)).episode(input.seasonNumber, input.episodeNumber)) {
       this.pendingRollingRetries.delete(retryKey);
-      return { inserted: stored.inserted, changed: repaired, progressUpdated };
+      return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated };
     }
     // Keep progress current, but let the operation already controlling this
     // series finish its Sonarr mutations before event-side work resumes.
     const operation = this.acquireSeriesOperation(input.sonarrSeriesId);
     if (operation === null) {
       this.pendingRollingRetries.add(retryKey);
-      return { inserted: stored.inserted, changed: repaired, progressUpdated };
+      return { inserted: stored.inserted, advanced, changed: repaired, progressUpdated };
     }
     try {
       await this.performProgressiveCleanup(rolling.id, input.seasonNumber, new Date(input.watchedAt));
       const position = { userId: user.id, seasonNumber: input.seasonNumber, episodeNumber: input.episodeNumber, watchedAt: input.watchedAt };
       const changed = await this.applyViewerPositionActions(rolling.id, position, sourceLabel, episodeCache, dryRunExpandedSeasons);
       this.pendingRollingRetries.delete(retryKey);
-      return { inserted: stored.inserted, changed: repaired || changed, progressUpdated };
+      return { inserted: stored.inserted, advanced, changed: repaired || changed, progressUpdated };
     } finally { this.releaseSeriesOperation(input.sonarrSeriesId, operation); }
   }
 
@@ -2363,7 +2375,8 @@ export class PacearrServices {
         imported += counts.imported;
         matched += counts.matched;
         unmatched += counts.unmatched;
-        changed += counts.repairedSeriesCount;
+        changed += counts.repairedSeriesCount + counts.advanced;
+        let advanced = counts.advanced;
         counts.unmatchedInputs.forEach((input) => {
           this.logUnmatchedWatchEvent(input);
         });
@@ -2388,9 +2401,15 @@ export class PacearrServices {
             repairedUserIds.add(input.userId);
             changed++;
           }
-          if (result.changed) changed++;
+          if (result.advanced) {
+            advanced++;
+            // The row may still belong to a user this read could not resolve.
+            if (result.advanced.userId) repairedUserIds.add(result.advanced.userId);
+          }
+          if (result.changed || result.advanced) changed++;
           rollingProgress.tick();
         }
+        if (advanced > 0) this.logger.info("Tautulli watch events moved to the date of a resumed play", { advanced });
         // A repaired event may be the most recent watch a viewer has for its series, so
         // rolling progress needs the same refresh discoverPlexUsers does after linking
         // previously-orphaned Plex owner history.

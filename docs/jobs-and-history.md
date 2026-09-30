@@ -141,6 +141,18 @@ The connections are defined in `history-sync.ts`. Tautulli's install ID is asked
 
 Migration 27 stamped existing events with the URL configured at upgrade, never a stable ID, because the configured server may have replaced the one an event came from. It also restamped the Plex cursor with that URL, so the first import that resolves a source's stable ID reads that source in full. An event stored under a fallback URL moves to the stable ID only when that server reports the same watch again: same source event ID, watch time, season, episode, show title, username and Plex account ID. An event that does not match stays under the URL, because a different install behind that URL can reuse the ID for another watch.
 
+### Resumed Tautulli Plays
+
+Tautulli merges a resumed play into the earlier, unfinished play of the same episode and reports the merged row under the first play's `reference_id`, dated by the latest play. A `tautulli` event that is already stored therefore comes back with a later date.
+
+| Incoming row vs stored row | Result |
+|---|---|
+| Same connection, reference ID, season, episode, show title and Tautulli `user_id`; later date | Stored `watched_at` and raw payload move to the later date |
+| Same, but an earlier or equal date | Ignored — a date never moves back |
+| Any of those fields differ | Ignored as a duplicate |
+
+A moved date counts as a new watch: the viewer's rolling progress is refreshed, and when the new date is inside the activity window during an incremental import, rolling logic runs as for a new event. It also moves the cursor forward, and the incremental read sees the row because Tautulli sorts history by its latest date. Only `tautulli` history does this; Plex and live-session events never change date.
+
 ## History Synchronization
 
 Plex and Tautulli each maintain an independent local synchronization state. The first successful import for a source backfills its complete episode history into `watch_events`. Once the backfill is complete, subsequent imports request only records newer than the source cursor with a small overlap to account for delayed reporting. Source-event IDs keep overlapping records idempotent. Each cursor records the connection it came from (see [Watch Events](#watch-events)) and is taken from that connection's newest event; after the server changes, the next import backfills that source again rather than resuming from the old server's cursor. A cursor stamped with a fallback URL is also read in full once the server reports a stable ID, since the install behind that URL may have changed; the full read recognises the events that are still the same watch. While the server reports no stable ID (no Plex machine identifier, or no Tautulli `pms_uuid`), the URL is the connection itself and its cursor resumes normally. Cursors saved before connections were recorded are stamped with the server configured at upgrade (migration 23); a cursor with no recorded connection is read in full.
