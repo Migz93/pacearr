@@ -433,6 +433,46 @@ short.
 
 ---
 
+### Periodic Develop-to-Main Review
+
+This is a manual, broad review of the accumulated `develop` changes against
+`main`. It is **not** scheduled, automated, a release gate, or a replacement
+for the normal review gate above. Only start it when the project owner asks.
+
+Run it with the shared guidance as context:
+
+```bash
+coderabbit review --agent --base main -c AGENTS.md
+```
+
+Initially triage the findings and report recommendations to the project owner
+before creating any GitHub issues. Identify important findings, group related
+ones, suggest which should become normal issues, and distinguish minor or
+optional findings from intentional, irrelevant, false-positive, or unsuitable
+ones. Explain the reasoning for each disposition.
+
+Do not create issues automatically. After the owner approves the proposed
+follow-up work, create normal GitHub issues using the repository's existing
+labels. Do not add review-specific labels. Intentional or unwanted findings may
+be accepted without an issue.
+
+---
+
+### Release PR Review
+
+The CodeRabbit review on a normal `develop` → `main` release PR is a separate,
+narrow release-safety check. Trigger it on the PR when necessary, and only act
+on findings that could make the release unsafe: application failure, failed
+startup or deployment, data loss or corruption, a broken database migration, a
+serious security problem, or a serious failure in Plex, Sonarr, Tautulli, or
+another core integration.
+
+Non-critical findings are not release blockers. After project-owner approval,
+turn them into normal future-work issues or explicitly accept them; do not
+automatically open additional release PRs for them.
+
+---
+
 ### Branch Rules Summary
 
 | Branch | Purpose | Direct commits? |

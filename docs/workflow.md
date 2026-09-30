@@ -16,6 +16,7 @@ moment rather than up front.
 | [AI Sign-Off For GitHub Text](#ai-sign-off-for-github-text) | Writing anything that lands on GitHub |
 | [Pull Request Description Format](#pull-request-description-format) | Opening a PR |
 | [Pull Request Conventions](#pull-request-conventions) | Opening or merging a PR |
+| [CodeRabbit Review Process](#coderabbit-review-process) | Reviewing development changes or a release PR |
 | [Release Process](#release-process) | Cutting a release |
 | [Release Notes](#release-notes) | Editing a release-drafter draft before publication |
 | [Security Findings](#security-findings) | Triaging a code-scanning or Dependabot alert |
@@ -107,6 +108,54 @@ rather than implying the container was rebuilt and verified.
   needs more fixes, convert it back to draft (`gh pr ready --undo`) before
   pushing the fix, so the follow-up commit doesn't trigger another automatic
   review.
+
+---
+
+## CodeRabbit Review Process
+
+CodeRabbit serves two distinct purposes. The existing two-branch workflow and
+release mechanics remain unchanged.
+
+| Review | Purpose | Outcome |
+|---|---|---|
+| Periodic CLI review | Broad review of accumulated `develop` changes | Initially triaged recommendations, then owner-approved normal issues and accepted findings |
+| Release PR review | Critical release-safety check | Fix blockers only |
+
+### Periodic CLI Review
+
+The project owner manually requests this review when a broad check of
+`develop` against `main` would be useful. It is not scheduled, automated, a
+frozen testing phase, or a release gate. Do not create release branches or
+release candidates for it.
+
+Run:
+
+```bash
+coderabbit review --agent --base main -c AGENTS.md
+```
+
+First triage the output for the owner: identify important findings, group
+related findings, recommend which should become normal issues, and call out
+minor or optional suggestions. Clearly explain findings that are intentional,
+irrelevant, false positives, or unsuitable for the project.
+
+Do not create issues automatically. Only after the owner approves the proposed
+findings, create normal GitHub issues with existing repository labels; never
+introduce review-specific labels. Intentional or unwanted findings can be
+accepted without an issue.
+
+### Release PR Review
+
+When a normal `develop` → `main` release PR is ready, trigger CodeRabbit's PR
+review if necessary. Its purpose is limited to release safety. Address only
+findings that could break the application, startup or deployment, cause data
+loss or corruption, break a database migration, introduce a serious security
+problem, seriously break Plex, Sonarr, Tautulli, or another core integration,
+or otherwise make the release unsafe.
+
+Non-critical findings should become normal future-work issues only after the
+project owner approves, or be explicitly accepted. They must not automatically
+create more release PRs.
 
 ---
 
