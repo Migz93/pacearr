@@ -146,8 +146,8 @@ accepted without an issue.
 
 ### Release PR Review
 
-When a normal `develop` → `main` release PR is ready, trigger CodeRabbit's PR
-review if necessary. Its purpose is limited to release safety. Address only
+When a normal `develop` → `main` release PR has been opened as a draft, trigger
+CodeRabbit's PR review if necessary. Its purpose is limited to release safety. Address only
 findings that could break the application, startup or deployment, cause data
 loss or corruption, break a database migration, introduce a serious security
 problem, seriously break Plex, Sonarr, Tautulli, or another core integration,
@@ -168,8 +168,9 @@ When the user says it's time to release:
 3. Update the version files listed in the Project Facts table in `AGENTS.md`
 4. Open a PR from that branch into `develop` and merge it
 5. Open a draft PR from `develop` into `main`, take it through the narrow
-   [release PR review](#release-pr-review), then merge it with a merge commit:
-   `gh pr merge --merge`
+   [release PR review](#release-pr-review), mark it ready (`gh pr ready`) once
+   release-safety blockers are resolved or accepted, then merge it with a merge
+   commit: `gh pr merge --merge`
 6. Create and push the tag `vX.Y.Z` from the resulting merge commit on `main`
 7. Edit the release-drafter draft into the user-facing format in
    [Release Notes](#release-notes), then publish it
