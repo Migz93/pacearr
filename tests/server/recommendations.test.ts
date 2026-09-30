@@ -666,7 +666,7 @@ test("history import moves a Tautulli event to the later date of a resumed play 
     assert.deepEqual(latestWatch(), [new Date(firstPlay * 1000).toISOString()]);
     assert.deepEqual(db.getRollingShowBySeriesId(970)?.expandedSeasons, [], "an unfinished play outside the activity window expands nothing");
 
-    // The viewer finishes the episode a year later; the incremental read resumes from the
+    // The viewer finishes the episode weeks later; the incremental read resumes from the
     // first play's date and sees the same reference ID with the later date.
     const result = await importWith([play(resumed)]);
     assert.equal(result.imported, 0);
