@@ -409,8 +409,11 @@ rather than the interactive terminal UI:
 coderabbit review --agent --base develop
 ```
 
-For the `develop` → `main` release PR, use `--base main`. Pass `-c AGENTS.md` to
-give the reviewer this file as context.
+This CLI review is for work-branch changes against `develop`. Pass `-c
+AGENTS.md` to give the reviewer this file as context. The separate manual
+periodic review below is the only broad `develop`-against-`main` CLI review;
+the `develop` → `main` release PR instead follows the narrow
+[Release PR Review](#release-pr-review).
 
 **Runs are slow and silent.** A review can take 10–15 minutes with no output —
 it looks stuck, but it's working. Check in every 5 minutes; if nothing has
