@@ -300,12 +300,16 @@ is complete **and** the user has confirmed they're happy with it, the agent must
 stop and ask the user which way to go. It must never pick on the user's behalf,
 and must never open the PR without asking.
 
-The prompt offers three options every time:
+For a work-branch PR, the prompt offers three options:
 
 > Everything's implemented. Do you want to:
 > 1. Go to the cross-AI review (the other agent reviews this diff)
 > 2. Run a CodeRabbit CLI review
 > 3. Push and open the PR now
+
+For a `develop` → `main` release PR, use the same choices except option 2 is
+the narrow CodeRabbit release PR review described in
+[Release PR Review](#release-pr-review), not a broad CLI review.
 
 Option 3 is always available and always legitimate. Review budgets are finite
 and the user is the one who knows what's left — the gate exists so they can
@@ -320,12 +324,13 @@ number in two files with no logic to review — open it directly.
 
 #### Ordering rules
 
-- The cross-AI review is the cheap, repeatable one. CodeRabbit CLI is the
-  expensive, rate-limited one. Prefer the cross-AI review first and use
-  CodeRabbit sparingly.
+- The cross-AI review is the cheap, repeatable one. For work branches,
+  CodeRabbit CLI is the expensive, rate-limited option; prefer cross-AI review
+  first and use CodeRabbit sparingly. Release PRs use the narrow release PR
+  review instead.
 - Any CodeRabbit review that results in code changes sends the work **back to
-  the cross-AI review**, which must reach a clean full pass again before
-  CodeRabbit is considered a second time.
+  the cross-AI review**, which must reach a clean full pass again before another
+  CodeRabbit review is considered.
 - After any review completes, re-prompt with the options that still make sense —
   never silently proceed to the next step.
 
