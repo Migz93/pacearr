@@ -185,6 +185,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Oversized finite intervals are clamped | Values that are finite as minutes, hours, or days but invalid as milliseconds are bounded before persistence or scheduler conversion |
 | Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values; direct Jobs edits reject invalid or non-aligned minute values rather than silently rounding them |
 
+### `tests/server/progress-log.test.ts` — Long-job progress logging
+
+| Test | What it checks |
+|---|---|
+| A loop that finishes within the interval logs nothing | Short runs of a long job stay quiet |
+| Progress is reported once per interval with the running count and total | A long loop logs `processed`/`total` (plus its own fields) at each interval, never more often |
+| The next interval is measured from the last line | A slow item that crosses the interval late does not let the following item log early |
+| Several items per tick, with an unknown total | A paged read counts a whole page per tick, and a loop with no known length logs `processed` without a `total` |
+
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
 | Test | What it checks |

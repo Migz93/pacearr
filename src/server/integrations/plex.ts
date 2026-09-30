@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { parseStringPromise } from "xml2js";
 import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { createProgressLog } from "../progress-log.js";
 import { PLEX_USER_AGENT } from "../version.js";
 import { liveSessionEventId } from "./live-session.js";
 import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
@@ -211,6 +212,7 @@ export class PlexIntegration {
     const cutoff = since ? new Date(since).getTime() : null;
     let start = 0;
     const size = 1000;
+    const progress = createProgressLog(this.logger, "Plex playback history fetch progress", null);
     for (;;) {
       const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`, 60_000);
       const videos = toArray(data?.MediaContainer?.Video);
@@ -220,6 +222,7 @@ export class PlexIntegration {
         if (normalized) pageEvents.push(normalized);
       }
       events.push(...pageEvents.filter((event) => cutoff === null || new Date(event.watchedAt).getTime() >= cutoff));
+      progress.tick(videos.length);
       if (videos.length < size) break;
       if (cutoff !== null && pageEvents.some((event) => new Date(event.watchedAt).getTime() < cutoff)) break;
       start += size;
