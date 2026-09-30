@@ -279,9 +279,9 @@ type/branch-name branch → PR into develop → develop → chore/bump-version �
 7. **When ready to release**, create a `chore/bump-version-X.Y.Z` branch from
    `develop`, bump the version files, open a PR into `develop`, and squash-merge
    it. A version bump does not go through the review gate — see below.
-8. **Open a PR** from `develop` into `main`. This one **does** go through the
-   review gate first. Open it as a draft too, marking it ready per the same
-   conventions once the review gate is satisfied and no further fixes are
+8. **Open a draft PR** from `develop` into `main`, then take it through the
+   narrow [Release PR Review](#release-pr-review). Mark it ready only once
+   release-safety blockers are resolved or accepted and no further fixes are
    pending. Merge it with a merge commit (`gh pr merge --merge`),
    never a squash merge. This preserves `develop` ancestry on `main` and avoids
    future release conflicts. This triggers the release-drafter to generate
@@ -307,17 +307,15 @@ For a work-branch PR, the prompt offers three options:
 > 2. Run a CodeRabbit CLI review
 > 3. Push and open the PR now
 
-For a `develop` → `main` release PR, use the same choices except option 2 is
-the narrow CodeRabbit release PR review described in
-[Release PR Review](#release-pr-review), not a broad CLI review.
-
 Option 3 is always available and always legitimate. Review budgets are finite
 and the user is the one who knows what's left — the gate exists so they can
 choose, not so reviews become compulsory.
 
-**This gate applies to:** the work-branch PR (step 3 above) and the
-`develop` → `main` release PR (step 8, where the changeset is everything
-accumulated on `develop` since the last release).
+**This gate applies to:** the work-branch PR (step 3 above).
+
+The `develop` → `main` release PR follows the [Release PR
+Review](#release-pr-review) after it is opened as a draft (step 8), because the
+narrow review runs on that PR.
 
 **This gate does not apply to:** the version-bump PR in step 7. It's a version
 number in two files with no logic to review — open it directly.

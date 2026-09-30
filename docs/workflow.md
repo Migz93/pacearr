@@ -167,8 +167,9 @@ When the user says it's time to release:
 2. Create `chore/bump-version-X.Y.Z` from `develop`
 3. Update the version files listed in the Project Facts table in `AGENTS.md`
 4. Open a PR from that branch into `develop` and merge it
-5. Open a PR from `develop` into `main`, take it through the review gate, and
-   merge it with a merge commit: `gh pr merge --merge`
+5. Open a draft PR from `develop` into `main`, take it through the narrow
+   [release PR review](#release-pr-review), then merge it with a merge commit:
+   `gh pr merge --merge`
 6. Create and push the tag `vX.Y.Z` from the resulting merge commit on `main`
 7. Edit the release-drafter draft into the user-facing format in
    [Release Notes](#release-notes), then publish it
