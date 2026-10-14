@@ -131,6 +131,20 @@ were already present when the setting was enabled, then searches smaller new
 series in full and enrolls series over the configured total-episode limit onto
 the pilot baseline. Successful live decisions are persisted so a restart does
 not repeat them; dry-run and failed arrivals remain pending for a later poll.
+
+A series triaged for a full search stays under watch while it is not enrolled.
+Each poll compares its monitored real seasons with the ones already searched and
+sends one `SeasonSearch` for each season that has become monitored since, for
+example a later season requested through Seerr.
+
+| Case | Behaviour |
+|---|---|
+| Season newly monitored | Searched once, recorded in `new_show_triage.searched_seasons`, history `show.auto_triage_season_searched` |
+| Season unmonitored, then monitored again | Searched again |
+| Search fails | Not recorded; retried on the next poll |
+| Show enrolled | Skipped, and its recorded seasons are cleared, so the seasons an unenrolment monitors are recorded without searching |
+| Triaged before this tracking existed | First poll records the monitored seasons without searching |
+| Dry run | Logged only; searched on the first live poll |
 To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
 

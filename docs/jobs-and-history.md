@@ -12,7 +12,7 @@ Pacearr has seven scheduler-managed jobs.
 | `rolling-reconcile` | every 6 hours, configurable | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
 | `sonarr-library-refresh` | every 6 hours, configurable | Fetch Sonarr's series list and refresh `sonarr_library_cache` |
 | `recommendation-refresh` | every 6 hours, configurable | Recalculate projected-savings recommendations from the cached Sonarr library |
-| `new-show-triage` | every 5 minutes when enabled, configurable | Search smaller new Sonarr series in full and enroll larger ones into the pilot baseline |
+| `new-show-triage` | every 5 minutes when enabled, configurable | Search smaller new Sonarr series in full and enroll larger ones into the pilot baseline; search seasons later monitored on a searched series |
 
 Job state is stored in `job_run_state`.
 
@@ -205,7 +205,7 @@ puts it in a filter. An unmapped action still appears under "All types".
 
 | Category | Actions |
 |---|---|
-| Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch`, `show.season_excluded`, `show.season_included`, `show.episode_excluded`, `show.episode_included` |
+| Monitoring | `sonarr.baseline`, `sonarr.expand_season`, `sonarr.early_prefetch`, `show.season_excluded`, `show.season_included`, `show.episode_excluded`, `show.episode_included`, `show.auto_triage_season_searched` |
 | Cleanup | `cleanup.progressive`, `cleanup.prefetch`, `show.reset` |
 | Shows | `show.enrolled`, `show.unenrolled`, `show.auto_triaged`, `show.auto_triage`, `recommendation.ignored` |
 | Sync | `history.import`, `history.full_reconcile`, `sessions.check`, `rolling.reconcile`, `watch_events.reconciled` (no longer written, kept mapped so existing rows stay visible) |

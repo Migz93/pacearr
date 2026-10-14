@@ -582,6 +582,18 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // A series triaged for a full search only had the seasons monitored at that moment
+    // searched; a season requested later (monitored by Seerr with search on add off) was
+    // never searched. searched_seasons holds the monitored seasons already searched, so
+    // the triage poll can search a season once it becomes monitored. NULL means "not yet
+    // known": the next poll records the currently monitored seasons without searching,
+    // which is how rows triaged before this migration start.
+    version: 28,
+    up(db) {
+      db.exec("ALTER TABLE new_show_triage ADD COLUMN searched_seasons TEXT");
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

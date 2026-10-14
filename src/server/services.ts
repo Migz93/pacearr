@@ -89,6 +89,13 @@ const SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT = 3;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
+function monitoredRealSeasons(series: SonarrSeries): number[] {
+  return (series.seasons ?? [])
+    .filter((season) => season.seasonNumber > 0 && season.monitored)
+    .map((season) => season.seasonNumber)
+    .sort((a, b) => a - b);
+}
+
 /** The next season with real episodes in Sonarr, skipping gaps and ignoring specials. */
 function findNextRealSeason(realEpisodes: SonarrEpisode[], currentSeasonNumber: number): number | null {
   return [...new Set(realEpisodes.map((episode) => episode.seasonNumber))]
@@ -706,7 +713,14 @@ export class PacearrServices {
           }
         }
         if (decision === "enroll") automaticallyEnrolledSeriesIds.add(item.id);
-        this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
+        this.db.recordNewShowTriage({
+          seriesId: item.id,
+          title: item.title,
+          addedAt: item.added ?? null,
+          decision,
+          // SeriesSearch only covers what is monitored now; later seasons are searched as they become monitored.
+          ...(decision === "search" ? { searchedSeasons: monitoredRealSeasons(item) } : {}),
+        });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
         this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
       } catch (error) {
@@ -714,6 +728,9 @@ export class PacearrServices {
         errors.push(`${item.title}: ${message}`);
         this.logger.error("New Sonarr series triage failed", { seriesId: item.id, title: item.title, decision, error: message });
       }
+    }
+    if (this.isCurrentNewShowTriageActivation(activationAt)) {
+      errors.push(...await this.searchNewlyMonitoredTriagedSeasons(series, settings.dryRun));
     }
     if (repairHistoryAfterTriage && automaticallyEnrolledSeriesIds.size > 0) {
       let historyReconciled = false;
@@ -765,6 +782,77 @@ export class PacearrServices {
   private isCurrentNewShowTriageActivation(activationAt: string | null): boolean {
     const settings = this.db.getAppSettings();
     return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
+  }
+
+  /**
+   * A series triaged for a full search is left to Sonarr, but with search on add turned
+   * off in Seerr nothing searches a season requested later: Seerr only monitors it. Each
+   * season is searched once, on the poll that first sees it monitored. Returns errors for
+   * the triage summary; a failed season stays unrecorded and is retried next poll.
+   */
+  private async searchNewlyMonitoredTriagedSeasons(series: SonarrSeries[], dryRun: boolean): Promise<string[]> {
+    const errors: string[] = [];
+    const seriesById = new Map(series.map((item) => [item.id, item]));
+    for (const row of this.db.listSearchTriagedSeries()) {
+      const item = seriesById.get(row.seriesId);
+      if (!item) continue;
+      if (this.db.getRollingShowBySeriesId(row.seriesId)) {
+        // Rolling reconcile owns an enrolled show's monitoring. Forget the recorded
+        // seasons so an unenrolment, which monitors every season, is not mistaken for
+        // new requests; the next poll after it records them afresh.
+        if (row.searchedSeasons !== null) this.db.setNewShowTriageSearchedSeasons(row.seriesId, null);
+        continue;
+      }
+      const monitored = monitoredRealSeasons(item);
+      if (row.searchedSeasons === null) {
+        // Triaged before seasons were recorded, or just unenrolled: nothing is known to be
+        // newly requested, so record without searching.
+        this.db.setNewShowTriageSearchedSeasons(row.seriesId, monitored);
+        continue;
+      }
+      // Dropping seasons that are no longer monitored means a season requested again
+      // after being unmonitored is searched again.
+      const searched = new Set(row.searchedSeasons);
+      const newSeasons = monitored.filter((seasonNumber) => !searched.has(seasonNumber));
+      const stillMonitored = monitored.filter((seasonNumber) => searched.has(seasonNumber));
+      if (newSeasons.length === 0) {
+        if (stillMonitored.length !== row.searchedSeasons.length) this.db.setNewShowTriageSearchedSeasons(row.seriesId, stillMonitored);
+        continue;
+      }
+      if (dryRun) {
+        this.logger.info("Dry run: would search newly monitored seasons of a triaged Sonarr series", { seriesId: item.id, title: item.title, seasons: newSeasons });
+        continue;
+      }
+
+      const operation = this.acquireSeriesOperation(row.seriesId);
+      if (operation === null) {
+        this.logger.info("Skipped searching newly monitored seasons while another show operation is running", { seriesId: item.id, title: item.title, seasons: newSeasons });
+        continue;
+      }
+      const searchedNow: number[] = [];
+      try {
+        // A manual enrolment may have completed since the check above.
+        if (this.db.getRollingShowBySeriesId(row.seriesId)) continue;
+        for (const seasonNumber of newSeasons) {
+          try {
+            await this.getSonarr().searchSeason(row.seriesId, seasonNumber);
+            searchedNow.push(seasonNumber);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            errors.push(`${item.title} season ${seasonNumber} search: ${message}`);
+            this.logger.error("Search of a newly monitored season failed", { seriesId: item.id, title: item.title, seasonNumber, error: message });
+          }
+        }
+        this.db.setNewShowTriageSearchedSeasons(row.seriesId, [...stillMonitored, ...searchedNow].sort((a, b) => a - b));
+      } finally {
+        this.releaseSeriesOperation(row.seriesId, operation);
+      }
+      if (searchedNow.length > 0) {
+        this.db.addHistory("info", "show.auto_triage_season_searched", item.title, { seriesId: item.id, seasons: searchedNow });
+        this.logger.info("Searched newly monitored seasons of a triaged Sonarr series", { seriesId: item.id, title: item.title, seasons: searchedNow });
+      }
+    }
+    return errors;
   }
 
   private async searchNewSonarrSeries(seriesId: number): Promise<boolean> {

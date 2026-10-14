@@ -117,7 +117,8 @@ Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs withou
 When enabled, the `new-show-triage` job polls Sonarr on a configurable interval
 (default every five minutes) and acts only on series added after its activation
 boundary. It searches smaller arrivals in full and enrolls larger arrivals onto
-the pilot baseline. Completed
+the pilot baseline. Seasons monitored later on a searched, unenrolled series are
+searched once as each becomes monitored. Completed
 decisions and partial automatic enrollments are persisted independently of the
 replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
 never alter a manual enrollment.
