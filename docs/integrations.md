@@ -143,8 +143,9 @@ example a later season requested through Seerr.
 | Season unmonitored, then monitored again | Searched again |
 | Search fails | Not recorded; retried on the next poll |
 | Show enrolled | Skipped; unenrolment clears its recorded seasons, so the seasons it re-monitors are recorded without searching |
-| Triaged before this tracking existed | First poll records the monitored seasons without searching |
-| Dry run | Logged only; searched on the first live poll |
+| Triaged before this tracking existed | First poll records the monitored seasons from a fresh Sonarr read, without searching |
+| Dry run | Logged only; searched on the first live poll. Seasons no longer monitored are still forgotten |
+| Another operation holds the series | Skipped; checked again on the next poll |
 To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
 

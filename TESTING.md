@@ -343,6 +343,8 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Enrolling and unenrolling between polls does not search every season | Unenrolment forgets the recorded seasons, so the next poll records the re-monitored seasons without searching |
 | Dry run defers a newly monitored season search | No command in dry run; the season is searched on the first live poll |
 | Dry run enabled during a poll leaves seasons unrecorded | Dry run switched on after the poll read its settings, or while a season search awaits Sonarr, sends no further search and records nothing as searched; a later live poll searches the rest |
+| A season unmonitored during dry run is forgotten | The record drops an unmonitored season even when dry run skips the search, so monitoring it again is searched once live |
+| An unenrolment during another show's season search is not undone | Recorded seasons are re-read under the series lock, and an empty record is filled from a fresh Sonarr read, so the poll cannot restore a stale record that would search every re-monitored season |
 | A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
