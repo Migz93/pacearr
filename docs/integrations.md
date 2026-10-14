@@ -142,7 +142,7 @@ example a later season requested through Seerr.
 | Season newly monitored | Searched once, recorded in `new_show_triage.searched_seasons`, history `show.auto_triage_season_searched` |
 | Season unmonitored, then monitored again | Searched again |
 | Search fails | Not recorded; retried on the next poll |
-| Show enrolled | Skipped, and its recorded seasons are cleared, so the seasons an unenrolment monitors are recorded without searching |
+| Show enrolled | Skipped; unenrolment clears its recorded seasons, so the seasons it re-monitors are recorded without searching |
 | Triaged before this tracking existed | First poll records the monitored seasons without searching |
 | Dry run | Logged only; searched on the first live poll |
 To minimise downloads that Pacearr subsequently purges, disable

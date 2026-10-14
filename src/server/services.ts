@@ -797,9 +797,9 @@ export class PacearrServices {
       const item = seriesById.get(row.seriesId);
       if (!item) continue;
       if (this.db.getRollingShowBySeriesId(row.seriesId)) {
-        // Rolling reconcile owns an enrolled show's monitoring. Forget the recorded
-        // seasons so an unenrolment, which monitors every season, is not mistaken for
-        // new requests; the next poll after it records them afresh.
+        // Rolling reconcile owns an enrolled show's monitoring. removeShow forgets the
+        // recorded seasons on unenrolment; forgetting them here as well covers an
+        // unenrolment that re-monitored Sonarr but failed before removing the row.
         if (row.searchedSeasons !== null) this.db.setNewShowTriageSearchedSeasons(row.seriesId, null);
         continue;
       }
@@ -1388,6 +1388,8 @@ export class PacearrServices {
       const changed = await this.restoreSonarrMonitoring(show.sonarrSeriesId);
       this.db.deleteRollingShow(rollingShowId);
       this.db.completeNewShowTriageEnrollment(show.sonarrSeriesId);
+      // Every season is now monitored; a triage poll must not take that for new requests.
+      this.db.setNewShowTriageSearchedSeasons(show.sonarrSeriesId, null);
       this.plexArtwork.removeBackups(artwork);
       await this.sonarrTags.applyChange(show.sonarrSeriesId, { remove: "enrolled" });
       this.db.addHistory("info", "show.unenrolled", show.title, { rollingShowId });

@@ -679,3 +679,29 @@ test("dry run does not search a newly monitored season, which is searched once l
     cleanup();
   }
 });
+
+test("enrolling and unenrolling a search-triaged show between polls does not search every season", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const show = series(45, "Enrolled between polls", 55, "2026-08-11T12:00:01.000Z");
+  const state = { requests, series: [withSeasons(show, 4, [1])] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+
+    // No triage poll sees the show while it is enrolled.
+    const rolling = db.upsertRollingShow(state.series[0]!);
+    const result = await services.removeShow(rolling.id);
+    assert.equal(result.ok, true);
+    assert.equal(state.series[0]?.seasons?.filter((season) => season.seasonNumber > 0).every((season) => season.monitored), true);
+
+    requests.length = 0;
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 45)?.searchedSeasons, [1, 2, 3, 4]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});

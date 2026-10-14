@@ -340,6 +340,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | A search triage recorded before season tracking starts from its monitored seasons | A row with no recorded seasons is filled without searching, then a later season is searched |
 | An enrolled search-triaged show is left to rolling monitoring | No season search while enrolled, and the seasons an unenrolment monitors are recorded without searching |
 | A failed newly monitored season search is retried | The failed season stays unrecorded and is searched on the next poll |
+| Enrolling and unenrolling between polls does not search every season | Unenrolment forgets the recorded seasons, so the next poll records the re-monitored seasons without searching |
 | Dry run defers a newly monitored season search | No command in dry run; the season is searched on the first live poll |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
