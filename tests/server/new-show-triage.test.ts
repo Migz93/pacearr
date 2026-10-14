@@ -834,3 +834,30 @@ test("an unenrolment during another show's season search is not undone by the sa
     cleanup();
   }
 });
+
+test("dry run enabled during a poll leaves a new series pending instead of recording a blocked search", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const state: Parameters<typeof installSonarrFetchStub>[0] = {
+    requests,
+    series: [withSeasons(series(52, "Added during toggle", 30, "2026-08-11T12:00:01.000Z"), 2, [1])],
+    // Enabled after the poll read its settings, before the candidate is searched.
+    onSeriesFetch: () => db.updateAppSettings({ dryRun: true }),
+  };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+    assert.equal(db.listKnownNewShowTriageIds().has(52), false);
+
+    state.onSeriesFetch = undefined;
+    db.updateAppSettings({ dryRun: false });
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), [{ name: "SeriesSearch", seriesId: 52 }]);
+    assert.equal(db.listKnownNewShowTriageIds().has(52), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});

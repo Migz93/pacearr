@@ -705,10 +705,15 @@ export class PacearrServices {
             }
           }
         } else {
-          const searchStarted = await this.searchNewSonarrSeries(item.id);
-          if (!searchStarted) {
+          const searchResult = await this.searchNewSonarrSeries(item.id);
+          if (searchResult === "enrolled") {
             this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
             this.logger.info("Skipped automatic search for an already enrolled Sonarr series", { seriesId: item.id, title: item.title });
+            continue;
+          }
+          if (searchResult === "dry-run") {
+            // Left unrecorded, like any dry-run arrival, so a later live poll searches it.
+            this.logger.info("Dry run: would triage new Sonarr series", { seriesId: item.id, title: item.title, addedAt: item.added ?? null, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
             continue;
           }
         }
@@ -891,15 +896,19 @@ export class PacearrServices {
     return { errors, activationChanged };
   }
 
-  private async searchNewSonarrSeries(seriesId: number): Promise<boolean> {
+  private async searchNewSonarrSeries(seriesId: number): Promise<"searched" | "enrolled" | "dry-run"> {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
       // The candidate list is a snapshot. A manual enrollment may have completed
       // before this search obtained its series lock.
-      if (this.db.getRollingShowBySeriesId(seriesId)) return false;
-      await this.getSonarr().searchSeries(seriesId);
-      return true;
+      if (this.db.getRollingShowBySeriesId(seriesId)) return "enrolled";
+      // Dry run may have been enabled since the poll read its settings. The Sonarr
+      // client would block the search without failing, and the arrival would be
+      // recorded as searched, so check now and send with the matching live client.
+      if (this.isDryRun()) return "dry-run";
+      await this.getSonarr(false).searchSeries(seriesId);
+      return "searched";
     } finally {
       this.releaseSeriesOperation(seriesId, operation);
     }

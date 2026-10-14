@@ -336,6 +336,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Unenrolling a partial automatic enrollment clears its pending marker | A later manual enrollment cannot inherit stale automatic triage state after unenrollment |
 | A full-series search waits for another series operation | Triage retries instead of overlapping a concurrent enrollment or rolling mutation |
 | Retrying a partial large-show enrollment resumes it | A retry reuses the persisted rolling-show row without writing a second enrollment history entry |
+| Dry run enabled during a poll leaves a new series pending | A full-series search blocked by a dry run switched on mid-poll is not recorded, so the first live poll searches it |
 | A season monitored after a search triage is searched once | A later-requested season gets one `SeasonSearch`; repeat polls send nothing; a season unmonitored and monitored again is searched again |
 | A search triage recorded before season tracking starts from its monitored seasons | A row with no recorded seasons is filled without searching, then a later season is searched |
 | An enrolled search-triaged show is left to rolling monitoring | No season search while enrolled, and the seasons an unenrolment monitors are recorded without searching |
