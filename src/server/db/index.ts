@@ -457,11 +457,30 @@ export class PacearrDatabase {
       .map((row) => row.sonarr_series_id));
   }
 
-  recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search" }): void {
+  recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search"; searchedSeasons?: number[] }): void {
     this.db.prepare(`
-      INSERT OR IGNORE INTO new_show_triage (sonarr_series_id, title, added_at, decision, completed_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(input.seriesId, input.title, input.addedAt, input.decision, now());
+      INSERT OR IGNORE INTO new_show_triage (sonarr_series_id, title, added_at, decision, completed_at, searched_seasons)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, input.decision, now(), input.searchedSeasons ? JSON.stringify(input.searchedSeasons) : null);
+  }
+
+  /** Series triaged for a full search. `searchedSeasons` is null until the monitored seasons are first recorded. */
+  listSearchTriagedSeries(): Array<{ seriesId: number; title: string; searchedSeasons: number[] | null }> {
+    const rows = this.db.prepare("SELECT sonarr_series_id, title, searched_seasons FROM new_show_triage WHERE decision = 'search' ORDER BY sonarr_series_id")
+      .all() as Array<{ sonarr_series_id: number; title: string; searched_seasons: string | null }>;
+    return rows.map((row) => ({ seriesId: row.sonarr_series_id, title: row.title, searchedSeasons: parseJson<number[] | null>(row.searched_seasons, null) }));
+  }
+
+  /** Undefined when the series has no search triage row; null when its seasons are not yet recorded. */
+  getNewShowTriageSearchedSeasons(seriesId: number): number[] | null | undefined {
+    const row = this.db.prepare("SELECT searched_seasons FROM new_show_triage WHERE sonarr_series_id = ? AND decision = 'search'")
+      .get(seriesId) as { searched_seasons: string | null } | undefined;
+    return row ? parseJson<number[] | null>(row.searched_seasons, null) : undefined;
+  }
+
+  setNewShowTriageSearchedSeasons(seriesId: number, seasons: number[] | null): void {
+    this.db.prepare("UPDATE new_show_triage SET searched_seasons = ? WHERE sonarr_series_id = ?")
+      .run(seasons ? JSON.stringify(seasons) : null, seriesId);
   }
 
   hasPendingNewShowTriageEnrollment(seriesId: number): boolean {

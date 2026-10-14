@@ -89,6 +89,13 @@ const SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT = 3;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
+function monitoredRealSeasons(series: SonarrSeries): number[] {
+  return (series.seasons ?? [])
+    .filter((season) => season.seasonNumber > 0 && season.monitored)
+    .map((season) => season.seasonNumber)
+    .sort((a, b) => a - b);
+}
+
 /** The next season with real episodes in Sonarr, skipping gaps and ignoring specials. */
 function findNextRealSeason(realEpisodes: SonarrEpisode[], currentSeasonNumber: number): number | null {
   return [...new Set(realEpisodes.map((episode) => episode.seasonNumber))]
@@ -698,15 +705,27 @@ export class PacearrServices {
             }
           }
         } else {
-          const searchStarted = await this.searchNewSonarrSeries(item.id);
-          if (!searchStarted) {
+          const searchResult = await this.searchNewSonarrSeries(item.id);
+          if (searchResult === "enrolled") {
             this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision: "enroll" });
             this.logger.info("Skipped automatic search for an already enrolled Sonarr series", { seriesId: item.id, title: item.title });
             continue;
           }
+          if (searchResult === "dry-run") {
+            // Left unrecorded, like any dry-run arrival, so a later live poll searches it.
+            this.logger.info("Dry run: would triage new Sonarr series", { seriesId: item.id, title: item.title, addedAt: item.added ?? null, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
+            continue;
+          }
         }
         if (decision === "enroll") automaticallyEnrolledSeriesIds.add(item.id);
-        this.db.recordNewShowTriage({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, decision });
+        this.db.recordNewShowTriage({
+          seriesId: item.id,
+          title: item.title,
+          addedAt: item.added ?? null,
+          decision,
+          // SeriesSearch only covers what is monitored now; later seasons are searched as they become monitored.
+          ...(decision === "search" ? { searchedSeasons: monitoredRealSeasons(item) } : {}),
+        });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
         this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
       } catch (error) {
@@ -714,6 +733,9 @@ export class PacearrServices {
         errors.push(`${item.title}: ${message}`);
         this.logger.error("New Sonarr series triage failed", { seriesId: item.id, title: item.title, decision, error: message });
       }
+    }
+    if (this.isCurrentNewShowTriageActivation(activationAt)) {
+      errors.push(...await this.searchNewlyMonitoredTriagedSeasons(series, activationAt));
     }
     if (repairHistoryAfterTriage && automaticallyEnrolledSeriesIds.size > 0) {
       let historyReconciled = false;
@@ -767,15 +789,126 @@ export class PacearrServices {
     return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
   }
 
-  private async searchNewSonarrSeries(seriesId: number): Promise<boolean> {
+  /**
+   * A series triaged for a full search is left to Sonarr, but with search on add turned
+   * off in Seerr nothing searches a season requested later: Seerr only monitors it. Each
+   * season is searched once, on the poll that first sees it monitored. Returns errors for
+   * the triage summary; a failed season stays unrecorded and is retried next poll.
+   */
+  private async searchNewlyMonitoredTriagedSeasons(series: SonarrSeries[], activationAt: string | null): Promise<string[]> {
+    const errors: string[] = [];
+    const seriesById = new Map(series.map((item) => [item.id, item]));
+    for (const { seriesId } of this.db.listSearchTriagedSeries()) {
+      if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+        this.logger.info("Stopped searching newly monitored seasons after new-show triage activation changed");
+        break;
+      }
+      const item = seriesById.get(seriesId);
+      if (!item) continue;
+      // Every read and write of the recorded seasons happens under the series lock, so
+      // it cannot interleave with removeShow resetting them. A held lock is retried on
+      // the next poll.
+      const operation = this.acquireSeriesOperation(seriesId);
+      if (operation === null) {
+        this.logger.info("Skipped checking newly monitored seasons while another show operation is running", { seriesId, title: item.title });
+        continue;
+      }
+      try {
+        const result = await this.searchNewlyMonitoredSeasonsForSeries(item, activationAt);
+        errors.push(...result.errors);
+        if (result.activationChanged) {
+          this.logger.info("Stopped searching newly monitored seasons after new-show triage activation changed");
+          break;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${item.title} newly monitored seasons: ${message}`);
+        this.logger.error("Checking newly monitored seasons failed", { seriesId, title: item.title, error: message });
+      } finally {
+        this.releaseSeriesOperation(seriesId, operation);
+      }
+    }
+    return errors;
+  }
+
+  /** Caller holds the series lock. `item` is the poll's Sonarr snapshot. */
+  private async searchNewlyMonitoredSeasonsForSeries(item: SonarrSeries, activationAt: string | null): Promise<{ errors: string[]; activationChanged: boolean }> {
+    const errors: string[] = [];
+    // Re-read rather than trust the poll's snapshot: an earlier row's search awaited
+    // Sonarr, and an unenrolment may have reset this row meanwhile.
+    const searchedSeasons = this.db.getNewShowTriageSearchedSeasons(item.id);
+    if (searchedSeasons === undefined) return { errors, activationChanged: false };
+    if (this.db.getRollingShowBySeriesId(item.id)) {
+      // Rolling reconcile owns an enrolled show's monitoring. removeShow forgets the
+      // recorded seasons on unenrolment; forgetting them here as well covers an
+      // unenrolment that re-monitored Sonarr but failed before removing the row.
+      if (searchedSeasons !== null) this.db.setNewShowTriageSearchedSeasons(item.id, null);
+      return { errors, activationChanged: false };
+    }
+    if (searchedSeasons === null) {
+      // Triaged before seasons were recorded, or just unenrolled: nothing is known to be
+      // newly requested, so record without searching. Read Sonarr afresh, because the
+      // poll's snapshot can predate an unenrolment that monitored every season.
+      const current = await this.getSonarr().getSeriesById(item.id);
+      this.db.setNewShowTriageSearchedSeasons(item.id, monitoredRealSeasons(current));
+      return { errors, activationChanged: false };
+    }
+
+    const monitored = monitoredRealSeasons(item);
+    const searched = new Set(searchedSeasons);
+    const newSeasons = monitored.filter((seasonNumber) => !searched.has(seasonNumber));
+    // Dropping seasons that are no longer monitored means a season requested again
+    // after being unmonitored is searched again. This applies even when nothing is
+    // searched now, such as in dry run.
+    const stillMonitored = monitored.filter((seasonNumber) => searched.has(seasonNumber));
+    if (stillMonitored.length !== searchedSeasons.length) this.db.setNewShowTriageSearchedSeasons(item.id, stillMonitored);
+    if (newSeasons.length === 0) return { errors, activationChanged: false };
+    if (this.isDryRun()) {
+      this.logger.info("Dry run: would search newly monitored seasons of a triaged Sonarr series", { seriesId: item.id, title: item.title, seasons: newSeasons });
+      return { errors, activationChanged: false };
+    }
+
+    const searchedNow: number[] = [];
+    let activationChanged = false;
+    for (const seasonNumber of newSeasons) {
+      // Settings can change while a search awaits Sonarr. A season left unsearched
+      // stays unrecorded, so a later live poll searches it; a dry-run-blocked
+      // search must not be recorded as done, hence the explicit live client.
+      if (!this.isCurrentNewShowTriageActivation(activationAt)) {
+        activationChanged = true;
+        break;
+      }
+      if (this.isDryRun()) break;
+      try {
+        await this.getSonarr(false).searchSeason(item.id, seasonNumber);
+        searchedNow.push(seasonNumber);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${item.title} season ${seasonNumber} search: ${message}`);
+        this.logger.error("Search of a newly monitored season failed", { seriesId: item.id, title: item.title, seasonNumber, error: message });
+      }
+    }
+    if (searchedNow.length > 0) {
+      this.db.setNewShowTriageSearchedSeasons(item.id, [...stillMonitored, ...searchedNow].sort((a, b) => a - b));
+      this.db.addHistory("info", "show.auto_triage_season_searched", item.title, { seriesId: item.id, seasons: searchedNow });
+      this.logger.info("Searched newly monitored seasons of a triaged Sonarr series", { seriesId: item.id, title: item.title, seasons: searchedNow });
+    }
+    return { errors, activationChanged };
+  }
+
+  private async searchNewSonarrSeries(seriesId: number): Promise<"searched" | "enrolled" | "dry-run"> {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
       // The candidate list is a snapshot. A manual enrollment may have completed
       // before this search obtained its series lock.
-      if (this.db.getRollingShowBySeriesId(seriesId)) return false;
-      await this.getSonarr().searchSeries(seriesId);
-      return true;
+      if (this.db.getRollingShowBySeriesId(seriesId)) return "enrolled";
+      // Dry run may have been enabled since the poll read its settings. The Sonarr
+      // client would block the search without failing, and the arrival would be
+      // recorded as searched, so check now and send with the matching live client.
+      if (this.isDryRun()) return "dry-run";
+      await this.getSonarr(false).searchSeries(seriesId);
+      return "searched";
     } finally {
       this.releaseSeriesOperation(seriesId, operation);
     }
@@ -1300,6 +1433,8 @@ export class PacearrServices {
       const changed = await this.restoreSonarrMonitoring(show.sonarrSeriesId);
       this.db.deleteRollingShow(rollingShowId);
       this.db.completeNewShowTriageEnrollment(show.sonarrSeriesId);
+      // Every season is now monitored; a triage poll must not take that for new requests.
+      this.db.setNewShowTriageSearchedSeasons(show.sonarrSeriesId, null);
       this.plexArtwork.removeBackups(artwork);
       await this.sonarrTags.applyChange(show.sonarrSeriesId, { remove: "enrolled" });
       this.db.addHistory("info", "show.unenrolled", show.title, { rollingShowId });
