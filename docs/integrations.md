@@ -146,6 +146,7 @@ example a later season requested through Seerr.
 | Triaged before this tracking existed | First poll records the monitored seasons from a fresh Sonarr read, without searching |
 | Dry run | Logged only; searched on the first live poll. Seasons no longer monitored are still forgotten |
 | Another operation holds the series | Skipped; checked again on the next poll |
+
 To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
 
