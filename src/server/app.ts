@@ -554,6 +554,17 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
         ? previousSettings.newShowTriageEnabled ? previousSettings.newShowTriageEnabledAt : new Date().toISOString()
         : null;
     }
+    if (body.searchNewlyMonitoredSeasonsEnabled !== undefined) {
+      if (typeof body.searchNewlyMonitoredSeasonsEnabled !== "boolean") {
+        res.status(400).json({ error: "searchNewlyMonitoredSeasonsEnabled must be a boolean." });
+        return;
+      }
+      patch.searchNewlyMonitoredSeasonsEnabled = body.searchNewlyMonitoredSeasonsEnabled;
+      // Moves only on a real off → on change, like the triage boundary above.
+      patch.searchNewlyMonitoredSeasonsEnabledAt = body.searchNewlyMonitoredSeasonsEnabled
+        ? previousSettings.searchNewlyMonitoredSeasonsEnabled ? previousSettings.searchNewlyMonitoredSeasonsEnabledAt : new Date().toISOString()
+        : null;
+    }
     if (body.newShowTriageEpisodeThreshold !== undefined) {
       const threshold = Number(body.newShowTriageEpisodeThreshold);
       patch.newShowTriageEpisodeThreshold = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : DEFAULT_APP_SETTINGS.newShowTriageEpisodeThreshold));
@@ -577,6 +588,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       // Do not drop a new activation if the preceding activation is still
       // unwinding. The queued run uses the new activation boundary.
       scheduler?.runNowOrQueue("new-show-triage");
+    }
+    // The season check runs in the triage poll, so it is active only while both are on.
+    // Records kept from before it was off would make every season monitored meanwhile
+    // look newly requested; clearing them makes the next poll record without searching.
+    const seasonSearchActive = (settings: typeof appSettings) => settings.newShowTriageEnabled && settings.searchNewlyMonitoredSeasonsEnabled;
+    if (!seasonSearchActive(previousSettings) && seasonSearchActive(appSettings)) {
+      db.clearNewShowTriageSearchedSeasons();
+      logger.info("Searching newly monitored seasons enabled; currently monitored seasons will be recorded without searching");
     }
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");

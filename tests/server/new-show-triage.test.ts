@@ -80,8 +80,15 @@ function series(id: number, title: string, totalEpisodeCount: number, added?: st
   return { id, title, added, monitored: false, monitorNewItems: "none", seasons: [], statistics: { totalEpisodeCount } };
 }
 
-function enableTriage(db: PacearrDatabase, enabledAt: string, dryRun = false) {
-  db.updateAppSettings({ newShowTriageEnabled: true, newShowTriageEnabledAt: enabledAt, newShowTriageEpisodeThreshold: 80, dryRun });
+function enableTriage(db: PacearrDatabase, enabledAt: string, dryRun = false, seasonSearch = false) {
+  db.updateAppSettings({
+    newShowTriageEnabled: true,
+    newShowTriageEnabledAt: enabledAt,
+    newShowTriageEpisodeThreshold: 80,
+    dryRun,
+    searchNewlyMonitoredSeasonsEnabled: seasonSearch,
+    searchNewlyMonitoredSeasonsEnabledAt: seasonSearch ? enabledAt : null,
+  });
 }
 
 test("new-show triage ignores existing series and searches a new series at the 80 episode limit", async () => {
@@ -545,7 +552,7 @@ test("a season monitored after a show was triaged for search is searched once", 
   const state = { requests, series: [withSeasons(fargo, 5, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeriesSearch", seriesId: 40 }]);
 
@@ -585,11 +592,11 @@ test("a show triaged for search before seasons were recorded starts from its mon
   const state = { requests, series: [withSeasons(legacy, 3, [1, 2])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     db.recordNewShowTriage({ seriesId: 41, title: legacy.title, addedAt: legacy.added ?? null, decision: "search" });
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 41)?.searchedSeasons, [1, 2]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 41)?.searchedSeasons, [1, 2]);
 
     state.series = [withSeasons(legacy, 3, [1, 2, 3])];
     await services.triageNewSonarrSeries();
@@ -607,7 +614,7 @@ test("an enrolled show triaged for search is left to rolling monitoring and not 
   const state = { requests, series: [withSeasons(show, 4, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
     const rolling = db.upsertRollingShow(state.series[0]!);
 
@@ -621,7 +628,7 @@ test("an enrolled show triaged for search is left to rolling monitoring and not 
     state.series = [withSeasons(show, 4, [1, 2, 3, 4])];
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 42)?.searchedSeasons, [1, 2, 3, 4]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 42)?.searchedSeasons, [1, 2, 3, 4]);
   } finally {
     restoreFetch();
     cleanup();
@@ -635,20 +642,20 @@ test("a failed newly monitored season search is retried on the next poll", async
   const state = { requests, series: [withSeasons(show, 2, [1])], failingSearchSeriesIds: new Set<number>() };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     state.series = [withSeasons(show, 2, [1, 2])];
     state.failingSearchSeriesIds.add(43);
     await services.triageNewSonarrSeries();
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 43)?.searchedSeasons, [1]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 43)?.searchedSeasons, [1]);
     assert.equal(db.listHistory().some((event) => event.action === "show.auto_triage"), true);
 
     state.failingSearchSeriesIds.clear();
     requests.length = 0;
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 43, seasonNumber: 2 }]);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 43)?.searchedSeasons, [1, 2]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 43)?.searchedSeasons, [1, 2]);
   } finally {
     restoreFetch();
     cleanup();
@@ -662,7 +669,7 @@ test("dry run does not search a newly monitored season, which is searched once l
   const state = { requests, series: [withSeasons(show, 2, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     db.updateAppSettings({ dryRun: true });
@@ -670,7 +677,7 @@ test("dry run does not search a newly monitored season, which is searched once l
     requests.length = 0;
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 44)?.searchedSeasons, [1]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 44)?.searchedSeasons, [1]);
 
     db.updateAppSettings({ dryRun: false });
     await services.triageNewSonarrSeries();
@@ -688,7 +695,7 @@ test("enrolling and unenrolling a search-triaged show between polls does not sea
   const state = { requests, series: [withSeasons(show, 4, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     // No triage poll sees the show while it is enrolled.
@@ -700,7 +707,7 @@ test("enrolling and unenrolling a search-triaged show between polls does not sea
     requests.length = 0;
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 45)?.searchedSeasons, [1, 2, 3, 4]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 45)?.searchedSeasons, [1, 2, 3, 4]);
   } finally {
     restoreFetch();
     cleanup();
@@ -714,7 +721,7 @@ test("dry run enabled during a poll leaves newly monitored seasons unrecorded fo
   const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(show, 3, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     // Enabled after the poll read its settings, before it reaches the season check.
@@ -731,7 +738,7 @@ test("dry run enabled during a poll leaves newly monitored seasons unrecorded fo
     state.onCommand = () => { db.updateAppSettings({ dryRun: true }); };
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 46, seasonNumber: 2 }]);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 46)?.searchedSeasons, [1, 2]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 46)?.searchedSeasons, [1, 2]);
 
     state.onCommand = undefined;
     db.updateAppSettings({ dryRun: false });
@@ -752,7 +759,7 @@ test("a triage activation change during a season search stops further season sea
   const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(first, 3, [1]), withSeasons(second, 2, [1])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     state.series = [withSeasons(first, 3, [1, 2, 3]), withSeasons(second, 2, [1, 2])];
@@ -760,8 +767,9 @@ test("a triage activation change during a season search stops further season sea
     requests.length = 0;
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 47, seasonNumber: 2 }]);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 47)?.searchedSeasons, [1, 2]);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 48)?.searchedSeasons, [1]);
+    // Not recorded once the activation moved: turning it back on clears every record.
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 47)?.searchedSeasons, [1]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 48)?.searchedSeasons, [1]);
   } finally {
     restoreFetch();
     cleanup();
@@ -775,14 +783,14 @@ test("a season unmonitored during dry run is forgotten, so requesting it again i
   const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(show, 3, [1, 2])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
 
     // In one dry-run poll, season 2 is unmonitored and season 3 newly monitored.
     db.updateAppSettings({ dryRun: true });
     state.series = [withSeasons(show, 3, [1, 3])];
     await services.triageNewSonarrSeries();
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 49)?.searchedSeasons, [1]);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 49)?.searchedSeasons, [1]);
 
     db.updateAppSettings({ dryRun: false });
     state.series = [withSeasons(show, 3, [1, 2, 3])];
@@ -806,7 +814,7 @@ test("an unenrolment during another show's season search is not undone by the sa
   const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(searching, 2, [1]), withSeasons(unenrolled, 3, [1, 2])] };
   const restoreFetch = installSonarrFetchStub(state);
   try {
-    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
     await services.triageNewSonarrSeries();
     // Enrolled with no poll since, so its recorded seasons are still [1, 2].
     const rolling = db.upsertRollingShow(state.series[1]!);
@@ -823,12 +831,14 @@ test("an unenrolment during another show's season search is not undone by the sa
     };
     await services.triageNewSonarrSeries();
     assert.equal(unenrolledDuringSearch, true);
-    assert.deepEqual(db.listSearchTriagedSeries().find((row) => row.seriesId === 51)?.searchedSeasons, [1, 2, 3]);
+    // The snapshot predates the unenrolment, so the record waits for the next poll.
+    assert.equal(db.listTriagedSeries().find((row) => row.seriesId === 51)?.searchedSeasons, null);
 
     state.onCommand = undefined;
     requests.length = 0;
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 51)?.searchedSeasons, [1, 2, 3]);
   } finally {
     restoreFetch();
     cleanup();
@@ -856,6 +866,87 @@ test("dry run enabled during a poll leaves a new series pending instead of recor
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeriesSearch", seriesId: 52 }]);
     assert.equal(db.listKnownNewShowTriageIds().has(52), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a season monitored on a series that predates triage is searched once", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const americans = series(53, "The Americans (2013)", 79, "2026-06-28T17:45:06.000Z");
+  const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(americans, 6, [1])] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+    assert.deepEqual(db.listTriagedSeries().find((row) => row.seriesId === 53)?.searchedSeasons, [1]);
+
+    state.series = [withSeasons(americans, 6, [1, 2, 3])];
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), [
+      { name: "SeasonSearch", seriesId: 53, seasonNumber: 2 },
+      { name: "SeasonSearch", seriesId: 53, seasonNumber: 3 },
+    ]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("newly monitored seasons are not searched or recorded while the setting is off", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const existing = series(54, "Existing", 30, "2026-06-28T17:45:06.000Z");
+  const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(existing, 3, [1])] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z");
+    await services.triageNewSonarrSeries();
+    state.series = [withSeasons(existing, 3, [1, 2])];
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+    assert.equal(db.listTriagedSeries().find((row) => row.seriesId === 54)?.searchedSeasons, null);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("recording the seasons of many existing series reads only the poll's series list", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const library = Array.from({ length: 25 }, (_, index) => withSeasons(series(100 + index, `Existing ${index}`, 30, "2026-06-28T17:45:06.000Z"), 3, [1]));
+  const restoreFetch = installSonarrFetchStub({ requests, series: library });
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
+    await services.triageNewSonarrSeries();
+    assert.equal(db.listTriagedSeries().filter((row) => row.searchedSeasons !== null).length, 25);
+    assert.equal(requests.filter((request) => /^\/api\/v3\/series\/\d+$/.test(request.pathname)).length, 0);
+    assert.equal(requests.filter((request) => request.pathname === "/api/v3/series").length, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("turning the setting off mid-poll stops further season searches", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const first = series(55, "First", 30, "2026-06-28T17:45:06.000Z");
+  const second = series(56, "Second", 30, "2026-06-28T17:45:07.000Z");
+  const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(first, 3, [1]), withSeasons(second, 2, [1])] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
+    await services.triageNewSonarrSeries();
+
+    state.series = [withSeasons(first, 3, [1, 2, 3]), withSeasons(second, 2, [1, 2])];
+    state.onCommand = () => { db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabled: false, searchNewlyMonitoredSeasonsEnabledAt: null }); };
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 55, seasonNumber: 2 }]);
   } finally {
     restoreFetch();
     cleanup();

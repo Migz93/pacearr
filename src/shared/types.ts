@@ -105,6 +105,10 @@ export interface AppSettings {
   newShowTriageEpisodeThreshold: number;
   /** Internal activation boundary; series already in Sonarr before this instant are ignored. */
   newShowTriageEnabledAt: string | null;
+  /** Searches a season once it becomes monitored on an unenrolled series. Runs in the triage poll. */
+  searchNewlyMonitoredSeasonsEnabled: boolean;
+  /** Internal; moves on each off → on change so a poll that started before it stops. */
+  searchNewlyMonitoredSeasonsEnabledAt: string | null;
 }
 
 export interface PlexArtworkRecord {
