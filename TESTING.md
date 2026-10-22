@@ -435,15 +435,24 @@ Read-only. Safe to run against a live instance.
 | Sidebar navigation links are present | The five primary navigation links render inside the app navigation |
 | Unauthenticated requests redirect to the login page | A fresh browser context is redirected from `/dashboard` to `/login` |
 
-### `tests/playwright/settings.spec.ts` — Settings navigation
+### `tests/playwright/settings.spec.ts` — Settings navigation and forms
 
-Read-only. Safe to run against a live instance.
+Read-only. Safe to run against a live instance: form tests discard their changes, or
+intercept their save requests in the browser so nothing reaches the server.
 
 | Test | What it checks |
 |---|---|
 | All settings tabs are visible | General, Plex, Sonarr, Tautulli, Logs, Jobs, and About render |
 | Clicking settings tabs updates the URL | Each tab writes its expected `?tab=` query parameter |
 | Opening a one-hour job schedule preserves its 60-minute preset | The Jobs editor reads its rendered “Every 1 hour” description as 60 minutes, so saving without a change cannot turn the schedule into every minute |
+| Dependent settings stay visible but follow their parent toggle | Early season prefetch's options stay on the page whichever way the toggle is set, are enabled only while it is on, and Discard restores the toggle |
+| The save bar only appears once something changes | The General tab's save bar is hidden until a field changes, and hides again once the field is back at its saved value |
+| A save error can be dismissed once the form is back at its saved values | A client-side validation error shows in the save bar; once the field is restored, the bar offers Dismiss, which clears the error and the bar |
+| A settings tab and tab switching are locked while its save is in flight | While a held save is pending, the tab's fields and the other tab buttons are disabled; once it fails they re-enable, and after reverting the field the error can be dismissed |
+| A Plex save sends the artwork setting before the connection | The artwork PATCH, which is safe to repeat, is sent before the connection POST, so a failed PATCH cannot leave an already-saved connection to be posted again on retry |
+| A Sonarr save sends the connection before the tag setting | A library refresh started by turning tag writing on cannot run ahead of a newly saved connection |
+| A save whose settings reload fails says it was saved and blocks saving until refresh | When the save succeeds but reloading the settings fails, the save bar says the save went through, and a page banner asks for a refresh; discarding keeps the banner and saving stays disabled, so stale values cannot undo the save |
+| Discarding after a partly failed save shows what the server now holds | When a Sonarr connection save lands but the tags save fails, the form re-syncs from the reloaded settings, so Discard leaves the saved base URL in place instead of the old one |
 
 ### `tests/playwright/shows.spec.ts` — Shows navigation and filters
 

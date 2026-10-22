@@ -10,8 +10,8 @@ non-obvious CSS traps found during the #87 mobile audit.
 | Breakpoint | Where | Purpose |
 |---|---|---|
 | `md` (768px, Tailwind default) | `Layout.tsx` | Sidebar switches between the permanent desktop rail and the off-canvas mobile drawer |
-| `max-[820px]` | Most page headers/controls (`Shows.tsx`, `Users.tsx`, `Settings.tsx`, `Dashboard.tsx`) | Control rows and multi-column grids stack to a single column or reduced column count for tablet-and-below |
-| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone |
+| `max-[820px]` | Most page headers/controls (`Shows.tsx`, `Users.tsx`, `Settings.tsx`, `Dashboard.tsx`), and wide settings rows in `FormControls.tsx` | Control rows and multi-column grids stack to a single column or reduced column count for tablet-and-below; a settings row with a text input drops it under the label |
+| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid, compact settings rows and the unsaved-changes bar in `FormControls.tsx` | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone; a number box drops under its label, while a toggle keeps to the right |
 
 Every authenticated route renders inside `Page` (`components/Page.tsx`), which
 sets `mx-auto max-w-7xl p-6`, inside `Layout.tsx`'s content column

@@ -50,7 +50,7 @@ inactive or have progressed beyond it). Dry-run previews this cleanup without
 clearing persisted prefetch state. This reclaim, like expanded-season cleanup,
 is disabled when the **Progressive cleanup** setting is disabled.
 
-The settings are under Settings → General → Rolling behaviour:
+The settings are under Settings → General → Watching and expansion:
 
 | Setting | Default | Meaning |
 |---|---:|---|
