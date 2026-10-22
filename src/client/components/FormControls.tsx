@@ -255,8 +255,7 @@ export function TestConnection({ testing, disabled, result, onTest }: TestConnec
  * The one save model for every settings tab: edits stay local until saved, and this bar
  * pins to the bottom of the viewport once something has changed, so the save is never a
  * scroll away and it's clear there is something unsaved. After a save it stays just
- * long enough to confirm it; an error stays until the next save, or until the
- * form is back at its saved values.
+ * long enough to confirm it; an error stays until the next save, Discard, or Dismiss.
  */
 export function UnsavedChangesBar({ dirty, saving, success, error, onSave, onDiscard, saveDisabled = false }: {
   dirty: boolean;
@@ -278,7 +277,9 @@ export function UnsavedChangesBar({ dirty, saving, success, error, onSave, onDis
                 : null}
       </span>
       <div className="flex flex-wrap items-center gap-2 max-[480px]:justify-end">
-        <button type="button" className={secondaryButtonClass} disabled={saving || !dirty} onClick={onDiscard}>Discard</button>
+        {/* With an error but nothing left to save (a failed step after the rest landed),
+            the button dismisses the error instead. */}
+        <button type="button" className={secondaryButtonClass} disabled={saving || (!dirty && !error)} onClick={onDiscard}>{dirty ? "Discard" : "Dismiss"}</button>
         <button type="button" className={primaryButtonClass} disabled={saving || !dirty || saveDisabled} aria-busy={saving} onClick={onSave}>
           {saving ? "Saving..." : "Save changes"}
         </button>

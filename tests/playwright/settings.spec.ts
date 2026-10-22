@@ -70,7 +70,7 @@ test("the save bar only appears once something changes", async ({ page }) => {
 });
 
 // An empty field fails client-side validation, so nothing is sent to the server.
-test("a save error clears once the form is back at its saved values", async ({ page }) => {
+test("a save error can be dismissed once the form is back at its saved values", async ({ page }) => {
   await openPage(page, "/settings", "Settings");
   const activityWindow = page.getByRole("spinbutton", { name: "Viewer activity window" });
   const original = await activityWindow.inputValue();
@@ -80,6 +80,7 @@ test("a save error clears once the form is back at its saved values", async ({ p
   await expect(page.getByText("Viewer activity window must be a positive whole number of days.")).toBeVisible();
 
   await activityWindow.fill(original);
+  await page.getByRole("button", { name: "Dismiss" }).click();
   await expect(page.getByText("Viewer activity window must be a positive whole number of days.")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
 });
@@ -109,6 +110,7 @@ test("a settings tab and tab switching are locked while its save is in flight", 
   await expect(activityWindow).toBeEnabled();
   await expect(page.getByRole("button", { name: "Plex", exact: true })).toBeEnabled();
   await activityWindow.fill(original);
+  await page.getByRole("button", { name: "Dismiss" }).click();
   await expect(page.getByText("Simulated save failure")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
 });
@@ -188,4 +190,41 @@ test("a save whose settings reload fails says it was saved and blocks saving unt
   await expect(staleBanner).toBeVisible();
   await activityWindow.fill(String(Number(await activityWindow.inputValue()) + 1));
   await expect(page.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
+// Every request is intercepted in the browser, so nothing reaches the server.
+test("discarding after a partly failed save shows what the server now holds", async ({ page }) => {
+  const settingsResponse = await page.request.get("/api/settings");
+  await expect(settingsResponse).toBeOK();
+  const settings = await settingsResponse.json() as { app: { sonarrTagsEnabled: boolean }; sonarr: { baseUrl: string } | null };
+  const newBaseUrl = `${settings.sonarr?.baseUrl ?? "http://sonarr:8989"}/`;
+
+  let connectionSaved = false;
+  await page.route("**/api/settings/sonarr", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    connectionSaved = true;
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/settings/app", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Simulated tags failure" }) });
+  });
+  // Once the connection "saved", the reload reports the new base URL, as the server would.
+  await page.route("**/api/settings", async (route) => {
+    if (!connectionSaved) return route.fallback();
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...settings, sonarr: { ...settings.sonarr, baseUrl: newBaseUrl } }) });
+  });
+
+  await openPage(page, "/settings?tab=sonarr", "Settings");
+  const tags = page.getByRole("checkbox", { name: "Write tags to Sonarr", exact: true });
+  await tags.click({ force: true });
+  const baseUrl = page.getByRole("textbox", { name: "Base URL" });
+  await baseUrl.fill(newBaseUrl);
+  await page.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(page.getByText("Simulated tags failure")).toBeVisible();
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(baseUrl).toHaveValue(newBaseUrl);
+  await expect(tags).toBeChecked({ checked: settings.app.sonarrTagsEnabled });
+  await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
 });

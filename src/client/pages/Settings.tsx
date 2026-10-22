@@ -82,18 +82,30 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
     void loadSettings();
   }, [loadSettings]);
 
-  // The reload after a tab saves. Unlike loadSettings it throws, so the tab reports the
-  // failure instead of "Saved", and it marks the settings stale (see settingsStale).
+  // The reload after a tab saves, whether the save worked or not. It returns the fresh
+  // settings so the tab can re-sync its form from them directly. Unlike loadSettings it
+  // throws, so the tab reports the failure, and it marks the settings stale (see
+  // settingsStale).
   const reloadAfterSave = useCallback(async () => {
     try {
-      setSettings(await apiGet<SettingsResponse>("/api/settings"));
+      const fresh = await apiGet<SettingsResponse>("/api/settings");
+      setSettings(fresh);
       setError(null);
+      return fresh;
     } catch (caught) {
       setSettingsStale(true);
       setError("Settings could not be reloaded after a save, so this page may be out of date. Refresh the page before saving again.");
       throw new Error(`Saved, but the settings could not be reloaded: ${caught instanceof Error ? caught.message : String(caught)}.`);
     }
   }, []);
+
+  // General and Plex settings also show outside this page (the dry-run badge, artwork),
+  // so the app shell refreshes after their saves too.
+  const reloadAndRefreshApp = useCallback(async () => {
+    const fresh = await reloadAfterSave();
+    await onSaved();
+    return fresh;
+  }, [reloadAfterSave, onSaved]);
 
   function setTab(tab: Tab) {
     setSearchParams({ tab }, { replace: true });
@@ -122,10 +134,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         <PageLoading label="Loading settings..." />
       ) : (
         <>
-          {activeTab === "general" && settings && <GeneralTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
-          {activeTab === "plex" && settings && <PlexTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
-          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
-          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
+          {activeTab === "general" && settings && <GeneralTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} reload={reloadAndRefreshApp} />}
+          {activeTab === "plex" && settings && <PlexTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} reload={reloadAndRefreshApp} />}
+          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} reload={reloadAfterSave} />}
+          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} reload={reloadAfterSave} />}
           {activeTab === "logs" && <LogsTab />}
           {activeTab === "jobs" && <JobsTab />}
           {activeTab === "about" && <AboutTab />}
@@ -139,24 +151,39 @@ interface SettingsTabProps {
   settings: SettingsResponse;
   /** The settings may predate a save whose reload failed, so saving is off. */
   stale: boolean;
-  onSave: () => Promise<void>;
+  /** Reloads the settings after a save attempt and returns them. */
+  reload: () => Promise<SettingsResponse>;
   /** Reports a save in flight, so the parent can lock tab switching until it lands. */
   onSavingChange: (saving: boolean) => void;
 }
 
+/** A save rejected before any request was sent, so there is nothing to reload. */
+class SettingsValidationError extends Error {}
+
+/**
+ * A form re-synced after a failed save: fields the user edited keep their edits, and the
+ * rest take the server's current values. Whatever part of the save did land then stops
+ * counting as a change, so Discard shows what the server really holds.
+ */
+function rebaseForm<T extends object>(form: T, before: T, after: T): T {
+  const result = { ...after };
+  for (const key of Object.keys(form) as (keyof T)[]) {
+    if (!sameValues(form[key], before[key])) result[key] = form[key];
+  }
+  return result;
+}
+
 /**
  * Saving state for a settings tab's UnsavedChangesBar. "Saved" clears itself after a
- * moment; the form has already re-synced from the reloaded settings by then, so the
- * bar has nothing left to show and drops away. An error clears once the form is back
- * at its saved values (edited back or discarded), since there is then nothing left to
- * save and the bar would otherwise be stuck showing it with both buttons disabled.
+ * moment. An error stays until the next save, Discard, or Dismiss, which the bar offers
+ * once there is nothing left to save.
  */
-function useSaveStatus(dirty: boolean, onSavingChange: (saving: boolean) => void) {
+function useSaveStatus(onSavingChange: (saving: boolean) => void) {
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => onSavingChange(saving), [saving, onSavingChange]);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => onSavingChange(saving), [saving, onSavingChange]);
 
   useEffect(() => {
     if (!success) return;
@@ -164,32 +191,51 @@ function useSaveStatus(dirty: boolean, onSavingChange: (saving: boolean) => void
     return () => clearTimeout(timer);
   }, [success]);
 
-  useEffect(() => {
-    if (!dirty) setError(null);
-  }, [dirty]);
-
-  async function run(action: () => Promise<void>) {
+  /**
+   * Runs `send`, then reloads the settings whether it worked or not: a save can fail
+   * after part of it landed (one of two requests, or a route that saves before a later
+   * step fails), and the form must not go on comparing against settings the server no
+   * longer holds. `resync` gets the fresh settings and whether the whole save worked.
+   * Only a validation error, raised before anything is sent, skips the reload.
+   */
+  async function run(send: () => Promise<void>, reload: () => Promise<SettingsResponse>, resync: (fresh: SettingsResponse, saved: boolean) => void) {
     setSaving(true);
     setSuccess(false);
     setError(null);
+    let sendError: unknown = null;
     try {
-      await action();
-      setSuccess(true);
+      await send();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      sendError = caught;
+    }
+    try {
+      if (sendError instanceof SettingsValidationError) {
+        setError(sendError.message);
+        return;
+      }
+      const fresh = await reload();
+      resync(fresh, sendError === null);
+      if (sendError) setError(errorMessage(sendError));
+      else setSuccess(true);
+    } catch (reloadError) {
+      // The reload marked the page stale. A failed send is still the more useful message.
+      setError(errorMessage(sendError ?? reloadError));
     } finally {
       setSaving(false);
     }
   }
 
-  return { saving, success, error, run };
+  return { saving, success, error, clearError: () => setError(null), run };
+}
+
+function errorMessage(caught: unknown) {
+  return caught instanceof Error ? caught.message : String(caught);
 }
 
 /**
  * Wraps a settings tab's cards and its save bar. Every control is disabled while a save
- * is in flight: the form re-syncs from the reloaded settings when it lands, which would
- * silently drop edits made meanwhile, and a field edited back to its saved value
- * mid-save would leave a failure error showing on a form with nothing left to save.
+ * is in flight, since the form re-syncs from the reloaded settings when it lands and
+ * would silently drop edits made meanwhile.
  */
 function SettingsTabForm({ saving, children }: { saving: boolean; children: ReactNode }) {
   return <fieldset disabled={saving} aria-busy={saving} className="grid min-w-0 gap-4">{children}</fieldset>;
@@ -222,15 +268,15 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
   };
 }
 
-function GeneralTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
+function GeneralTab({ settings, stale, reload, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => generalFormFromSettings(settings.app), [settings.app]);
   const [form, setForm] = useState<GeneralForm>(initial);
   const dirty = !sameValues(form, initial);
-  const status = useSaveStatus(dirty, onSavingChange);
+  const status = useSaveStatus(onSavingChange);
 
-  useEffect(() => setForm(initial), [initial]);
 
   function save() {
+    const before = initial;
     return status.run(async () => {
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
@@ -242,26 +288,26 @@ function GeneralTab({ settings, stale, onSave, onSavingChange }: SettingsTabProp
       const progressiveCleanupDelayDays = form.progressiveCleanupDelayDays.trim() === "" ? Number.NaN : Number(form.progressiveCleanupDelayDays);
       const recommendationMinimumSavingsGb = form.recommendationMinimumSavingsGb.trim() === "" ? Number.NaN : Number(form.recommendationMinimumSavingsGb);
       if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
-        throw new Error("Early prefetch values must be positive whole numbers.");
+        throw new SettingsValidationError("Early prefetch values must be positive whole numbers.");
       }
       if (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1)) {
-        throw new Error("New-show triage episode limit must be a positive whole number.");
+        throw new SettingsValidationError("New-show triage episode limit must be a positive whole number.");
       }
       // The server clamps every one of these to a safe value regardless (see
       // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
       // without this check it fails silently: the field just snaps to the clamped number
       // after the save completes, with no indication anything was wrong.
       if (!Number.isInteger(viewerActivityWindowDays) || viewerActivityWindowDays < 1) {
-        throw new Error("Viewer activity window must be a positive whole number of days.");
+        throw new SettingsValidationError("Viewer activity window must be a positive whole number of days.");
       }
       if (!Number.isInteger(historyRetentionDays) || historyRetentionDays < 1) {
-        throw new Error("History retention must be a positive whole number of days.");
+        throw new SettingsValidationError("History retention must be a positive whole number of days.");
       }
       if (form.progressiveCleanupEnabled && (!Number.isInteger(progressiveCleanupDelayDays) || progressiveCleanupDelayDays < 0)) {
-        throw new Error("Cleanup delay must be a whole number of days, zero or more.");
+        throw new SettingsValidationError("Cleanup delay must be a whole number of days, zero or more.");
       }
       if (!Number.isFinite(recommendationMinimumSavingsGb) || recommendationMinimumSavingsGb < 0) {
-        throw new Error("Minimum savings must be zero or more.");
+        throw new SettingsValidationError("Minimum savings must be zero or more.");
       }
       // Only the fields this tab owns. Spreading the whole form would PATCH back the
       // job intervals as they were when the tab loaded, silently undoing a schedule
@@ -281,7 +327,9 @@ function GeneralTab({ settings, stale, onSave, onSavingChange }: SettingsTabProp
         newShowTriageEnabled: form.newShowTriageEnabled,
         ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold, searchNewlyMonitoredSeasonsEnabled: form.searchNewlyMonitoredSeasonsEnabled } : {}),
       });
-      await onSave();
+    }, reload, (fresh, saved) => {
+      const after = generalFormFromSettings(fresh.app);
+      setForm((current) => saved ? after : rebaseForm(current, before, after));
     });
   }
 
@@ -422,7 +470,7 @@ function GeneralTab({ settings, stale, onSave, onSavingChange }: SettingsTabProp
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => setForm(initial)}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
         saveDisabled={stale}
       />
     </SettingsTabForm>
@@ -449,7 +497,7 @@ function plexFormFromSettings(settings: SettingsResponse): PlexForm {
   };
 }
 
-function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
+function PlexTab({ settings, stale, reload, onSavingChange }: SettingsTabProps) {
   const [availableServers, setAvailableServers] = useState<PlexConnectionOption[]>([]);
   const [loadingServers, setLoadingServers] = useState(false);
   const [serversError, setServersError] = useState<string | null>(null);
@@ -463,9 +511,8 @@ function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) 
   // flips the artwork toggle must not post it.
   const connectionDirty = !sameValues(connection, initialConnection);
   const dirty = connectionDirty || artworkEnabled !== initialArtwork;
-  const status = useSaveStatus(dirty, onSavingChange);
+  const status = useSaveStatus(onSavingChange);
 
-  useEffect(() => setForm(initial), [initial]);
 
   const groupedServers = useMemo(() => availableServers.map((option) => ({
     value: option.uri,
@@ -514,6 +561,7 @@ function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) 
   }
 
   function save() {
+    const before = initial;
     return status.run(async () => {
       // The artwork PATCH goes first, so a failed PATCH can't leave an already-saved
       // connection to be posted again on retry; repeating the PATCH has no side effects.
@@ -522,7 +570,9 @@ function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) 
       // often discovery, and a retry runs that again.
       if (artworkEnabled !== initialArtwork) await apiPatch("/api/settings/app", { artworkEnabled });
       if (connectionDirty) await apiPost("/api/settings/plex", buildPayload());
-      await onSave();
+    }, reload, (fresh, saved) => {
+      const after = plexFormFromSettings(fresh);
+      setForm((current) => saved ? after : rebaseForm(current, before, after));
     });
   }
 
@@ -581,7 +631,7 @@ function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) 
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => setForm(initial)}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
         saveDisabled={stale}
       />
     </SettingsTabForm>
@@ -622,7 +672,7 @@ function sonarrFormFromSettings(settings: SettingsResponse): SonarrForm {
   return { baseUrl: settings.sonarr?.baseUrl ?? "", apiKey: "", apiKeyTouched: false, tagsEnabled: settings.app.sonarrTagsEnabled };
 }
 
-function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
+function SonarrTab({ settings, stale, reload, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => sonarrFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<SonarrForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -636,9 +686,8 @@ function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps
   const connectionDirty = baseUrl !== initial.baseUrl || apiKey !== "";
   const tagsDirty = form.tagsEnabled !== initial.tagsEnabled;
   const dirty = connectionDirty || tagsDirty;
-  const status = useSaveStatus(dirty, onSavingChange);
+  const status = useSaveStatus(onSavingChange);
 
-  useEffect(() => setForm(initial), [initial]);
 
   async function testConnection() {
     setTesting(true);
@@ -654,6 +703,8 @@ function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps
   }
 
   function save() {
+    const before = initial;
+    let connectionSaved = false;
     return status.run(async () => {
       // Unlike Plex, the connection goes first. Turning tag writing on starts a library
       // refresh straight away, and one started before a new connection was saved would
@@ -661,9 +712,23 @@ function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps
       // order, that refresh queues behind the one the connection save starts. The cost
       // is that a retry after a failed tags save repeats the connection save, which only
       // re-tests it and queues at most one more refresh.
-      if (connectionDirty) await apiPost("/api/settings/sonarr", credentials);
+      if (connectionDirty) {
+        await apiPost("/api/settings/sonarr", credentials);
+        connectionSaved = true;
+      }
       if (tagsDirty) await apiPatch("/api/settings/app", { sonarrTagsEnabled: form.tagsEnabled });
-      await onSave();
+    }, reload, (fresh, saved) => {
+      const after = sonarrFormFromSettings(fresh);
+      if (saved) {
+        setForm(after);
+        return;
+      }
+      // A typed API key never shows in the reloaded settings, so a rebase alone would
+      // keep a key that has already been saved looking like a change.
+      setForm((current) => {
+        const rebased = rebaseForm(current, before, after);
+        return connectionSaved ? { ...rebased, baseUrl: after.baseUrl, apiKey: "", apiKeyTouched: false } : rebased;
+      });
     });
   }
 
@@ -694,7 +759,7 @@ function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => setForm(initial)}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
         saveDisabled={stale || (connectionDirty && credentialsIncomplete)}
       />
     </SettingsTabForm>
@@ -805,7 +870,7 @@ function tautulliFormFromSettings(settings: SettingsResponse): TautulliForm {
   return { enabled: settings.tautulli.enabled, baseUrl: settings.tautulli.baseUrl, apiKey: "", apiKeyTouched: false };
 }
 
-function TautulliTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
+function TautulliTab({ settings, stale, reload, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => tautulliFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<TautulliForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -815,9 +880,8 @@ function TautulliTab({ settings, stale, onSave, onSavingChange }: SettingsTabPro
   const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
   const credentials = { enabled: form.enabled, baseUrl, apiKey };
   const dirty = form.enabled !== initial.enabled || baseUrl !== initial.baseUrl || apiKey !== "";
-  const status = useSaveStatus(dirty, onSavingChange);
+  const status = useSaveStatus(onSavingChange);
 
-  useEffect(() => setForm(initial), [initial]);
 
   async function testConnection() {
     setTesting(true);
@@ -833,9 +897,12 @@ function TautulliTab({ settings, stale, onSave, onSavingChange }: SettingsTabPro
   }
 
   function save() {
+    const before = initial;
     return status.run(async () => {
       await apiPost("/api/settings/tautulli", credentials);
-      await onSave();
+    }, reload, (fresh, saved) => {
+      const after = tautulliFormFromSettings(fresh);
+      setForm((current) => saved ? after : rebaseForm(current, before, after));
     });
   }
 
@@ -862,7 +929,7 @@ function TautulliTab({ settings, stale, onSave, onSavingChange }: SettingsTabPro
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => setForm(initial)}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
         saveDisabled={stale || (form.enabled && credentialsIncomplete)}
       />
     </SettingsTabForm>
