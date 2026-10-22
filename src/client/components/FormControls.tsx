@@ -162,8 +162,10 @@ export function SettingRow({ label, hint, wide = false, htmlFor, action = false,
   const childId = isValidElement(child) ? (child.props as { id?: string }).id : undefined;
   const controlId = htmlFor ?? childId ?? generatedId;
   const hintId = hint ? `${controlId}-hint` : undefined;
+  const existingDescribedBy = isValidElement(child) ? (child.props as { "aria-describedby"?: string })["aria-describedby"] : undefined;
+  const describedBy = [existingDescribedBy, hintId].filter(Boolean).join(" ") || undefined;
   const control = !htmlFor && isValidElement(child)
-    ? cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, action ? { "aria-describedby": hintId } : { id: controlId, "aria-describedby": hintId })
+    ? cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, action ? { "aria-describedby": describedBy } : { id: controlId, "aria-describedby": describedBy })
     : child;
   return <SettingRowFrame label={label} hint={hint} controlId={action ? undefined : controlId} hintId={hintId} wide={wide}>{control}</SettingRowFrame>;
 }
