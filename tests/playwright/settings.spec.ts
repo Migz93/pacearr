@@ -160,3 +160,24 @@ test("a Sonarr save sends the connection before the tag setting", async ({ page 
   await expect(page.getByText("Simulated tags failure")).toBeVisible();
   expect(order).toEqual(["connection", "tags"]);
 });
+
+// The save and the reload after it are intercepted in the browser, so nothing reaches the server.
+test("a save whose settings reload fails says it was saved", async ({ page }) => {
+  let saved = false;
+  await page.route("**/api/settings/app", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    saved = true;
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/settings", async (route) => {
+    if (!saved) return route.fallback();
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Simulated reload failure" }) });
+  });
+
+  await openPage(page, "/settings", "Settings");
+  const activityWindow = page.getByRole("spinbutton", { name: "Viewer activity window" });
+  await activityWindow.fill(String(Number(await activityWindow.inputValue()) + 1));
+  await page.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(page.getByText("Saved, but the settings could not be reloaded: Simulated reload failure. Refresh the page before saving again.")).toBeVisible();
+});

@@ -76,6 +76,18 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
     void loadSettings();
   }, [loadSettings]);
 
+  // The reload after a tab saves. Unlike loadSettings it throws, so a save whose reload
+  // fails is reported instead of quietly leaving the form dirty against the old
+  // settings, where it would look unsaved and invite a retry of a save that worked.
+  const reloadAfterSave = useCallback(async () => {
+    try {
+      setSettings(await apiGet<SettingsResponse>("/api/settings"));
+      setError(null);
+    } catch (caught) {
+      throw new Error(`Saved, but the settings could not be reloaded: ${caught instanceof Error ? caught.message : String(caught)}. Refresh the page before saving again.`);
+    }
+  }, []);
+
   function setTab(tab: Tab) {
     setSearchParams({ tab }, { replace: true });
   }
@@ -103,10 +115,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         <PageLoading label="Loading settings..." />
       ) : (
         <>
-          {activeTab === "general" && settings && <GeneralTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await loadSettings(); await onSaved(); }} />}
-          {activeTab === "plex" && settings && <PlexTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await loadSettings(); await onSaved(); }} />}
-          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} onSavingChange={setTabSaving} onSave={loadSettings} />}
-          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} onSavingChange={setTabSaving} onSave={loadSettings} />}
+          {activeTab === "general" && settings && <GeneralTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
+          {activeTab === "plex" && settings && <PlexTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
+          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
+          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
           {activeTab === "logs" && <LogsTab />}
           {activeTab === "jobs" && <JobsTab />}
           {activeTab === "about" && <AboutTab />}
@@ -493,9 +505,11 @@ function PlexTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
 
   function save() {
     return status.run(async () => {
-      // The artwork PATCH goes first. If the connection save then fails, the form stays
-      // dirty and a retry repeats only the PATCH, which has no side effects. The other
-      // order would re-test the connection and re-discover users on every retry.
+      // The artwork PATCH goes first, so a failed PATCH can't leave an already-saved
+      // connection to be posted again on retry; repeating the PATCH has no side effects.
+      // A retry after the connection POST itself fails does post it again, which is
+      // wanted: the route saves before it discovers users, so a failure there is most
+      // often discovery, and a retry runs that again.
       if (artworkEnabled !== initialArtwork) await apiPatch("/api/settings/app", { artworkEnabled });
       if (connectionDirty) await apiPost("/api/settings/plex", buildPayload());
       await onSave();
