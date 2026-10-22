@@ -59,6 +59,12 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   // its save lock cleared, and the save's settings reload would then overwrite any
   // edits made in the meantime.
   const [tabSaving, setTabSaving] = useState(false);
+  // Set when a save went through but the reload after it failed. Every tab's form is
+  // then built from settings that predate that save, and saving one would send its
+  // stale values back (General sends every field it owns), silently undoing the save.
+  // So saving stays off, with a banner that discarding can't clear, until the page is
+  // refreshed.
+  const [settingsStale, setSettingsStale] = useState(false);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -76,15 +82,16 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
     void loadSettings();
   }, [loadSettings]);
 
-  // The reload after a tab saves. Unlike loadSettings it throws, so a save whose reload
-  // fails is reported instead of quietly leaving the form dirty against the old
-  // settings, where it would look unsaved and invite a retry of a save that worked.
+  // The reload after a tab saves. Unlike loadSettings it throws, so the tab reports the
+  // failure instead of "Saved", and it marks the settings stale (see settingsStale).
   const reloadAfterSave = useCallback(async () => {
     try {
       setSettings(await apiGet<SettingsResponse>("/api/settings"));
       setError(null);
     } catch (caught) {
-      throw new Error(`Saved, but the settings could not be reloaded: ${caught instanceof Error ? caught.message : String(caught)}. Refresh the page before saving again.`);
+      setSettingsStale(true);
+      setError("Settings could not be reloaded after a save, so this page may be out of date. Refresh the page before saving again.");
+      throw new Error(`Saved, but the settings could not be reloaded: ${caught instanceof Error ? caught.message : String(caught)}.`);
     }
   }, []);
 
@@ -115,10 +122,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         <PageLoading label="Loading settings..." />
       ) : (
         <>
-          {activeTab === "general" && settings && <GeneralTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
-          {activeTab === "plex" && settings && <PlexTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
-          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
-          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
+          {activeTab === "general" && settings && <GeneralTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
+          {activeTab === "plex" && settings && <PlexTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={async () => { await reloadAfterSave(); await onSaved(); }} />}
+          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
+          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} stale={settingsStale} onSavingChange={setTabSaving} onSave={reloadAfterSave} />}
           {activeTab === "logs" && <LogsTab />}
           {activeTab === "jobs" && <JobsTab />}
           {activeTab === "about" && <AboutTab />}
@@ -130,6 +137,8 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
 
 interface SettingsTabProps {
   settings: SettingsResponse;
+  /** The settings may predate a save whose reload failed, so saving is off. */
+  stale: boolean;
   onSave: () => Promise<void>;
   /** Reports a save in flight, so the parent can lock tab switching until it lands. */
   onSavingChange: (saving: boolean) => void;
@@ -213,7 +222,7 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
   };
 }
 
-function GeneralTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
+function GeneralTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => generalFormFromSettings(settings.app), [settings.app]);
   const [form, setForm] = useState<GeneralForm>(initial);
   const dirty = !sameValues(form, initial);
@@ -414,6 +423,7 @@ function GeneralTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
         error={status.error}
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
+        saveDisabled={stale}
       />
     </SettingsTabForm>
   );
@@ -439,7 +449,7 @@ function plexFormFromSettings(settings: SettingsResponse): PlexForm {
   };
 }
 
-function PlexTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
+function PlexTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
   const [availableServers, setAvailableServers] = useState<PlexConnectionOption[]>([]);
   const [loadingServers, setLoadingServers] = useState(false);
   const [serversError, setServersError] = useState<string | null>(null);
@@ -572,6 +582,7 @@ function PlexTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
         error={status.error}
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
+        saveDisabled={stale}
       />
     </SettingsTabForm>
   );
@@ -611,7 +622,7 @@ function sonarrFormFromSettings(settings: SettingsResponse): SonarrForm {
   return { baseUrl: settings.sonarr?.baseUrl ?? "", apiKey: "", apiKeyTouched: false, tagsEnabled: settings.app.sonarrTagsEnabled };
 }
 
-function SonarrTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
+function SonarrTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => sonarrFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<SonarrForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -684,7 +695,7 @@ function SonarrTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
         error={status.error}
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
-        saveDisabled={connectionDirty && credentialsIncomplete}
+        saveDisabled={stale || (connectionDirty && credentialsIncomplete)}
       />
     </SettingsTabForm>
   );
@@ -794,7 +805,7 @@ function tautulliFormFromSettings(settings: SettingsResponse): TautulliForm {
   return { enabled: settings.tautulli.enabled, baseUrl: settings.tautulli.baseUrl, apiKey: "", apiKeyTouched: false };
 }
 
-function TautulliTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
+function TautulliTab({ settings, stale, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => tautulliFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<TautulliForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -852,7 +863,7 @@ function TautulliTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
         error={status.error}
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
-        saveDisabled={form.enabled && credentialsIncomplete}
+        saveDisabled={stale || (form.enabled && credentialsIncomplete)}
       />
     </SettingsTabForm>
   );

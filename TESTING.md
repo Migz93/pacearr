@@ -449,9 +449,9 @@ intercept their save requests in the browser so nothing reaches the server.
 | The save bar only appears once something changes | The General tab's save bar is hidden until a field changes, and hides again once the field is back at its saved value |
 | A save error clears once the form is back at its saved values | A client-side validation error shows in the save bar, and clears along with the bar when the field is restored |
 | A settings tab and tab switching are locked while its save is in flight | While a held save is pending, the tab's fields and the other tab buttons are disabled; once it fails they re-enable, and reverting the field clears the error |
-| A Plex save sends the artwork setting before the connection | The side-effect-free artwork PATCH goes first, so a failed connection save cannot leave it behind to be retried |
+| A Plex save sends the artwork setting before the connection | The artwork PATCH, which is safe to repeat, is sent before the connection POST, so a failed PATCH cannot leave an already-saved connection to be posted again on retry |
 | A Sonarr save sends the connection before the tag setting | A library refresh started by turning tag writing on cannot run ahead of a newly saved connection |
-| A save whose settings reload fails says it was saved | When the save succeeds but reloading the settings fails, the save bar says the save went through and to refresh, rather than leaving the form looking unsaved |
+| A save whose settings reload fails says it was saved and blocks saving until refresh | When the save succeeds but reloading the settings fails, the save bar says the save went through, and a page banner asks for a refresh; discarding keeps the banner and saving stays disabled, so stale values cannot undo the save |
 
 ### `tests/playwright/shows.spec.ts` — Shows navigation and filters
 

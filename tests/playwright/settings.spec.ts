@@ -162,7 +162,7 @@ test("a Sonarr save sends the connection before the tag setting", async ({ page 
 });
 
 // The save and the reload after it are intercepted in the browser, so nothing reaches the server.
-test("a save whose settings reload fails says it was saved", async ({ page }) => {
+test("a save whose settings reload fails says it was saved and blocks saving until refresh", async ({ page }) => {
   let saved = false;
   await page.route("**/api/settings/app", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback();
@@ -179,5 +179,13 @@ test("a save whose settings reload fails says it was saved", async ({ page }) =>
   await activityWindow.fill(String(Number(await activityWindow.inputValue()) + 1));
   await page.getByRole("button", { name: "Save changes" }).click();
 
-  await expect(page.getByText("Saved, but the settings could not be reloaded: Simulated reload failure. Refresh the page before saving again.")).toBeVisible();
+  await expect(page.getByText("Saved, but the settings could not be reloaded: Simulated reload failure.")).toBeVisible();
+  const staleBanner = page.getByText("Settings could not be reloaded after a save, so this page may be out of date. Refresh the page before saving again.");
+  await expect(staleBanner).toBeVisible();
+
+  // Discarding returns the form to the stale settings, but must not re-enable saving.
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(staleBanner).toBeVisible();
+  await activityWindow.fill(String(Number(await activityWindow.inputValue()) + 1));
+  await expect(page.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
