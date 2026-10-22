@@ -224,7 +224,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
 | Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
-| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and sets a boundary; saving again while on keeps both; off → on clears again; a non-boolean is rejected |
+| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and sets a boundary; saving again while on keeps both; off keeps the boundary and off → on clears again with a strictly later one, even when the clock has not passed the previous boundary; a non-boolean is rejected |
 | Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary

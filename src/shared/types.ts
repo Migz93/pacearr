@@ -107,7 +107,7 @@ export interface AppSettings {
   newShowTriageEnabledAt: string | null;
   /** Searches a season once it becomes monitored on an unenrolled series. Runs in the triage poll. */
   searchNewlyMonitoredSeasonsEnabled: boolean;
-  /** Internal; moves on each off → on change so a poll that started before it stops. */
+  /** Internal; moves to a strictly later time on each off → on change, so a poll that started before it stops. Kept while off. */
   searchNewlyMonitoredSeasonsEnabledAt: string | null;
 }
 

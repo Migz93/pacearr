@@ -560,10 +560,14 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
         return;
       }
       patch.searchNewlyMonitoredSeasonsEnabled = body.searchNewlyMonitoredSeasonsEnabled;
-      // Moves only on a real off → on change, like the triage boundary above.
-      patch.searchNewlyMonitoredSeasonsEnabledAt = body.searchNewlyMonitoredSeasonsEnabled
-        ? previousSettings.searchNewlyMonitoredSeasonsEnabled ? previousSettings.searchNewlyMonitoredSeasonsEnabledAt : new Date().toISOString()
-        : null;
+      // Moves only on a real off → on change. A poll compares it with the value it started
+      // with, so each new one must differ from every earlier one: it is kept while off and
+      // the next is always later, even when turned back on within the same millisecond.
+      if (body.searchNewlyMonitoredSeasonsEnabled && !previousSettings.searchNewlyMonitoredSeasonsEnabled) {
+        const previousAt = previousSettings.searchNewlyMonitoredSeasonsEnabledAt ? Date.parse(previousSettings.searchNewlyMonitoredSeasonsEnabledAt) : Number.NaN;
+        const now = Date.now();
+        patch.searchNewlyMonitoredSeasonsEnabledAt = new Date(Number.isFinite(previousAt) && now <= previousAt ? previousAt + 1 : now).toISOString();
+      }
     }
     if (body.newShowTriageEpisodeThreshold !== undefined) {
       const threshold = Number(body.newShowTriageEpisodeThreshold);

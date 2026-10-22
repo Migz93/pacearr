@@ -167,10 +167,19 @@ test("turning on the season search clears recorded seasons only when it becomes 
     assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, boundary);
 
     await patch({ searchNewlyMonitoredSeasonsEnabled: false });
-    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, null);
+    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, boundary, "kept while off, so the next one can be made later");
     assert.deepEqual(recorded(), [1, 2]);
     await patch({ searchNewlyMonitoredSeasonsEnabled: true });
     assert.equal(recorded(), null);
+    const secondBoundary = db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt;
+    assert.ok(secondBoundary && Date.parse(secondBoundary) > Date.parse(boundary));
+
+    // Even when the clock has not passed the previous boundary, the next is later.
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await patch({ searchNewlyMonitoredSeasonsEnabled: false });
+    db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabledAt: future });
+    await patch({ searchNewlyMonitoredSeasonsEnabled: true });
+    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, new Date(Date.parse(future) + 1).toISOString());
 
     const invalid = await fetch(`http://127.0.0.1:${address.port}/api/settings/app`, { method: "PATCH", headers: { Cookie: cookie, "content-type": "application/json" }, body: JSON.stringify({ searchNewlyMonitoredSeasonsEnabled: "yes" }) });
     assert.equal(invalid.status, 400);
