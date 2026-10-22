@@ -966,11 +966,13 @@ export class PacearrDatabase {
   }
 
   resetExpandedSeasons(rollingShowId: number): void {
-    this.clearExcludedEpisodesForSeasons(rollingShowId, this.getRollingShow(rollingShowId)?.expandedSeasons ?? []);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
-    this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ?").run(rollingShowId);
-    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
-    this.clearPrefetchedEpisodes(rollingShowId);
+    this.transaction(() => {
+      this.clearExcludedEpisodesForSeasons(rollingShowId, this.getRollingShow(rollingShowId)?.expandedSeasons ?? []);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ?").run(rollingShowId);
+      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+      this.clearPrefetchedEpisodes(rollingShowId);
+    });
   }
 
   clearPrefetchedEpisodes(rollingShowId: number): void {
@@ -1051,14 +1053,16 @@ export class PacearrDatabase {
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
-    const show = this.getRollingShow(rollingShowId);
-    if (!show) return;
-    if (show.expandedSeasons.includes(seasonNumber)) this.clearExcludedEpisodesForSeasons(rollingShowId, [seasonNumber]);
-    const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), now(), rollingShowId);
-    this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number = ?").run(rollingShowId, seasonNumber);
-    this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    this.transaction(() => {
+      const show = this.getRollingShow(rollingShowId);
+      if (!show) return;
+      if (show.expandedSeasons.includes(seasonNumber)) this.clearExcludedEpisodesForSeasons(rollingShowId, [seasonNumber]);
+      const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number = ?").run(rollingShowId, seasonNumber);
+      this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    });
   }
 
   /**

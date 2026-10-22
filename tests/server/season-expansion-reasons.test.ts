@@ -41,13 +41,23 @@ function showEpisodes(monitoredSeasons: number[]): SonarrEpisode[] {
 
 type Request = { method: string; pathname: string; body?: string };
 
-function createHarness(options: { monitoredSeasons?: number[]; settings?: Partial<AppSettings>; enroll?: boolean } = {}) {
+function createHarness(options: {
+  monitoredSeasons?: number[];
+  settings?: Partial<AppSettings>;
+  enroll?: boolean;
+  /** Configures Plex, so triage defers file deletion to its own pass after a full history read. */
+  plexHistory?: boolean;
+  /** How many episode monitoring writes fail before Sonarr recovers. */
+  failingEpisodeMonitorWrites?: number;
+} = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-expansion-reasons-test-"));
   const config: RuntimeConfig = { port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1000, logLevel: "error" };
   const logger = silentLogger();
   const db = new PacearrDatabase(config);
   const services = new PacearrServices(db, logger, new ImageCacheService(dir, logger), dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
+  if (options.plexHistory) db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  let failingEpisodeMonitorWrites = options.failingEpisodeMonitorWrites ?? 0;
   db.updateAppSettings({ dryRun: false, earlyPrefetchEnabled: false, expandNextSeasonOnFinaleEnabled: false, progressiveCleanupEnabled: true, progressiveCleanupDelayDays: 7, ...options.settings });
 
   const monitoredSeasons = options.monitoredSeasons ?? [];
@@ -69,6 +79,9 @@ function createHarness(options: { monitoredSeasons?: number[]; settings?: Partia
     const method = (init?.method ?? "GET").toUpperCase();
     const body = typeof init?.body === "string" ? init.body : undefined;
     requests.push({ method, pathname: url.pathname, body });
+    if (url.hostname === "plex" && url.pathname === "/status/sessions/history/all") {
+      return new Response('<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { headers: { "content-type": "application/xml" } });
+    }
     if (url.pathname === "/api/v3/series") return Response.json([series]);
     if (url.pathname === `/api/v3/series/${SERIES_ID}`) {
       if (method === "PUT") series = { ...series, ...JSON.parse(body!) as Partial<SonarrSeries> };
@@ -76,6 +89,10 @@ function createHarness(options: { monitoredSeasons?: number[]; settings?: Partia
     }
     if (url.pathname === "/api/v3/episode") return Response.json(episodes);
     if (url.pathname === "/api/v3/episode/monitor") {
+      if (failingEpisodeMonitorWrites > 0) {
+        failingEpisodeMonitorWrites--;
+        return new Response("temporary Sonarr error", { status: 503 });
+      }
       const update = JSON.parse(body!) as { episodeIds: number[]; monitored: boolean };
       for (const episode of episodes) if (update.episodeIds.includes(episode.id)) episode.monitored = update.monitored;
       return Response.json({});
@@ -319,6 +336,48 @@ test("triage enrolment keeps the requested season expanded, searches it once and
     assert.deepEqual(harness.episodes.filter((episode) => episode.monitored && episode.seasonNumber > 1).map((episode) => episode.id), [9021, 9031]);
     assert.deepEqual(harness.expandHistory().map(({ action, source, reason }) => ({ action, source, reason })), [
       { action: "sonarr.expand_season", source: "auto-triage", reason: "requested" },
+    ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("triage enrolment keeps the requested season through the deferred history-repair pass", async () => {
+  const harness = createHarness({ monitoredSeasons: [1], plexHistory: true });
+  try {
+    harness.enableTriage();
+    await harness.services.triageNewSonarrSeries();
+
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.deepEqual(harness.reasons(), [[1, "requested"]]);
+    assert.equal(harness.episodes.filter((episode) => episode.seasonNumber === 1).every((episode) => episode.monitored), true);
+    // The later auto-triage-history pass neither searches it again nor unmonitors it, and
+    // it starts the season's inactivity timer, as the rolling reconcile would.
+    assert.equal(harness.commands().filter((command) => command.name === "SeasonSearch").length, 1);
+    assert.equal(harness.unmonitoredEpisodeIds().some((id) => id >= 9011 && id <= 9013), false);
+    assert.ok(harness.db.getSeasonInactiveSince(harness.rolling()!.id, 1));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a triage enrolment that failed part-way keeps its requested season when the next poll resumes it", async () => {
+  const harness = createHarness({ monitoredSeasons: [1], failingEpisodeMonitorWrites: 1 });
+  try {
+    harness.enableTriage();
+    await harness.services.triageNewSonarrSeries();
+    // The baseline failed after the season was recorded, before any search.
+    assert.deepEqual(harness.reasons(), [[1, "requested"]]);
+    assert.deepEqual(harness.commands(), []);
+
+    await harness.services.triageNewSonarrSeries();
+
+    assert.deepEqual(harness.expandedSeasons(), [1]);
+    assert.deepEqual(harness.reasons(), [[1, "requested"]]);
+    assert.equal(harness.episodes.filter((episode) => episode.seasonNumber === 1).every((episode) => episode.monitored), true);
+    assert.deepEqual(harness.commands(), [
+      { name: "EpisodeSearch", episodeIds: [9021, 9031] },
+      { name: "SeasonSearch", seriesId: SERIES_ID, seasonNumber: 1 },
     ]);
   } finally {
     harness.cleanup();
