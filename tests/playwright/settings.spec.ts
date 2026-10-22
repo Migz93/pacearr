@@ -85,7 +85,7 @@ test("a save error clears once the form is back at its saved values", async ({ p
 });
 
 // The save is intercepted and failed in the browser, so it never reaches the server.
-test("a settings tab is locked while its save is in flight", async ({ page }) => {
+test("a settings tab and tab switching are locked while its save is in flight", async ({ page }) => {
   let releaseSave = () => {};
   const saveHeld = new Promise<void>((resolve) => { releaseSave = resolve; });
   await page.route("**/api/settings/app", async (route) => {
@@ -102,10 +102,12 @@ test("a settings tab is locked while its save is in flight", async ({ page }) =>
 
   await expect(activityWindow).toBeDisabled();
   await expect(page.getByRole("checkbox", { name: "Dry run", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Plex", exact: true })).toBeDisabled();
   releaseSave();
 
   await expect(page.getByText("Simulated save failure")).toBeVisible();
   await expect(activityWindow).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Plex", exact: true })).toBeEnabled();
   await activityWindow.fill(original);
   await expect(page.getByText("Simulated save failure")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();

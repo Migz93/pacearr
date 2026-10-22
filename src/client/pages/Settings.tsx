@@ -55,6 +55,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Tab switching is locked while a tab is saving. Switching would remount the tab with
+  // its save lock cleared, and the save's settings reload would then overwrite any
+  // edits made in the meantime.
+  const [tabSaving, setTabSaving] = useState(false);
 
   const loadSettings = useCallback(async () => {
     setLoading(true);
@@ -80,13 +84,13 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
     <Page>
       <PageHeader title="Settings" />
 
-      <SelectInput className="mb-4 hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
+      <SelectInput className="mb-4 hidden max-[820px]:block" aria-label="Select settings tab" disabled={tabSaving} value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
       </SelectInput>
 
       <div className="mb-[22px] flex gap-1 rounded-xl border border-outline-variant/30 bg-background-container-high p-1 max-[820px]:hidden">
         {TABS.map((tab) => (
-          <button type="button" key={tab.id} className={`min-h-10 flex-1 rounded-lg border-0 font-bold ${activeTab === tab.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant hover:bg-background-container-highest hover:text-on-surface"}`} onClick={() => setTab(tab.id)}>
+          <button type="button" key={tab.id} disabled={tabSaving && activeTab !== tab.id} className={`min-h-10 flex-1 rounded-lg border-0 font-bold disabled:cursor-not-allowed disabled:opacity-50 ${activeTab === tab.id ? "bg-primary-dim text-on-surface" : "bg-transparent text-on-surface-variant enabled:hover:bg-background-container-highest enabled:hover:text-on-surface"}`} onClick={() => setTab(tab.id)}>
             {tab.label}
           </button>
         ))}
@@ -99,10 +103,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
         <PageLoading label="Loading settings..." />
       ) : (
         <>
-          {activeTab === "general" && settings && <GeneralTab settings={settings} onSave={async () => { await loadSettings(); await onSaved(); }} />}
-          {activeTab === "plex" && settings && <PlexTab settings={settings} onSave={async () => { await loadSettings(); await onSaved(); }} />}
-          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} onSave={loadSettings} />}
-          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} onSave={loadSettings} />}
+          {activeTab === "general" && settings && <GeneralTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await loadSettings(); await onSaved(); }} />}
+          {activeTab === "plex" && settings && <PlexTab settings={settings} onSavingChange={setTabSaving} onSave={async () => { await loadSettings(); await onSaved(); }} />}
+          {activeTab === "sonarr" && settings && <SonarrTab settings={settings} onSavingChange={setTabSaving} onSave={loadSettings} />}
+          {activeTab === "tautulli" && settings && <TautulliTab settings={settings} onSavingChange={setTabSaving} onSave={loadSettings} />}
           {activeTab === "logs" && <LogsTab />}
           {activeTab === "jobs" && <JobsTab />}
           {activeTab === "about" && <AboutTab />}
@@ -112,6 +116,13 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
   );
 }
 
+interface SettingsTabProps {
+  settings: SettingsResponse;
+  onSave: () => Promise<void>;
+  /** Reports a save in flight, so the parent can lock tab switching until it lands. */
+  onSavingChange: (saving: boolean) => void;
+}
+
 /**
  * Saving state for a settings tab's UnsavedChangesBar. "Saved" clears itself after a
  * moment; the form has already re-synced from the reloaded settings by then, so the
@@ -119,8 +130,10 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
  * at its saved values (edited back or discarded), since there is then nothing left to
  * save and the bar would otherwise be stuck showing it with both buttons disabled.
  */
-function useSaveStatus(dirty: boolean) {
+function useSaveStatus(dirty: boolean, onSavingChange: (saving: boolean) => void) {
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => onSavingChange(saving), [saving, onSavingChange]);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -188,11 +201,11 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
   };
 }
 
-function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
+function GeneralTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => generalFormFromSettings(settings.app), [settings.app]);
   const [form, setForm] = useState<GeneralForm>(initial);
   const dirty = !sameValues(form, initial);
-  const status = useSaveStatus(dirty);
+  const status = useSaveStatus(dirty, onSavingChange);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -414,7 +427,7 @@ function plexFormFromSettings(settings: SettingsResponse): PlexForm {
   };
 }
 
-function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
+function PlexTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
   const [availableServers, setAvailableServers] = useState<PlexConnectionOption[]>([]);
   const [loadingServers, setLoadingServers] = useState(false);
   const [serversError, setServersError] = useState<string | null>(null);
@@ -428,7 +441,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   // flips the artwork toggle must not post it.
   const connectionDirty = !sameValues(connection, initialConnection);
   const dirty = connectionDirty || artworkEnabled !== initialArtwork;
-  const status = useSaveStatus(dirty);
+  const status = useSaveStatus(dirty, onSavingChange);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -581,7 +594,7 @@ function sonarrFormFromSettings(settings: SettingsResponse): SonarrForm {
   return { baseUrl: settings.sonarr?.baseUrl ?? "", apiKey: "", apiKeyTouched: false, tagsEnabled: settings.app.sonarrTagsEnabled };
 }
 
-function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
+function SonarrTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => sonarrFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<SonarrForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -595,7 +608,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   const connectionDirty = baseUrl !== initial.baseUrl || apiKey !== "";
   const tagsDirty = form.tagsEnabled !== initial.tagsEnabled;
   const dirty = connectionDirty || tagsDirty;
-  const status = useSaveStatus(dirty);
+  const status = useSaveStatus(dirty, onSavingChange);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -757,7 +770,7 @@ function tautulliFormFromSettings(settings: SettingsResponse): TautulliForm {
   return { enabled: settings.tautulli.enabled, baseUrl: settings.tautulli.baseUrl, apiKey: "", apiKeyTouched: false };
 }
 
-function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
+function TautulliTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
   const initial = useMemo(() => tautulliFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<TautulliForm>(initial);
   const [testing, setTesting] = useState(false);
@@ -767,7 +780,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
   const credentials = { enabled: form.enabled, baseUrl, apiKey };
   const dirty = form.enabled !== initial.enabled || baseUrl !== initial.baseUrl || apiKey !== "";
-  const status = useSaveStatus(dirty);
+  const status = useSaveStatus(dirty, onSavingChange);
 
   useEffect(() => setForm(initial), [initial]);
 
