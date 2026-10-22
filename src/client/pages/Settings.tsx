@@ -630,11 +630,14 @@ function SonarrTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
 
   function save() {
     return status.run(async () => {
-      // The tags PATCH goes first, so a retry after a failed connection save repeats only
-      // the PATCH, which queues a library refresh only when tag writing turns on. The
-      // other order would queue another refresh from the connection save on every retry.
-      if (tagsDirty) await apiPatch("/api/settings/app", { sonarrTagsEnabled: form.tagsEnabled });
+      // Unlike Plex, the connection goes first. Turning tag writing on starts a library
+      // refresh straight away, and one started before a new connection was saved would
+      // read the old instance's series but reconcile tags through the new one. In this
+      // order, that refresh queues behind the one the connection save starts. The cost
+      // is that a retry after a failed tags save repeats the connection save, which only
+      // re-tests it and queues at most one more refresh.
       if (connectionDirty) await apiPost("/api/settings/sonarr", credentials);
+      if (tagsDirty) await apiPatch("/api/settings/app", { sonarrTagsEnabled: form.tagsEnabled });
       await onSave();
     });
   }

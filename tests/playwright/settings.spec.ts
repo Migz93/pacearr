@@ -136,3 +136,27 @@ test("a Plex save sends the artwork setting before the connection", async ({ pag
   await expect(page.getByText("Simulated connection failure")).toBeVisible();
   expect(order).toEqual(["artwork", "connection"]);
 });
+
+// Both requests are intercepted in the browser, so nothing reaches the server.
+test("a Sonarr save sends the connection before the tag setting", async ({ page }) => {
+  const order: string[] = [];
+  await page.route("**/api/settings/sonarr", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    order.push("connection");
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/settings/app", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    order.push("tags");
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Simulated tags failure" }) });
+  });
+
+  await openPage(page, "/settings?tab=sonarr", "Settings");
+  await page.getByRole("checkbox", { name: "Write tags to Sonarr", exact: true }).click({ force: true });
+  const baseUrl = page.getByRole("textbox", { name: "Base URL" });
+  await baseUrl.fill(`${await baseUrl.inputValue()}/`);
+  await page.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(page.getByText("Simulated tags failure")).toBeVisible();
+  expect(order).toEqual(["connection", "tags"]);
+});
