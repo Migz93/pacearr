@@ -43,8 +43,8 @@ The classification is made from the series as read before any Sonarr change and 
 with the pending enrolment, so a retry after a partial failure uses it rather than
 monitoring the failed baseline already changed. A requested season is then managed
 like any expanded season. With no active viewer,
-the next reconcile starts its inactivity timer and it is trimmed to E01 after
-**Cleanup delay**; a viewer who starts it keeps it. Excluded seasons are never
+the next reconcile starts its inactivity timer and, when **Progressive cleanup** is
+enabled, it is trimmed to E01 after **Cleanup delay**; a viewer who starts it keeps it. Excluded seasons are never
 expanded. History records `sonarr.expand_season` with `source: "auto-triage"` and
 `reason: "requested"`. A manual enrol from the UI keeps the plain pilot baseline.
 
@@ -176,7 +176,8 @@ ahead of someone starting it. It takes the series lock and runs the expansion ab
 with source and reason `manual`. It is refused, as `ok: false`, for a season that is
 already expanded, excluded, or missing from Sonarr, and while another operation holds
 the show. Dry run records `dry_run.sonarr.expand_season` only. The season is not watch
-activity, so it is trimmed after **Cleanup delay** unless someone watches it.
+activity, so when **Progressive cleanup** is enabled it is trimmed after **Cleanup delay**
+unless someone watches it. With it disabled, the season stays expanded.
 
 ### Expansion Reasons
 
