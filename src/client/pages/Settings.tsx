@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
@@ -151,6 +151,16 @@ function useSaveStatus(dirty: boolean) {
   return { saving, success, error, run };
 }
 
+/**
+ * Wraps a settings tab's cards and its save bar. Every control is disabled while a save
+ * is in flight: the form re-syncs from the reloaded settings when it lands, which would
+ * silently drop edits made meanwhile, and a field edited back to its saved value
+ * mid-save would leave a failure error showing on a form with nothing left to save.
+ */
+function SettingsTabForm({ saving, children }: { saving: boolean; children: ReactNode }) {
+  return <fieldset disabled={saving} aria-busy={saving} className="grid min-w-0 gap-4">{children}</fieldset>;
+}
+
 function sameValues<T>(a: T, b: T) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -245,7 +255,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
   // setting does to your shows in a line; anything longer belongs in the card's
   // description or in docs/.
   return (
-    <div className="grid gap-4">
+    <SettingsTabForm saving={status.saving}>
       <SectionCard title="Safety">
         <SettingToggle
           label="Dry run"
@@ -380,7 +390,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
       />
-    </div>
+    </SettingsTabForm>
   );
 }
 
@@ -477,7 +487,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   }
 
   return (
-    <div className="grid gap-4">
+    <SettingsTabForm saving={status.saving}>
       <SectionCard title="Connection" description="Connect Pacearr to your Plex server. Load your available servers, or enter the address yourself.">
         {serversError && <ErrorBanner className="mb-0" message={serversError} />}
         <SettingRow label="Server" hint="Pick one of the servers on your Plex account." wide htmlFor="plex-server-select">
@@ -533,7 +543,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
         onSave={() => void save()}
         onDiscard={() => setForm(initial)}
       />
-    </div>
+    </SettingsTabForm>
   );
 }
 
@@ -611,7 +621,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   }
 
   return (
-    <div className="grid gap-4">
+    <SettingsTabForm saving={status.saving}>
       <SectionCard title="Connection" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
         <SettingRow label="Base URL" hint="For example http://sonarr:8989" wide>
           <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
@@ -640,7 +650,7 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
         onDiscard={() => setForm(initial)}
         saveDisabled={connectionDirty && credentialsIncomplete}
       />
-    </div>
+    </SettingsTabForm>
   );
 }
 
@@ -782,7 +792,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   }
 
   return (
-    <div className="grid gap-4">
+    <SettingsTabForm saving={status.saving}>
       <SectionCard title="Connection" description="Optional. Import richer watch history than Plex alone provides.">
         <SettingToggle label="Enable Tautulli import" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
         <SettingRow label="Base URL" hint="For example http://tautulli:8181" wide>
@@ -807,7 +817,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
         onDiscard={() => setForm(initial)}
         saveDisabled={form.enabled && credentialsIncomplete}
       />
-    </div>
+    </SettingsTabForm>
   );
 }
 

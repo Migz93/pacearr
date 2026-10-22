@@ -83,3 +83,30 @@ test("a save error clears once the form is back at its saved values", async ({ p
   await expect(page.getByText("Viewer activity window must be a positive whole number of days.")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
 });
+
+// The save is intercepted and failed in the browser, so it never reaches the server.
+test("a settings tab is locked while its save is in flight", async ({ page }) => {
+  let releaseSave = () => {};
+  const saveHeld = new Promise<void>((resolve) => { releaseSave = resolve; });
+  await page.route("**/api/settings/app", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await saveHeld;
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Simulated save failure" }) });
+  });
+
+  await openPage(page, "/settings", "Settings");
+  const activityWindow = page.getByRole("spinbutton", { name: "Viewer activity window" });
+  const original = await activityWindow.inputValue();
+  await activityWindow.fill(String(Number(original) + 1));
+  await page.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(activityWindow).toBeDisabled();
+  await expect(page.getByRole("checkbox", { name: "Dry run", exact: true })).toBeDisabled();
+  releaseSave();
+
+  await expect(page.getByText("Simulated save failure")).toBeVisible();
+  await expect(activityWindow).toBeEnabled();
+  await activityWindow.fill(original);
+  await expect(page.getByText("Simulated save failure")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
+});
