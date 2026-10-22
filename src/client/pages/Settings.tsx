@@ -825,9 +825,14 @@ function SonarrTagsCard({ configured, tagsEnabled, onTagsEnabledChange }: { conf
       <SettingRow
         action
         label="Import from Sonarr tags"
-        hint={result
-          ? <span aria-live="polite" className={`font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>
-          : "Restore enrolled and ignored shows from their tags, after losing Pacearr's records."}
+        hint={(
+          // The live region stays mounted so a result appearing in it is announced.
+          <span aria-live="polite">
+            {result
+              ? <span className={`font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>
+              : "Restore enrolled and ignored shows from their tags, after losing Pacearr's records."}
+          </span>
+        )}
       >
         <button type="button" className={secondaryButtonClass} disabled={!configured || loading} aria-busy={loading} onClick={() => void loadPreview()}>
           {loading ? "Checking Sonarr..." : "Review import"}
