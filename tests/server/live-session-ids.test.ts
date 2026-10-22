@@ -46,7 +46,7 @@ function createHarness() {
   db.updateUser(gina!.id, { enabled: true });
   db.updateUser(ivy!.id, { enabled: true });
   // Season 1 is already expanded, so each stored event only has to advance progress.
-  for (const series of [tedLasso, nineOneOne]) db.markSeasonExpanded(db.upsertRollingShow(series).id, 1, new Date().toISOString());
+  for (const series of [tedLasso, nineOneOne]) db.markSeasonExpanded(db.upsertRollingShow(series).id, 1, new Date().toISOString(), { reason: "watched" });
 
   let sessionsXml = '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>';
   const originalFetch = globalThis.fetch;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, ArrowUpDown, Ban, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, Undo2, X,
+  ArrowLeft, ArrowRight, ArrowUpDown, Ban, ChevronDown, ChevronRight, Expand, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, Undo2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
@@ -11,7 +11,7 @@ import { compactGhostButtonClass, compactPrimaryButtonClass, compactSecondaryBut
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
-  RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
+  RecommendationsResponse, RunResult, SeasonExpansionSummary, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
 } from "../../shared/types";
 
 type ShowsTab = "enrolled" | "recommendations" | "ignored" | "sonarr";
@@ -106,6 +106,29 @@ function loadStoredSort(tab: ShowsTab): SortMode {
 function formatDate(value: string | null) {
   if (!value) return "Never";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+}
+
+const EXPANSION_LABELS: Record<SeasonExpansionSummary["reason"], string> = {
+  watched: "Watched",
+  finale: "Finale",
+  requested: "Requested",
+  manual: "Manual",
+};
+
+function expansionDescription(expansion: SeasonExpansionSummary): string {
+  const on = expansion.expandedAt ? ` on ${formatDate(expansion.expandedAt)}` : "";
+  switch (expansion.reason) {
+    case "watched":
+      return expansion.displayName ? `Watched by ${expansion.displayName}${on}` : "Expanded from watch activity";
+    case "finale":
+      return expansion.displayName
+        ? `${expansion.displayName} reached the previous season's finale${on}`
+        : "Expanded from the previous season's finale";
+    case "requested":
+      return `Requested when the show was added${on}`;
+    case "manual":
+      return `Expanded manually${on}`;
+  }
 }
 
 function episodeLabel(seasonNumber: number, episodeNumber: number) {
@@ -484,10 +507,17 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
     }
   }
 
-  /** Exclusion endpoints report refusals (e.g. a busy show) as ok: false rather than an HTTP error. */
+  /** Exclusion and expansion endpoints report refusals (e.g. a busy show) as ok: false rather than an HTTP error. */
   async function setExcluded(path: string, excluded: boolean) {
     await runAction(async () => {
       const result = excluded ? await apiPost<RunResult>(path) : await apiDelete<RunResult>(path);
+      if (!result.ok) throw new Error(result.message);
+    });
+  }
+
+  async function expandSeason(path: string) {
+    await runAction(async () => {
+      const result = await apiPost<RunResult>(path);
       if (!result.ok) throw new Error(result.message);
     });
   }
@@ -608,6 +638,7 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               exclusionBasePath={show.enrolled && show.rollingShowId ? `/api/rolling-shows/${show.rollingShowId}/seasons/${season.seasonNumber}` : null}
               busy={busy}
               onSetExcluded={setExcluded}
+              onExpand={expandSeason}
               key={season.seasonNumber}
             />
           ))}
@@ -653,18 +684,19 @@ type ExclusionControl = {
   onSetExcluded: (path: string, excluded: boolean) => Promise<void>;
 };
 
-function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled, exclusionBasePath, busy, onSetExcluded }: {
+function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled, exclusionBasePath, busy, onSetExcluded, onExpand }: {
   season: ShowSeasonSummary;
   episodes: ShowEpisodeSummary[];
   viewers: ViewerBadge[];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
+  onExpand: (path: string) => Promise<void>;
 } & ExclusionControl) {
   const [open, setOpen] = useState(false);
   const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      {/* The exclusion control sits beside the expand button, not inside it: a button cannot contain another. */}
+      {/* The season's Expand and Exclude controls sit beside the toggle button, not inside it: a button cannot contain another. */}
       <div className="flex items-center gap-2 pr-3 hover:bg-background-container-highest max-[820px]:flex-col max-[820px]:items-stretch max-[820px]:pb-3 max-[820px]:pl-3">
       <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent p-3 text-left max-[820px]:p-0 max-[820px]:pt-3" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
@@ -679,24 +711,49 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
       <AvatarStack viewers={viewers} />
       <span className="flex flex-wrap items-center justify-end gap-1.5 text-right">
         {season.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this season. Existing files are kept.">Excluded</span>}
-        {season.isExpanded && <span className={badgeClass("success")}>Expanded</span>}
+        {season.isExpanded && (
+          <span className={badgeClass("success")} title={season.expansion ? expansionDescription(season.expansion) : undefined}>
+            Expanded{season.expansion ? ` · ${EXPANSION_LABELS[season.expansion.reason]}` : ""}
+          </span>
+        )}
+        {season.expansion?.trimsAt && (
+          <span className={badgeClass()} title={`Trims back to its pilot on ${formatDate(season.expansion.trimsAt)} if nobody watches it before then`}>
+            Trims {formatDate(season.expansion.trimsAt)}
+          </span>
+        )}
         {season.prefetchedEpisodes.length > 0 && <span className={badgeClass("warning")} title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
       </span>
       </button>
       {exclusionBasePath && (
-        <button
-          type="button"
-          className={`${compactGhostButtonClass} shrink-0 max-[820px]:self-start`}
-          disabled={busy}
-          aria-label={`${season.excluded ? "Include" : "Exclude"} season ${season.seasonNumber}`}
-          title={season.excluded
-            ? "Return this season to the pilot-only baseline so Pacearr manages it again"
-            : "Unmonitor this whole season in Sonarr and stop Pacearr expanding or searching it. Files are not deleted."}
-          onClick={() => void onSetExcluded(`${exclusionBasePath}/exclusion`, !season.excluded)}
-        >
-          <ExclusionLabel excluded={season.excluded} />
-        </button>
+        <span className="flex shrink-0 items-center gap-2 max-[820px]:self-start">
+          {!season.excluded && !season.isExpanded && (
+            <button
+              type="button"
+              className={compactGhostButtonClass}
+              disabled={busy}
+              aria-label={`Expand season ${season.seasonNumber}`}
+              title={dryRunEnabled
+                ? "Dry run: preview monitoring and searching the whole season. Sonarr is not changed."
+                : "Monitor and search the whole season. It returns to its pilot if nobody watches it within the cleanup delay."}
+              onClick={() => void onExpand(`${exclusionBasePath}/expansion`)}
+            >
+              <Expand size={14} className="text-success" /> Expand
+            </button>
+          )}
+          <button
+            type="button"
+            className={compactGhostButtonClass}
+            disabled={busy}
+            aria-label={`${season.excluded ? "Include" : "Exclude"} season ${season.seasonNumber}`}
+            title={season.excluded
+              ? "Return this season to the pilot-only baseline so Pacearr manages it again"
+              : "Unmonitor this whole season in Sonarr and stop Pacearr expanding or searching it. Files are not deleted."}
+            onClick={() => void onSetExcluded(`${exclusionBasePath}/exclusion`, !season.excluded)}
+          >
+            <ExclusionLabel excluded={season.excluded} />
+          </button>
+        </span>
       )}
       </div>
       {open && (

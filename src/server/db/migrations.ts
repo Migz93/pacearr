@@ -594,6 +594,35 @@ const migrations: Migration[] = [
       db.exec("ALTER TABLE new_show_triage ADD COLUMN searched_seasons TEXT");
     },
   },
+  {
+    // Why each expanded season was expanded, so the show page can explain seasons with no
+    // viewer behind them (a Seerr request kept at enrolment, or the Expand button).
+    // rolling_shows.expanded_seasons stays the record of which seasons are expanded; a row
+    // here only describes one. Seasons already expanded could only have come from watch
+    // activity, so they start as `watched`, with no user or time.
+    version: 29,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_expanded_seasons (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          reason TEXT NOT NULL CHECK(reason IN ('watched', 'finale', 'requested', 'manual')),
+          user_id INTEGER,
+          expanded_at TEXT,
+          PRIMARY KEY (rolling_show_id, season_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT OR IGNORE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason)
+          SELECT rs.id, CAST(season.value AS INTEGER), 'watched'
+          -- json_each throws on malformed JSON, which would block startup; parseJson reads
+          -- such a value as no expanded seasons, so the migration does too.
+          FROM rolling_shows rs,
+            json_each(CASE WHEN json_valid(rs.expanded_seasons) THEN rs.expanded_seasons ELSE '[]' END) season
+          WHERE CAST(season.value AS INTEGER) > 0;
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

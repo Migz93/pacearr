@@ -129,7 +129,10 @@ When enabled, Pacearr polls Sonarr every five minutes by default; the interval
 is configurable in Settings → Jobs. It ignores series that
 were already present when the setting was enabled, then searches smaller new
 series in full and enrolls series over the configured total-episode limit onto
-the pilot baseline. Successful live decisions are persisted so a restart does
+the pilot baseline. When only some of an enrolled series' real seasons are
+monitored, someone requested those seasons, so they stay fully monitored and
+expanded (see [rolling-monitoring.md](rolling-monitoring.md#requested-seasons-on-triage-enrolment)).
+Successful live decisions are persisted so a restart does
 not repeat them; dry-run and failed arrivals remain pending for a later poll.
 
 With **Search newly monitored seasons** on (`searchNewlyMonitoredSeasonsEnabled`,

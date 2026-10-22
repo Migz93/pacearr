@@ -316,6 +316,23 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Including the episode an active viewer is on counts that viewer toward its season | The viewer's progress on the episode being included is judged without its exclusion, so their season is retained and the episode is monitored and searched |
 | Dry run stores an exclusion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, the exclusion is stored and `dry_run.show.season_excluded` is recorded |
 
+### `tests/server/season-expansion-reasons.test.ts` — Expansion reasons, manual expansion and requested seasons
+
+| Test | What it checks |
+|---|---|
+| Requested seasons are only the monitored ones when some, but not all, real seasons are monitored | Every real season monitored, or none, selects nothing; specials are ignored |
+| Migration 29 records existing expanded seasons as watched and skips malformed state | Seasons expanded before reasons existed keep showing as watched, with no user or time, and a malformed `expanded_seasons` value cannot block startup |
+| Each way expanded-season state is cleared also clears its reason | Trim, reconcile, reset and unenrolment drop the reason; a season the reconcile keeps keeps its reason, and one it adds from viewer progress is `watched` |
+| A season expanded by watching records the viewer, and excluding it clears the reason | The reason, user and time are stored and written to history; excluding the season removes them |
+| The Expand button monitors and searches the season once and records it as manual | One `SeasonSearch`, every episode monitored, `manual` reason and history, and the show's last activity unchanged |
+| The Expand button refuses an expanded, excluded, missing or busy season | Each is refused as `ok: false` with nothing sent to Sonarr |
+| A dry-run Expand records the planned expansion without changing Sonarr or expanded seasons | Only `dry_run.sonarr.expand_season` is recorded |
+| A manually expanded season nobody watches shows its trim date and is trimmed after the cleanup delay | The show page has no trim date until the reconcile starts the timer, then the timer plus **Cleanup delay**; after the delay the season is trimmed to E01 and its reason cleared |
+| Triage enrolment keeps the requested season expanded, searches it once and records it as requested | The requested season is never unmonitored, gets one `SeasonSearch` and a `requested` reason; the other seasons get the pilot baseline |
+| A requested season nobody watches is trimmed to its pilot after the cleanup delay, and a viewer keeps it | Normal retention applies to requested seasons |
+| Triage enrolment of a series with every season monitored applies the plain pilot baseline | A whole-show request expands nothing |
+| A manual enrolment keeps today's pilot baseline even when some seasons are monitored | Requested seasons are kept only for automatic triage enrolment |
+
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |

@@ -3,6 +3,7 @@ import type {
   DashboardResponse,
   RecommendationsResponse,
   RunResult,
+  SeasonExpansionSummary,
   ShowDetailResponse,
   ShowEpisodeSummary,
   ShowListItem,
@@ -25,7 +26,7 @@ import type {
 } from "../shared/types.js";
 import crypto from "node:crypto";
 import pLimit from "p-limit";
-import type { PacearrDatabase, NormalizedWatchEventInput } from "./db/index.js";
+import type { PacearrDatabase, NormalizedWatchEventInput, SeasonExpansion } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
 import { isNotFoundError } from "./integrations/request.js";
@@ -77,6 +78,13 @@ type SeriesMatchIndex = {
 
 /** Where a viewer is in a show, from a watch event or from their stored progress. */
 type ViewerPosition = { userId: number; seasonNumber: number; episodeNumber: number; watchedAt: string };
+type EnrollmentOptions = {
+  applyBaseline: boolean;
+  importHistory: boolean;
+  deferFileDeletion?: boolean;
+  /** Automatic triage only: keep the seasons requested when the show was added expanded (see selectRequestedSeasons). */
+  expandRequestedSeasons?: boolean;
+};
 type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
 /**
  * One job's identity lookup state: consecutive failures per source, and the source items
@@ -102,6 +110,17 @@ function monitoredRealSeasons(series: SonarrSeries): number[] {
     .filter((season) => season.seasonNumber > 0 && season.monitored)
     .map((season) => season.seasonNumber)
     .sort((a, b) => a - b);
+}
+
+/**
+ * The seasons someone asked for when the series was added: those Sonarr monitors, when
+ * only some of its real seasons are monitored. Every season monitored means the whole show
+ * was requested, which the pilot baseline exists for, so nothing counts as requested then.
+ */
+export function selectRequestedSeasons(series: SonarrSeries): number[] {
+  const realSeasons = (series.seasons ?? []).filter((season) => season.seasonNumber > 0);
+  const monitored = monitoredRealSeasons(series);
+  return monitored.length < realSeasons.length ? monitored : [];
 }
 
 /** The next season with real episodes in Sonarr, skipping gaps and ignoring specials. */
@@ -697,7 +716,7 @@ export class PacearrServices {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
             if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
-              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, expandRequestedSeasons: true });
               this.db.completeNewShowTriageEnrollment(item.id);
             } else {
               // A rolling row that Pacearr did not mark pending belongs to a manual
@@ -713,7 +732,7 @@ export class PacearrServices {
             const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
             try {
               this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, expandRequestedSeasons: true });
               this.db.completeNewShowTriageEnrollment(item.id);
             } catch (error) {
               // completeEnrollment releases in its finally block; this also releases
@@ -1025,6 +1044,24 @@ export class PacearrServices {
     const excludedEpisodes = new Set(exclusions.episodes.map((episode) => `${episode.seasonNumber}:${episode.episodeNumber}`));
     const plan = calculateRollingPlan(series, episodes, retainedSeasons, appSettings.cleanupDeletesFiles, prefetchedEpisodeIds, exclusions);
     const retained = new Set(plan.retainedSeasons);
+    const expansions = new Map(rolling ? this.db.listSeasonExpansions(rolling.id).map((expansion) => [expansion.seasonNumber, expansion]) : []);
+    // Read-only counterpart of getCleanupRetention: the trim date is only known once the
+    // reconcile has started the season's timer, and is void while a viewer still holds it.
+    const activeProgress = rolling ? this.getActiveProgress(rolling.id, Date.parse(cutoff)) : [];
+    const expansionSummary = (seasonNumber: number): SeasonExpansionSummary => {
+      const expansion = expansions.get(seasonNumber);
+      const inactiveSince = rolling ? this.db.getSeasonInactiveSince(rolling.id, seasonNumber) : null;
+      const held = activeProgress.some((progress) => progress.lastWatchedSeason <= seasonNumber);
+      return {
+        reason: expansion?.reason ?? "watched",
+        expandedAt: expansion?.expandedAt ?? null,
+        userId: expansion?.userId ?? null,
+        displayName: expansion?.displayName ?? null,
+        trimsAt: appSettings.progressiveCleanupEnabled && inactiveSince && !held
+          ? new Date(Date.parse(inactiveSince) + appSettings.progressiveCleanupDelayDays * 24 * 60 * 60 * 1000).toISOString()
+          : null,
+      };
+    };
 
     const seasons: ShowSeasonSummary[] = (series.seasons ?? [])
       .filter((season) => season.seasonNumber > 0)
@@ -1041,6 +1078,7 @@ export class PacearrServices {
           watchedUsers: seasonStats?.watchedUsers ?? 0,
           latestWatchedAt: seasonStats?.latestWatchedAt ?? null,
           isExpanded: rolling?.expandedSeasons.includes(season.seasonNumber) ?? false,
+          expansion: rolling?.expandedSeasons.includes(season.seasonNumber) ? expansionSummary(season.seasonNumber) : null,
           excluded: excludedSeasons.has(season.seasonNumber),
           prefetchedEpisodes: rolling ? prefetchedWithUsers
             .filter((item) => item.seasonNumber === season.seasonNumber)
@@ -1356,7 +1394,7 @@ export class PacearrServices {
     return { ok: true, message: `${parts.join(", ")}.`, enrolled, ignored };
   }
 
-  async beginEnrollment(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }) {
+  async beginEnrollment(seriesId: number, options: EnrollmentOptions) {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
@@ -1374,7 +1412,7 @@ export class PacearrServices {
     }
   }
 
-  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
+  async completeEnrollment(series: SonarrSeries, rolling: RollingShowRecord, operation: number, options: EnrollmentOptions): Promise<RunResult> {
     try {
       // First, so a failure later in setup cannot leave the show untagged. Enrolment
       // clears an ignore, so its tag goes too.
@@ -1384,11 +1422,21 @@ export class PacearrServices {
       // pilot baseline from that state first so manual enrollment does not wait for a
       // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
+      const requestedSeasons = options.expandRequestedSeasons ? this.recordRequestedSeasons(series, rolling) : [];
       if (options.applyBaseline) {
         // Never deletes files: the history read may reveal an active season missing
         // from the local progress cache, and viewer positions below may expand or
-        // prefetch a season this pass does not retain.
-        changed += await this.applyActiveViewerPlan(series.id, "enroll", true, false);
+        // prefetch a season this pass does not retain. Requested seasons are retained
+        // here, so the baseline monitors and searches them once instead of unmonitoring them.
+        const retainedSeasons = [...new Set([...this.getActiveRetainedSeasons(rolling.id), ...requestedSeasons])];
+        changed += await this.applyMonitoringPlan(series.id, "enroll", retainedSeasons, true, [], false);
+      }
+      if (requestedSeasons.length > 0) {
+        const dryRun = this.isDryRun();
+        for (const seasonNumber of requestedSeasons) {
+          this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source: "auto-triage", reason: "requested", userId: null, dryRun });
+        }
+        this.logger.info("Requested seasons kept expanded on enrolment", { seriesId: series.id, title: rolling.title, seasonNumbers: requestedSeasons, dryRun });
       }
       let historyReconciled = !options.importHistory;
       if (options.importHistory) {
@@ -1433,12 +1481,12 @@ export class PacearrServices {
     }
   }
 
-  async enrollShow(seriesId: number, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
+  async enrollShow(seriesId: number, options: EnrollmentOptions): Promise<RunResult> {
     const { series, rolling, operation } = await this.beginEnrollment(seriesId, options);
     return this.completeEnrollment(series, rolling, operation, options);
   }
 
-  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: { applyBaseline: boolean; importHistory: boolean; deferFileDeletion?: boolean }): Promise<RunResult> {
+  private async resumeEnrollment(seriesId: number, rolling: RollingShowRecord, options: EnrollmentOptions): Promise<RunResult> {
     const operation = this.acquireSeriesOperation(seriesId);
     if (operation === null) throw new Error("Another operation is already running for this show.");
     try {
@@ -1450,6 +1498,21 @@ export class PacearrServices {
       this.releaseSeriesOperation(seriesId, operation);
       throw error;
     }
+  }
+
+  /**
+   * Records the requested seasons as expanded before the baseline touches Sonarr, so it
+   * retains them. Excluded seasons are never expanded. Dry run records nothing, but still
+   * returns the seasons for the plan to preview.
+   */
+  private recordRequestedSeasons(series: SonarrSeries, rolling: RollingShowRecord): number[] {
+    const excluded = exclusionCheck(this.db.getRollingExclusions(rolling.id));
+    const requested = selectRequestedSeasons(series).filter((seasonNumber) => !excluded.season(seasonNumber));
+    if (!this.isDryRun()) {
+      const expandedAt = new Date().toISOString();
+      for (const seasonNumber of requested) this.db.markSeasonExpanded(rolling.id, seasonNumber, expandedAt, { reason: "requested" });
+    }
+    return requested;
   }
 
   // A show's history is often already associated before it is enrolled. Seed
@@ -1533,6 +1596,40 @@ export class PacearrServices {
       this.db.addHistory("info", dryRun ? "dry_run.show.reset" : "show.reset", show.title, { changed, dryRun });
       this.logger.info("Show reset to pilot baseline", { rollingShowId, seriesId: show.sonarrSeriesId, title: show.title, changed, dryRun });
       return { ok: true, message: dryRun ? `Dry run: would reset ${show.title} to all-season pilots.` : `Reset ${show.title} to all-season pilots.`, changed };
+    } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
+  }
+
+  /**
+   * Expands a pilot-only season by hand, for example ahead of someone starting it. It is
+   * then managed like any other expanded season: with no active viewer, the rolling
+   * reconcile starts its inactivity timer and trims it back to its pilot after the
+   * cleanup delay.
+   */
+  async expandSeasonManually(rollingShowId: number, seasonNumber: number): Promise<RunResult> {
+    const show = this.db.getRollingShow(rollingShowId);
+    if (!show) return { ok: false, message: "Show is not enrolled." };
+    if (!Number.isInteger(seasonNumber) || seasonNumber <= 0) return { ok: false, message: "Only regular seasons can be expanded." };
+    const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
+    if (operation === null) return { ok: false, message: `Another operation for ${show.title} is still running. Try again once it finishes.` };
+    try {
+      // Re-read under the lock, so a concurrent expansion or exclusion is seen.
+      const current = this.db.getRollingShow(rollingShowId) ?? show;
+      if (current.expandedSeasons.includes(seasonNumber)) return { ok: false, message: `Season ${seasonNumber} of ${show.title} is already expanded.` };
+      if (exclusionCheck(this.db.getRollingExclusions(rollingShowId)).season(seasonNumber)) {
+        return { ok: false, message: `Season ${seasonNumber} of ${show.title} is excluded. Include it first.` };
+      }
+      const series = await this.getSonarr().getSeriesById(show.sonarrSeriesId);
+      if (!series.seasons?.some((season) => season.seasonNumber === seasonNumber)) return { ok: false, message: `Season ${seasonNumber} does not exist in Sonarr.` };
+      const dryRun = this.isDryRun();
+      const expanded = await this.expandSeason(show.sonarrSeriesId, seasonNumber, new Date().toISOString(), "manual", { reason: "manual" });
+      if (!expanded) return { ok: false, message: `Season ${seasonNumber} of ${show.title} could not be expanded.` };
+      return {
+        ok: true,
+        message: dryRun
+          ? `Dry run: would expand season ${seasonNumber} of ${show.title}. Sonarr was not changed.`
+          : `Expanded season ${seasonNumber} of ${show.title}.`,
+        changed: 1,
+      };
     } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
   }
 
@@ -1734,11 +1831,6 @@ export class PacearrServices {
     return { retainedSeasons: [...retained].sort((a, b) => a - b), eligibleForCleanup };
   }
 
-  private async applyActiveViewerPlan(seriesId: number, reason: string, searchAllPilots = true, deleteFiles?: boolean): Promise<number> {
-    const rolling = this.db.getRollingShowBySeriesId(seriesId);
-    return this.applyMonitoringPlan(seriesId, reason, rolling ? this.getActiveRetainedSeasons(rolling.id) : [], searchAllPilots, [], deleteFiles);
-  }
-
   private async applyMonitoringPlan(seriesId: number, reason: string, retainedSeasons: number[], searchAllPilots = true, excludedPrefetchedSeasons: number[] = [], deleteFiles?: boolean, sweepPosition?: { position: number; total: number }): Promise<number> {
     const settings = this.db.getAppSettings();
     const sonarr = this.getSonarr(settings.dryRun);
@@ -1884,7 +1976,7 @@ export class PacearrServices {
     return updates.length + plan.filesToDelete.length + clearedPrefetchedEpisodes;
   }
 
-  async expandSeason(seriesId: number, seasonNumber: number, watchedAt: string, source: string, episodeCache?: EpisodeCache): Promise<boolean> {
+  async expandSeason(seriesId: number, seasonNumber: number, watchedAt: string, source: string, expansion: SeasonExpansion, episodeCache?: EpisodeCache): Promise<boolean> {
     const rolling = this.db.getRollingShowBySeriesId(seriesId);
     if (!rolling) return false;
     if (rolling.expandedSeasons.includes(seasonNumber)) {
@@ -1912,10 +2004,10 @@ export class PacearrServices {
         await sonarr.searchSeason(seriesId, seasonNumber);
       }
       const dryRun = this.isDryRun();
-      if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt);
+      if (!dryRun) this.db.markSeasonExpanded(rolling.id, seasonNumber, watchedAt, expansion);
       await this.syncPlexArtwork(await sonarr.getSeriesById(seriesId), rolling, [...rolling.expandedSeasons, seasonNumber]);
-      this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, monitoredEpisodes: monitorUpdates.length, dryRun });
-      this.logger.info("Season expanded from watch activity", { seriesId, title: rolling.title, seasonNumber, source, monitoredEpisodes: monitorUpdates.length, dryRun });
+      this.db.addHistory("info", dryRun ? "dry_run.sonarr.expand_season" : "sonarr.expand_season", rolling.title, { seasonNumber, source, reason: expansion.reason, userId: expansion.userId ?? null, monitoredEpisodes: monitorUpdates.length, dryRun });
+      this.logger.info("Season expanded", { seriesId, title: rolling.title, seasonNumber, source, reason: expansion.reason, userId: expansion.userId ?? null, monitoredEpisodes: monitorUpdates.length, dryRun });
       return true;
     } finally {
       episodeCache?.delete(seriesId);
@@ -2206,7 +2298,7 @@ export class PacearrServices {
       triggerEpisodeNumber: position.episodeNumber,
       nextSeasonNumber,
     });
-    const expanded = await this.expandSeason(rolling.sonarrSeriesId, nextSeasonNumber, position.watchedAt, `${source}-finale`, episodeCache);
+    const expanded = await this.expandSeason(rolling.sonarrSeriesId, nextSeasonNumber, position.watchedAt, `${source}-finale`, { reason: "finale", userId: position.userId }, episodeCache);
     if (expanded && this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
     return expanded;
   }
@@ -2226,7 +2318,7 @@ export class PacearrServices {
     let changed = false;
     const expansionKey = `${rollingShowId}:${position.seasonNumber}`;
     if (!rolling.expandedSeasons.includes(position.seasonNumber) && !dryRunExpandedSeasons?.has(expansionKey)) {
-      if (await this.expandSeason(rolling.sonarrSeriesId, position.seasonNumber, position.watchedAt, source, episodeCache)) {
+      if (await this.expandSeason(rolling.sonarrSeriesId, position.seasonNumber, position.watchedAt, source, { reason: "watched", userId: position.userId }, episodeCache)) {
         if (this.isDryRun()) dryRunExpandedSeasons?.add(expansionKey);
         changed = true;
       }

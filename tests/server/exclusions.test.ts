@@ -59,7 +59,7 @@ function createHarness(settings: Partial<AppSettings> = {}, options: { episodes?
   ]);
   db.updateUser(viewer!.id, { enabled: true });
   const rolling = db.upsertRollingShow(show);
-  db.markSeasonExpanded(rolling.id, 1, new Date().toISOString());
+  db.markSeasonExpanded(rolling.id, 1, new Date().toISOString(), { reason: "watched" });
 
   const episodes = options.episodes ?? showEpisodes();
   let sessionsXml = '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>';

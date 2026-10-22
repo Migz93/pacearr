@@ -100,7 +100,7 @@ test("a session check that only advances a viewer's progress, without expanding 
     ]);
     const wire = db.upsertRollingShow({ id: 30, title: "The Wire" });
     db.updateAppSettings({ earlyPrefetchEnabled: false });
-    db.markSeasonExpanded(wire.id, 1, new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+    db.markSeasonExpanded(wire.id, 1, new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(), { reason: "watched" });
     // A watch of episode 2 already resolves at a newer timestamp than this seed, so
     // upsertRollingUserProgress persists a change. The season is already expanded and
     // early prefetch is off, so processWatchEvent reports changed: false even though a
