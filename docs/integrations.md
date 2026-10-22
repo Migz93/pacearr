@@ -132,18 +132,25 @@ series in full and enrolls series over the configured total-episode limit onto
 the pilot baseline. Successful live decisions are persisted so a restart does
 not repeat them; dry-run and failed arrivals remain pending for a later poll.
 
-A series triaged for a full search stays under watch while it is not enrolled.
-Each poll compares its monitored real seasons with the ones already searched and
-sends one `SeasonSearch` for each season that has become monitored since, for
-example a later season requested through Seerr.
+With **Search newly monitored seasons** on (`searchNewlyMonitoredSeasonsEnabled`,
+off by default, shown under the triage toggle), every triaged series that is not
+enrolled stays under watch, whatever its triage decision, including the library
+that predates triage. Each poll compares the monitored real seasons in its series
+list with the ones already recorded and sends one `SeasonSearch` for each season
+that has become monitored since, for example a later season requested through
+Seerr. It runs inside the triage poll, so it needs triage on.
 
 | Case | Behaviour |
 |---|---|
 | Season newly monitored | Searched once, recorded in `new_show_triage.searched_seasons`, history `show.auto_triage_season_searched` |
 | Season unmonitored, then monitored again | Searched again |
 | Search fails | Not recorded; retried on the next poll |
-| Show enrolled | Skipped; unenrolment clears its recorded seasons, so the seasons it re-monitors are recorded without searching |
-| Triaged before this tracking existed | First poll records the monitored seasons from a fresh Sonarr read, without searching |
+| No recorded seasons yet | Records the monitored seasons from the poll's series list, without searching |
+| Check becomes active (both settings on, after either was off) | Every record is cleared, so the next poll records without searching. Turning triage on while the setting is off clears nothing |
+| Series listed without real seasons | Skipped; its record is neither filled nor pruned until a list includes them |
+| Setting or triage turned off mid-poll | Stops: no further searches are sent and no season record is written. A search already sent when it changed still gets its history entry |
+| Show enrolled | Skipped; rolling reconcile owns its monitoring. Unenrolment clears its record |
+| Unenrolled after the poll's series list was read | Skipped until the next poll, whose list shows every season re-monitored |
 | Dry run | Logged only; searched on the first live poll. Seasons no longer monitored are still forgotten |
 | Another operation holds the series | Skipped; checked again on the next poll |
 

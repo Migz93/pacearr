@@ -199,7 +199,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         ...(form.earlyPrefetchEnabled ? { earlyPrefetchTriggerEpisodesRemaining: trigger, earlyPrefetchEpisodeCount: count } : {}),
         expandNextSeasonOnFinaleEnabled: form.expandNextSeasonOnFinaleEnabled,
         newShowTriageEnabled: form.newShowTriageEnabled,
-        ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold } : {}),
+        ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold, searchNewlyMonitoredSeasonsEnabled: form.searchNewlyMonitoredSeasonsEnabled } : {}),
       });
       setSuccess(true);
       await onSave();
@@ -280,16 +280,25 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           checked={form.newShowTriageEnabled}
           onChange={(value) => setForm({ ...form, newShowTriageEnabled: value })}
         />
+        {/* Both run in the triage poll, so they only apply while it is on. */}
         {form.newShowTriageEnabled && (
-          <NumberField
-            id="new-show-triage-episode-threshold"
-            label="Episode limit"
-            hint="Shows with more episodes than this are enrolled into Pacearr; smaller shows are searched in full."
-            unit="episodes"
-            min={1}
-            value={form.newShowTriageEpisodeThreshold}
-            onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
-          />
+          <>
+            <NumberField
+              id="new-show-triage-episode-threshold"
+              label="Episode limit"
+              hint="Shows with more episodes than this are enrolled into Pacearr; smaller shows are searched in full."
+              unit="episodes"
+              min={1}
+              value={form.newShowTriageEpisodeThreshold}
+              onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
+            />
+            <ToggleField
+              label="Search newly monitored seasons"
+              hint="Search a season once it's monitored on a show Pacearr isn't pacing, such as a later season requested in Seerr. Turn on if Search on Add is off."
+              checked={form.searchNewlyMonitoredSeasonsEnabled}
+              onChange={(value) => setForm({ ...form, searchNewlyMonitoredSeasonsEnabled: value })}
+            />
+          </>
         )}
       </SectionCard>
 

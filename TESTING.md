@@ -224,6 +224,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
 | Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
+| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and increments the activation number; saving again while on changes neither; turning either setting off and on again clears again with a new number; a non-boolean is rejected |
 | Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
@@ -345,8 +346,15 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Dry run defers a newly monitored season search | No command in dry run; the season is searched on the first live poll |
 | Dry run enabled during a poll leaves seasons unrecorded | Dry run switched on after the poll read its settings, or while a season search awaits Sonarr, sends no further search and records nothing as searched; a later live poll searches the rest |
 | A season unmonitored during dry run is forgotten | The record drops an unmonitored season even when dry run skips the search, so monitoring it again is searched once live |
-| An unenrolment during another show's season search is not undone | Recorded seasons are re-read under the series lock, and an empty record is filled from a fresh Sonarr read, so the poll cannot restore a stale record that would search every re-monitored season |
-| A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll |
+| An unenrolment during another show's season search is not undone | Recorded seasons are re-read under the series lock, and a series unenrolled after the poll's series list was read is skipped until the next poll, so the poll cannot record a stale state that would search every re-monitored season |
+| A season monitored on a series that predates triage is searched once | A `baseline` series gets its monitored seasons recorded without searching, then one `SeasonSearch` per season monitored later |
+| Newly monitored seasons are left alone while the setting is off | No search and no record while **Search newly monitored seasons** is off |
+| Recording many existing series reads only the poll's series list | Filling empty records makes no per-series Sonarr reads |
+| Turning the season check on during a new series' search leaves its record empty | A record written from the poll's older snapshot after the activation clear would survive it, so it is left for the first active poll, which records without searching |
+| A series listed without its seasons is neither recorded nor pruned | Triage records nothing for a search with no season data, the next poll with seasons records them without searching, and a later list missing them keeps the record |
+| Turning the setting off mid-poll stops season searches | A season search in flight when the setting is turned off is the last one sent |
+| Triage turned off and on with the same boundary mid-poll still stops the season check | The season check's own activation number changes even when the triage timestamp repeats, so the in-flight poll sends no more searches and writes no record after the clear |
+| A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll, and leaves the series in flight unrecorded, since turning it back on clears every record |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
 

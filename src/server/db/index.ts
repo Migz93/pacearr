@@ -71,6 +71,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   newShowTriageIntervalMinutes: 5,
   newShowTriageEpisodeThreshold: 80,
   newShowTriageEnabledAt: null,
+  searchNewlyMonitoredSeasonsEnabled: false,
+  searchNewlyMonitoredSeasonsActivation: 0,
 };
 
 export interface WatchEventInsertResult {
@@ -464,18 +466,23 @@ export class PacearrDatabase {
     `).run(input.seriesId, input.title, input.addedAt, input.decision, now(), input.searchedSeasons ? JSON.stringify(input.searchedSeasons) : null);
   }
 
-  /** Series triaged for a full search. `searchedSeasons` is null until the monitored seasons are first recorded. */
-  listSearchTriagedSeries(): Array<{ seriesId: number; title: string; searchedSeasons: number[] | null }> {
-    const rows = this.db.prepare("SELECT sonarr_series_id, title, searched_seasons FROM new_show_triage WHERE decision = 'search' ORDER BY sonarr_series_id")
+  /** Every triaged series, whatever the decision. `searchedSeasons` is null until the monitored seasons are first recorded. */
+  listTriagedSeries(): Array<{ seriesId: number; title: string; searchedSeasons: number[] | null }> {
+    const rows = this.db.prepare("SELECT sonarr_series_id, title, searched_seasons FROM new_show_triage ORDER BY sonarr_series_id")
       .all() as Array<{ sonarr_series_id: number; title: string; searched_seasons: string | null }>;
     return rows.map((row) => ({ seriesId: row.sonarr_series_id, title: row.title, searchedSeasons: parseJson<number[] | null>(row.searched_seasons, null) }));
   }
 
-  /** Undefined when the series has no search triage row; null when its seasons are not yet recorded. */
+  /** Undefined when the series has no triage row; null when its seasons are not yet recorded. */
   getNewShowTriageSearchedSeasons(seriesId: number): number[] | null | undefined {
-    const row = this.db.prepare("SELECT searched_seasons FROM new_show_triage WHERE sonarr_series_id = ? AND decision = 'search'")
+    const row = this.db.prepare("SELECT searched_seasons FROM new_show_triage WHERE sonarr_series_id = ?")
       .get(seriesId) as { searched_seasons: string | null } | undefined;
     return row ? parseJson<number[] | null>(row.searched_seasons, null) : undefined;
+  }
+
+  /** Forgets every recorded season, so the next poll records what is monitored then without searching. */
+  clearNewShowTriageSearchedSeasons(): void {
+    this.db.prepare("UPDATE new_show_triage SET searched_seasons = NULL WHERE searched_seasons IS NOT NULL").run();
   }
 
   setNewShowTriageSearchedSeasons(seriesId: number, seasons: number[] | null): void {

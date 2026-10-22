@@ -12,7 +12,7 @@ Pacearr has seven scheduler-managed jobs.
 | `rolling-reconcile` | every 6 hours, configurable | Reconcile every enrolled show against active-viewer progress and correct Sonarr monitoring/files; also prunes `history_events` past `historyRetentionDays` |
 | `sonarr-library-refresh` | every 6 hours, configurable | Fetch Sonarr's series list and refresh `sonarr_library_cache` |
 | `recommendation-refresh` | every 6 hours, configurable | Recalculate projected-savings recommendations from the cached Sonarr library |
-| `new-show-triage` | every 5 minutes when enabled, configurable | Search smaller new Sonarr series in full and enroll larger ones into the pilot baseline; search seasons later monitored on a searched series |
+| `new-show-triage` | every 5 minutes when enabled, configurable | Search smaller new Sonarr series in full and enroll larger ones into the pilot baseline; with **Search newly monitored seasons** on, search seasons later monitored on any unenrolled series |
 
 Job state is stored in `job_run_state`.
 

@@ -554,6 +554,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
         ? previousSettings.newShowTriageEnabled ? previousSettings.newShowTriageEnabledAt : new Date().toISOString()
         : null;
     }
+    if (body.searchNewlyMonitoredSeasonsEnabled !== undefined) {
+      if (typeof body.searchNewlyMonitoredSeasonsEnabled !== "boolean") {
+        res.status(400).json({ error: "searchNewlyMonitoredSeasonsEnabled must be a boolean." });
+        return;
+      }
+      patch.searchNewlyMonitoredSeasonsEnabled = body.searchNewlyMonitoredSeasonsEnabled;
+    }
     if (body.newShowTriageEpisodeThreshold !== undefined) {
       const threshold = Number(body.newShowTriageEpisodeThreshold);
       patch.newShowTriageEpisodeThreshold = Math.max(1, Math.floor(Number.isFinite(threshold) ? threshold : DEFAULT_APP_SETTINGS.newShowTriageEpisodeThreshold));
@@ -561,6 +568,12 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
     if (body.newShowTriageIntervalMinutes !== undefined) {
       patch.newShowTriageIntervalMinutes = normaliseScheduleIntervalMinutes(body.newShowTriageIntervalMinutes, DEFAULT_APP_SETTINGS.newShowTriageIntervalMinutes);
     }
+    // The season check runs in the triage poll, so it is active only while both are on.
+    // Each time it becomes active it gets a new activation number, which stops a poll
+    // started under an earlier one. A counter, unlike a timestamp, can never repeat.
+    const seasonSearchActive = (settings: AppSettings) => settings.newShowTriageEnabled && settings.searchNewlyMonitoredSeasonsEnabled;
+    const seasonSearchBecameActive = !seasonSearchActive(previousSettings) && seasonSearchActive({ ...previousSettings, ...patch });
+    if (seasonSearchBecameActive) patch.searchNewlyMonitoredSeasonsActivation = previousSettings.searchNewlyMonitoredSeasonsActivation + 1;
     const appSettings = db.updateAppSettings(patch);
     logger.info("Application settings updated", { changed: Object.keys(patch), dryRun: appSettings.dryRun });
     scheduler?.updateJob("session-check", { intervalMs: appSettings.sessionPollIntervalMinutes * 60 * 1000 });
@@ -577,6 +590,13 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
       // Do not drop a new activation if the preceding activation is still
       // unwinding. The queued run uses the new activation boundary.
       scheduler?.runNowOrQueue("new-show-triage");
+    }
+    // Records kept from before the check was active would make every season monitored
+    // meanwhile look newly requested; clearing them makes the next poll record without
+    // searching. Nothing awaits between the activation update above and this clear.
+    if (seasonSearchBecameActive) {
+      db.clearNewShowTriageSearchedSeasons();
+      logger.info("Searching newly monitored seasons enabled; currently monitored seasons will be recorded without searching");
     }
     if (previousSettings.dryRun && !appSettings.dryRun) {
       logger.info("Dry run disabled; scheduling immediate rolling monitoring reconciliation");
