@@ -146,7 +146,8 @@ Seerr. It runs inside the triage poll, so it needs triage on.
 | Season unmonitored, then monitored again | Searched again |
 | Search fails | Not recorded; retried on the next poll |
 | No recorded seasons yet | Records the monitored seasons from the poll's series list, without searching |
-| Setting or triage turned on | Every record is cleared, so the next poll records without searching |
+| Check becomes active (both settings on, after either was off) | Every record is cleared, so the next poll records without searching. Turning triage on while the setting is off clears nothing |
+| Series listed without real seasons | Skipped; its record is neither filled nor pruned until a list includes them |
 | Setting or triage turned off mid-poll | Stops; nothing further is searched or recorded |
 | Show enrolled | Skipped; rolling reconcile owns its monitoring. Unenrolment clears its record |
 | Unenrolled after the poll's series list was read | Skipped until the next poll, whose list shows every season re-monitored |

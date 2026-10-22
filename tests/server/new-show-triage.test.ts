@@ -952,3 +952,37 @@ test("turning the setting off mid-poll stops further season searches", async () 
     cleanup();
   }
 });
+
+test("a series listed without its seasons is neither recorded nor pruned until they appear", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const show = series(57, "Seasons not loaded", 30, "2026-08-11T12:00:01.000Z");
+  const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [show] };
+  const restoreFetch = installSonarrFetchStub(state);
+  const recorded = () => db.listTriagedSeries().find((row) => row.seriesId === 57)?.searchedSeasons;
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
+    // Triaged for search while Sonarr lists no seasons: nothing is recorded as monitored.
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), [{ name: "SeriesSearch", seriesId: 57 }]);
+    assert.equal(recorded(), null);
+
+    // The seasons appear: recorded without searching.
+    state.series = [withSeasons(show, 3, [1, 2])];
+    requests.length = 0;
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+    assert.deepEqual(recorded(), [1, 2]);
+
+    // Missing again: the record is kept, and nothing is searched when they return.
+    state.series = [show];
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(recorded(), [1, 2]);
+    state.series = [withSeasons(show, 3, [1, 2])];
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), []);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});

@@ -91,6 +91,14 @@ const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 type SeasonSearchActivation = { triageAt: string | null; seasonSearchAt: string | null };
 
+/**
+ * False when a series lists no real seasons, as Sonarr's response can before a newly
+ * added series is refreshed. Its monitored seasons are then unknown rather than none.
+ */
+function hasRealSeasons(series: SonarrSeries): boolean {
+  return (series.seasons ?? []).some((season) => season.seasonNumber > 0);
+}
+
 function monitoredRealSeasons(series: SonarrSeries): number[] {
   return (series.seasons ?? [])
     .filter((season) => season.seasonNumber > 0 && season.monitored)
@@ -736,7 +744,8 @@ export class PacearrServices {
           addedAt: item.added ?? null,
           decision,
           // SeriesSearch only covers what is monitored now; later seasons are searched as they become monitored.
-          ...(decision === "search" ? { searchedSeasons: monitoredRealSeasons(item) } : {}),
+          // Without season data the record stays empty and a later poll records it.
+          ...(decision === "search" && hasRealSeasons(item) ? { searchedSeasons: monitoredRealSeasons(item) } : {}),
         });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
         this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
@@ -872,6 +881,9 @@ export class PacearrServices {
       if (searchedSeasons !== null) this.db.setNewShowTriageSearchedSeasons(item.id, null);
       return { errors, activationChanged: false };
     }
+    // Recording or pruning from a list with no seasons would store nothing as monitored,
+    // and the next poll would search every monitored season. Wait for a list that has them.
+    if (!hasRealSeasons(item)) return { errors, activationChanged: false };
     const monitored = monitoredRealSeasons(item);
     if (searchedSeasons === null) {
       // Not checked since the setting was turned on, triaged before seasons were
