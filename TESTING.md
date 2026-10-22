@@ -224,7 +224,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
 | Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
-| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and sets a boundary; saving again while on keeps both; off keeps the boundary and off → on clears again with a strictly later one, even when the clock has not passed the previous boundary; a non-boolean is rejected |
+| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and increments the activation number; saving again while on changes neither; turning either setting off and on again clears again with a new number; a non-boolean is rejected |
 | Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
@@ -353,6 +353,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Turning the season check on during a new series' search leaves its record empty | A record written from the poll's older snapshot after the activation clear would survive it, so it is left for the first active poll, which records without searching |
 | A series listed without its seasons is neither recorded nor pruned | Triage records nothing for a search with no season data, the next poll with seasons records them without searching, and a later list missing them keeps the record |
 | Turning the setting off mid-poll stops season searches | A season search in flight when the setting is turned off is the last one sent |
+| Triage turned off and on with the same boundary mid-poll still stops the season check | The season check's own activation number changes even when the triage timestamp repeats, so the in-flight poll sends no more searches and writes no record after the clear |
 | A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll, and leaves the series in flight unrecorded, since turning it back on clears every record |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries

@@ -155,31 +155,30 @@ test("turning on the season search clears recorded seasons only when it becomes 
     await patch({ searchNewlyMonitoredSeasonsEnabled: true });
     assert.deepEqual(recorded(), [1]);
 
+    const activation = () => db.getAppSettings().searchNewlyMonitoredSeasonsActivation;
+    assert.equal(activation(), 0);
     await patch({ newShowTriageEnabled: true, searchNewlyMonitoredSeasonsEnabled: true });
     assert.equal(recorded(), null);
-    const boundary = db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt;
-    assert.ok(boundary);
+    assert.equal(activation(), 1);
 
     // Saving the form again while it is already on keeps the records and the boundary.
     db.setNewShowTriageSearchedSeasons(1, [1, 2]);
     await patch({ newShowTriageEnabled: true, searchNewlyMonitoredSeasonsEnabled: true, dryRun: false });
     assert.deepEqual(recorded(), [1, 2]);
-    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, boundary);
+    assert.equal(activation(), 1);
 
     await patch({ searchNewlyMonitoredSeasonsEnabled: false });
-    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, boundary, "kept while off, so the next one can be made later");
     assert.deepEqual(recorded(), [1, 2]);
     await patch({ searchNewlyMonitoredSeasonsEnabled: true });
     assert.equal(recorded(), null);
-    const secondBoundary = db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt;
-    assert.ok(secondBoundary && Date.parse(secondBoundary) > Date.parse(boundary));
+    assert.equal(activation(), 2);
 
-    // Even when the clock has not passed the previous boundary, the next is later.
-    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    await patch({ searchNewlyMonitoredSeasonsEnabled: false });
-    db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabledAt: future });
-    await patch({ searchNewlyMonitoredSeasonsEnabled: true });
-    assert.equal(db.getAppSettings().searchNewlyMonitoredSeasonsEnabledAt, new Date(Date.parse(future) + 1).toISOString());
+    // Turning triage off and on again also starts a new activation, however quickly.
+    db.setNewShowTriageSearchedSeasons(1, [1]);
+    await patch({ newShowTriageEnabled: false });
+    await patch({ newShowTriageEnabled: true });
+    assert.equal(recorded(), null);
+    assert.equal(activation(), 3);
 
     const invalid = await fetch(`http://127.0.0.1:${address.port}/api/settings/app`, { method: "PATCH", headers: { Cookie: cookie, "content-type": "application/json" }, body: JSON.stringify({ searchNewlyMonitoredSeasonsEnabled: "yes" }) });
     assert.equal(invalid.status, 400);

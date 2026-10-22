@@ -87,7 +87,7 @@ function enableTriage(db: PacearrDatabase, enabledAt: string, dryRun = false, se
     newShowTriageEpisodeThreshold: 80,
     dryRun,
     searchNewlyMonitoredSeasonsEnabled: seasonSearch,
-    searchNewlyMonitoredSeasonsEnabledAt: seasonSearch ? enabledAt : null,
+    searchNewlyMonitoredSeasonsActivation: seasonSearch ? 1 : 0,
   });
 }
 
@@ -944,7 +944,7 @@ test("turning the setting off mid-poll stops further season searches", async () 
     await services.triageNewSonarrSeries();
 
     state.series = [withSeasons(first, 3, [1, 2, 3]), withSeasons(second, 2, [1, 2])];
-    state.onCommand = () => { db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabled: false, searchNewlyMonitoredSeasonsEnabledAt: null }); };
+    state.onCommand = () => { db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabled: false }); };
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 55, seasonNumber: 2 }]);
   } finally {
@@ -998,7 +998,7 @@ test("turning the season check on during a new series' search leaves that series
     enableTriage(db, "2026-08-11T12:00:00.000Z");
     // As the settings route does: turn it on and clear every record, while the SeriesSearch awaits Sonarr.
     state.onCommand = () => {
-      db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabled: true, searchNewlyMonitoredSeasonsEnabledAt: "2026-08-12T00:00:00.000Z" });
+      db.updateAppSettings({ searchNewlyMonitoredSeasonsEnabled: true, searchNewlyMonitoredSeasonsActivation: db.getAppSettings().searchNewlyMonitoredSeasonsActivation + 1 });
       db.clearNewShowTriageSearchedSeasons();
     };
     await services.triageNewSonarrSeries();
@@ -1012,6 +1012,37 @@ test("turning the season check on during a new series' search leaves that series
     await services.triageNewSonarrSeries();
     assert.deepEqual(sentCommands(requests), []);
     assert.deepEqual(recorded(), [1, 2]);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("triage turned off and on with the same boundary mid-poll still stops the season check", async () => {
+  const { db, services, cleanup } = createHarness();
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const first = series(59, "First", 30, "2026-06-28T17:45:06.000Z");
+  const second = series(60, "Second", 30, "2026-06-28T17:45:07.000Z");
+  const state: Parameters<typeof installSonarrFetchStub>[0] = { requests, series: [withSeasons(first, 3, [1]), withSeasons(second, 2, [1])] };
+  const restoreFetch = installSonarrFetchStub(state);
+  try {
+    enableTriage(db, "2026-08-11T12:00:00.000Z", false, true);
+    await services.triageNewSonarrSeries();
+
+    state.series = [withSeasons(first, 3, [1, 2, 3]), withSeasons(second, 2, [1, 2])];
+    // Off and on within one millisecond: the triage boundary repeats, as the route then
+    // starts a new season-check activation and clears every record.
+    state.onCommand = () => {
+      const { newShowTriageEnabledAt, searchNewlyMonitoredSeasonsActivation } = db.getAppSettings();
+      db.updateAppSettings({ newShowTriageEnabled: false, newShowTriageEnabledAt: null });
+      db.updateAppSettings({ newShowTriageEnabled: true, newShowTriageEnabledAt, searchNewlyMonitoredSeasonsActivation: searchNewlyMonitoredSeasonsActivation + 1 });
+      db.clearNewShowTriageSearchedSeasons();
+    };
+    requests.length = 0;
+    await services.triageNewSonarrSeries();
+    assert.deepEqual(sentCommands(requests), [{ name: "SeasonSearch", seriesId: 59, seasonNumber: 2 }]);
+    assert.equal(db.listTriagedSeries().find((row) => row.seriesId === 59)?.searchedSeasons, null);
+    assert.equal(db.listTriagedSeries().find((row) => row.seriesId === 60)?.searchedSeasons, null);
   } finally {
     restoreFetch();
     cleanup();

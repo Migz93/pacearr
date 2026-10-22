@@ -107,8 +107,11 @@ export interface AppSettings {
   newShowTriageEnabledAt: string | null;
   /** Searches a season once it becomes monitored on an unenrolled series. Runs in the triage poll. */
   searchNewlyMonitoredSeasonsEnabled: boolean;
-  /** Internal; moves to a strictly later time on each off → on change, so a poll that started before it stops. Kept while off. */
-  searchNewlyMonitoredSeasonsEnabledAt: string | null;
+  /**
+   * Internal; incremented each time the season check becomes active (it and triage both on,
+   * after either was off), so a poll that started under an earlier activation stops.
+   */
+  searchNewlyMonitoredSeasonsActivation: number;
 }
 
 export interface PlexArtworkRecord {

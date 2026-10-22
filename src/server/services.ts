@@ -89,8 +89,6 @@ const SOURCE_IDENTITY_LOOKUP_FAILURE_LIMIT = 3;
 const RESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNRESOLVED_SOURCE_IDENTITY_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 
-type SeasonSearchActivation = { triageAt: string | null; seasonSearchAt: string | null };
-
 /**
  * False when a series lists no real seasons, as Sonarr's response can before a newly
  * added series is refreshed. Its monitored seasons are then unknown rather than none.
@@ -637,7 +635,7 @@ export class PacearrServices {
       return 0;
     }
 
-    const seasonSearchActivation: SeasonSearchActivation = { triageAt: activationAt, seasonSearchAt: settings.searchNewlyMonitoredSeasonsEnabledAt };
+    const seasonSearchActivation = settings.searchNewlyMonitoredSeasonsActivation;
     // Taken before the request, so an unenrolment during it counts as after the snapshot.
     const seriesFetchedAt = ++this.seasonCheckSequence;
     const series = await this.getSonarr().getSeries();
@@ -814,11 +812,12 @@ export class PacearrServices {
     return settings.newShowTriageEnabled && settings.newShowTriageEnabledAt === activationAt;
   }
 
-  private isCurrentSeasonSearchActivation(activation: SeasonSearchActivation): boolean {
+  /** The season check is still on, under the activation number the poll started with. */
+  private isCurrentSeasonSearchActivation(activation: number): boolean {
     const settings = this.db.getAppSettings();
-    return this.isCurrentNewShowTriageActivation(activation.triageAt)
+    return settings.newShowTriageEnabled
       && settings.searchNewlyMonitoredSeasonsEnabled
-      && settings.searchNewlyMonitoredSeasonsEnabledAt === activation.seasonSearchAt;
+      && settings.searchNewlyMonitoredSeasonsActivation === activation;
   }
 
   /**
@@ -829,7 +828,7 @@ export class PacearrServices {
    * not retain. Returns errors for the triage summary; a failed season stays unrecorded
    * and is retried next poll.
    */
-  private async searchNewlyMonitoredSeasons(series: SonarrSeries[], seriesFetchedAt: number, activation: SeasonSearchActivation): Promise<string[]> {
+  private async searchNewlyMonitoredSeasons(series: SonarrSeries[], seriesFetchedAt: number, activation: number): Promise<string[]> {
     const errors: string[] = [];
     const seriesById = new Map(series.map((item) => [item.id, item]));
     // An unenrolment before this snapshot is already reflected in it.
@@ -868,7 +867,7 @@ export class PacearrServices {
   }
 
   /** Caller holds the series lock. `item` is the poll's Sonarr snapshot, taken at sequence `seriesFetchedAt`. */
-  private async searchNewlyMonitoredSeasonsForSeries(item: SonarrSeries, seriesFetchedAt: number, activation: SeasonSearchActivation): Promise<{ errors: string[]; activationChanged: boolean }> {
+  private async searchNewlyMonitoredSeasonsForSeries(item: SonarrSeries, seriesFetchedAt: number, activation: number): Promise<{ errors: string[]; activationChanged: boolean }> {
     const errors: string[] = [];
     // An unenrolment after the snapshot monitored every season, which the snapshot does
     // not show yet. Comparing against it would record the pilot-only state and the next

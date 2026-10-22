@@ -72,7 +72,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   newShowTriageEpisodeThreshold: 80,
   newShowTriageEnabledAt: null,
   searchNewlyMonitoredSeasonsEnabled: false,
-  searchNewlyMonitoredSeasonsEnabledAt: null,
+  searchNewlyMonitoredSeasonsActivation: 0,
 };
 
 export interface WatchEventInsertResult {
