@@ -744,8 +744,12 @@ export class PacearrServices {
           addedAt: item.added ?? null,
           decision,
           // SeriesSearch only covers what is monitored now; later seasons are searched as they become monitored.
-          // Without season data the record stays empty and a later poll records it.
-          ...(decision === "search" && hasRealSeasons(item) ? { searchedSeasons: monitoredRealSeasons(item) } : {}),
+          // The record is left empty, for the first active poll to fill, when Sonarr listed no seasons or when
+          // the season check is not on this poll's activation: turning it on clears every record, and a write
+          // from this poll's older snapshot after that would survive the clear.
+          ...(decision === "search" && hasRealSeasons(item) && this.isCurrentSeasonSearchActivation(seasonSearchActivation)
+            ? { searchedSeasons: monitoredRealSeasons(item) }
+            : {}),
         });
         this.db.addHistory("info", "show.auto_triaged", item.title, { seriesId: item.id, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });
         this.logger.info("New Sonarr series triaged", { seriesId: item.id, title: item.title, episodeCount, threshold: settings.newShowTriageEpisodeThreshold, decision });

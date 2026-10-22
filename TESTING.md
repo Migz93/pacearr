@@ -350,6 +350,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | A season monitored on a series that predates triage is searched once | A `baseline` series gets its monitored seasons recorded without searching, then one `SeasonSearch` per season monitored later |
 | Newly monitored seasons are left alone while the setting is off | No search and no record while **Search newly monitored seasons** is off |
 | Recording many existing series reads only the poll's series list | Filling empty records makes no per-series Sonarr reads |
+| Turning the season check on during a new series' search leaves its record empty | A record written from the poll's older snapshot after the activation clear would survive it, so it is left for the first active poll, which records without searching |
 | A series listed without its seasons is neither recorded nor pruned | Triage records nothing for a search with no season data, the next poll with seasons records them without searching, and a later list missing them keeps the record |
 | Turning the setting off mid-poll stops season searches | A season search in flight when the setting is turned off is the last one sent |
 | A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll, and leaves the series in flight unrecorded, since turning it back on clears every record |
