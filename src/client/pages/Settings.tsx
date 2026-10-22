@@ -493,8 +493,11 @@ function PlexTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
 
   function save() {
     return status.run(async () => {
-      if (connectionDirty) await apiPost("/api/settings/plex", buildPayload());
+      // The artwork PATCH goes first. If the connection save then fails, the form stays
+      // dirty and a retry repeats only the PATCH, which has no side effects. The other
+      // order would re-test the connection and re-discover users on every retry.
       if (artworkEnabled !== initialArtwork) await apiPatch("/api/settings/app", { artworkEnabled });
+      if (connectionDirty) await apiPost("/api/settings/plex", buildPayload());
       await onSave();
     });
   }
@@ -627,8 +630,11 @@ function SonarrTab({ settings, onSave, onSavingChange }: SettingsTabProps) {
 
   function save() {
     return status.run(async () => {
-      if (connectionDirty) await apiPost("/api/settings/sonarr", credentials);
+      // The tags PATCH goes first, so a retry after a failed connection save repeats only
+      // the PATCH, which queues a library refresh only when tag writing turns on. The
+      // other order would queue another refresh from the connection save on every retry.
       if (tagsDirty) await apiPatch("/api/settings/app", { sonarrTagsEnabled: form.tagsEnabled });
+      if (connectionDirty) await apiPost("/api/settings/sonarr", credentials);
       await onSave();
     });
   }
@@ -724,6 +730,7 @@ function SonarrTagsCard({ configured, tagsEnabled, onTagsEnabledChange }: { conf
         onChange={onTagsEnabledChange}
       />
       <SettingRow
+        action
         label="Import from Sonarr tags"
         hint={result
           ? <span aria-live="polite" className={`font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>

@@ -112,3 +112,27 @@ test("a settings tab and tab switching are locked while its save is in flight", 
   await expect(page.getByText("Simulated save failure")).toBeHidden();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
 });
+
+// Both requests are intercepted in the browser, so nothing reaches the server.
+test("a Plex save sends the artwork setting before the connection", async ({ page }) => {
+  const order: string[] = [];
+  await page.route("**/api/settings/app", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    order.push("artwork");
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/settings/plex", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    order.push("connection");
+    await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "Simulated connection failure" }) });
+  });
+
+  await openPage(page, "/settings?tab=plex", "Settings");
+  await page.getByRole("checkbox", { name: "Rolling artwork", exact: true }).click({ force: true });
+  const hostname = page.getByRole("textbox", { name: "Hostname or IP address" });
+  await hostname.fill(`${await hostname.inputValue()}x`);
+  await page.getByRole("button", { name: "Save changes" }).click();
+
+  await expect(page.getByText("Simulated connection failure")).toBeVisible();
+  expect(order).toEqual(["artwork", "connection"]);
+});

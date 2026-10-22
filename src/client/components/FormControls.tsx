@@ -124,7 +124,8 @@ const settingRowClass = "-mx-3 -my-2 grid grid-cols-[minmax(0,1fr)_auto] items-c
 function SettingRowFrame({ label, hint, controlId, hintId, wide, children }: {
   label: string;
   hint?: ReactNode;
-  controlId: string;
+  /** Omitted for an action row, whose button names itself and can't take a <label>. */
+  controlId?: string;
   hintId?: string;
   wide: boolean;
   children: ReactNode;
@@ -132,7 +133,7 @@ function SettingRowFrame({ label, hint, controlId, hintId, wide, children }: {
   return (
     <div className={cn(settingRowClass, wide ? "max-[820px]:grid-cols-1" : "max-[480px]:grid-cols-1")}>
       <div>
-        <label className={settingLabelClass} htmlFor={controlId}>{label}</label>
+        {controlId ? <label className={settingLabelClass} htmlFor={controlId}>{label}</label> : <span className={settingLabelClass}>{label}</span>}
         {hint && <p id={hintId} className={settingHintClass}>{hint}</p>}
       </div>
       <div className={cn(wide && "w-80 max-w-full max-[820px]:w-full")}>{children}</div>
@@ -144,18 +145,27 @@ function SettingRowFrame({ label, hint, controlId, hintId, wide, children }: {
  * A settings row around a single control, which gets the label's id and the hint's
  * aria-describedby. When the control sits inside a wrapper (a select with a button
  * beside it), pass `htmlFor` instead: the child is left alone, and the control should
- * take `${htmlFor}-hint` as its aria-describedby.
+ * take `${htmlFor}-hint` as its aria-describedby. For a button that runs an action,
+ * pass `action`: the label is plain text, since a button can't be labelled, and the
+ * button keeps its own name but still gets the hint as its description.
  */
-export function SettingRow({ label, hint, wide = false, htmlFor, children }: { label: string; hint?: ReactNode; wide?: boolean; htmlFor?: string; children: ReactNode }) {
+export function SettingRow({ label, hint, wide = false, htmlFor, action = false, children }: {
+  label: string;
+  hint?: ReactNode;
+  wide?: boolean;
+  htmlFor?: string;
+  action?: boolean;
+  children: ReactNode;
+}) {
   const generatedId = useId();
   const child = Children.only(children);
   const childId = isValidElement(child) ? (child.props as { id?: string }).id : undefined;
   const controlId = htmlFor ?? childId ?? generatedId;
   const hintId = hint ? `${controlId}-hint` : undefined;
   const control = !htmlFor && isValidElement(child)
-    ? cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, { id: controlId, "aria-describedby": hintId })
+    ? cloneElement(child as ReactElement<{ id?: string; "aria-describedby"?: string }>, action ? { "aria-describedby": hintId } : { id: controlId, "aria-describedby": hintId })
     : child;
-  return <SettingRowFrame label={label} hint={hint} controlId={controlId} hintId={hintId} wide={wide}>{control}</SettingRowFrame>;
+  return <SettingRowFrame label={label} hint={hint} controlId={action ? undefined : controlId} hintId={hintId} wide={wide}>{control}</SettingRowFrame>;
 }
 
 /**
