@@ -209,13 +209,16 @@ export function SettingNumber({ label, hint, unit, value, onChange, min = 0, ste
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const hintId = hint ? `${inputId}-hint` : undefined;
+  // The unit is part of the description, since not every hint names it.
+  const unitId = unit ? `${inputId}-unit` : undefined;
+  const describedBy = [hintId, unitId].filter(Boolean).join(" ") || undefined;
   return (
     <SettingRowFrame label={label} hint={hint} controlId={inputId} hintId={hintId} wide={false}>
       {/* The unit sits inside the box, so every box is the same width and shares the
           toggles' right edge, whatever the unit's length. */}
       <div className="flex w-44 items-center overflow-hidden rounded-lg border border-outline-variant/30 bg-background focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
-        <input id={inputId} aria-describedby={hintId} className="w-full min-w-0 border-0 bg-transparent px-3 py-2 text-on-surface focus:outline-none" type="number" min={min} step={step} value={String(value)} onChange={(event) => onChange(event.target.value)} />
-        {unit && <span className="shrink-0 pr-3 text-sm text-on-surface-variant">{unit}</span>}
+        <input id={inputId} aria-describedby={describedBy} className="w-full min-w-0 border-0 bg-transparent px-3 py-2 text-on-surface focus:outline-none" type="number" min={min} step={step} value={String(value)} onChange={(event) => onChange(event.target.value)} />
+        {unit && <span id={unitId} className="shrink-0 pr-3 text-sm text-on-surface-variant">{unit}</span>}
       </div>
     </SettingRowFrame>
   );
