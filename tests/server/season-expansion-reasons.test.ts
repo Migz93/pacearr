@@ -49,6 +49,8 @@ function createHarness(options: {
   plexHistory?: boolean;
   /** How many episode monitoring writes fail before Sonarr recovers. */
   failingEpisodeMonitorWrites?: number;
+  /** The series update (1-based) that fails once, e.g. part-way through a baseline's season updates. */
+  failingSeriesUpdate?: number;
 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-expansion-reasons-test-"));
   const config: RuntimeConfig = { port: 9302, dataDir: dir, sessionCookieName: "pacearr_test", sessionTtlMs: 1000, logLevel: "error" };
@@ -58,6 +60,7 @@ function createHarness(options: {
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
   if (options.plexHistory) db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
   let failingEpisodeMonitorWrites = options.failingEpisodeMonitorWrites ?? 0;
+  let seriesUpdates = 0;
   db.updateAppSettings({ dryRun: false, earlyPrefetchEnabled: false, expandNextSeasonOnFinaleEnabled: false, progressiveCleanupEnabled: true, progressiveCleanupDelayDays: 7, ...options.settings });
 
   const monitoredSeasons = options.monitoredSeasons ?? [];
@@ -84,7 +87,10 @@ function createHarness(options: {
     }
     if (url.pathname === "/api/v3/series") return Response.json([series]);
     if (url.pathname === `/api/v3/series/${SERIES_ID}`) {
-      if (method === "PUT") series = { ...series, ...JSON.parse(body!) as Partial<SonarrSeries> };
+      if (method === "PUT") {
+        if (++seriesUpdates === options.failingSeriesUpdate) return new Response("temporary Sonarr error", { status: 503 });
+        series = { ...series, ...JSON.parse(body!) as Partial<SonarrSeries> };
+      }
       return Response.json(series);
     }
     if (url.pathname === "/api/v3/episode") return Response.json(episodes);
@@ -379,6 +385,25 @@ test("a triage enrolment that failed part-way keeps its requested season when th
       { name: "EpisodeSearch", episodeIds: [9021, 9031] },
       { name: "SeasonSearch", seriesId: SERIES_ID, seasonNumber: 1 },
     ]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("a whole-show request whose baseline failed part-way is not reclassified as requested seasons on resume", async () => {
+  // Series monitoring, then season 1 off, then season 2 off fails: Sonarr is left with
+  // only seasons 2 and 3 monitored, which would read as a request for those two.
+  const harness = createHarness({ monitoredSeasons: [1, 2, 3], failingSeriesUpdate: 3 });
+  try {
+    harness.enableTriage();
+    await harness.services.triageNewSonarrSeries();
+    assert.deepEqual(harness.expandedSeasons(), []);
+
+    await harness.services.triageNewSonarrSeries();
+
+    assert.deepEqual(harness.expandedSeasons(), []);
+    assert.deepEqual(harness.commands().filter((command) => command.name === "SeasonSearch"), []);
+    assert.deepEqual(harness.episodes.filter((episode) => episode.monitored).map((episode) => episode.id), [9011, 9021, 9031]);
   } finally {
     harness.cleanup();
   }

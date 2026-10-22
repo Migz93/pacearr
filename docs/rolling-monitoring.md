@@ -39,7 +39,10 @@ those seasons were requested and are kept:
 | Every real season | A whole-show request: the plain pilot baseline, nothing expanded |
 | None | The plain pilot baseline |
 
-A requested season is then managed like any expanded season. With no active viewer,
+The classification is made from the series as read before any Sonarr change and stored
+with the pending enrolment, so a retry after a partial failure uses it rather than
+monitoring the failed baseline already changed. A requested season is then managed
+like any expanded season. With no active viewer,
 the next reconcile starts its inactivity timer and it is trimmed to E01 after
 **Cleanup delay**; a viewer who starts it keeps it. Excluded seasons are never
 expanded. History records `sonarr.expand_season` with `source: "auto-triage"` and

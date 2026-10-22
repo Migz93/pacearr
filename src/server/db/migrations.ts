@@ -600,9 +600,14 @@ const migrations: Migration[] = [
     // rolling_shows.expanded_seasons stays the record of which seasons are expanded; a row
     // here only describes one. Seasons already expanded could only have come from watch
     // activity, so they start as `watched`, with no user or time.
+    // requested_seasons snapshots which seasons an automatic enrolment treats as requested,
+    // taken before any Sonarr change: a retry after a partial baseline would otherwise read
+    // monitoring that the baseline had already changed. NULL (a pending row from before this
+    // migration) means none, today's behaviour.
     version: 29,
     up(db) {
       db.exec(`
+        ALTER TABLE new_show_triage_pending_enrollments ADD COLUMN requested_seasons TEXT;
         CREATE TABLE rolling_expanded_seasons (
           rolling_show_id INTEGER NOT NULL,
           season_number INTEGER NOT NULL,

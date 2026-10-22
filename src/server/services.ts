@@ -82,8 +82,8 @@ type EnrollmentOptions = {
   applyBaseline: boolean;
   importHistory: boolean;
   deferFileDeletion?: boolean;
-  /** Automatic triage only: keep the seasons requested when the show was added expanded (see selectRequestedSeasons). */
-  expandRequestedSeasons?: boolean;
+  /** Automatic triage only: seasons requested when the show was added, kept expanded (see selectRequestedSeasons). */
+  requestedSeasons?: number[];
 };
 type ResolutionThrottle = { nextLookupAt: number; pending: Promise<void> };
 /**
@@ -716,7 +716,7 @@ export class PacearrServices {
           const existingEnrollment = this.db.getRollingShowBySeriesId(item.id);
           if (existingEnrollment) {
             if (this.db.hasPendingNewShowTriageEnrollment(item.id)) {
-              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, expandRequestedSeasons: true });
+              await this.resumeEnrollment(item.id, existingEnrollment, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, requestedSeasons: this.db.getNewShowTriageRequestedSeasons(item.id) });
               this.db.completeNewShowTriageEnrollment(item.id);
             } else {
               // A rolling row that Pacearr did not mark pending belongs to a manual
@@ -731,8 +731,12 @@ export class PacearrServices {
             // subsequent Sonarr mutations can partially fail.
             const enrollment = await this.beginEnrollment(item.id, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage });
             try {
-              this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null });
-              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, expandRequestedSeasons: true });
+              // Classified from the series as read before any Sonarr change, and stored with
+              // the marker, so a retry after a partial baseline does not reclassify a whole-show
+              // request from the monitoring that baseline already changed.
+              const requestedSeasons = selectRequestedSeasons(enrollment.series);
+              this.db.startNewShowTriageEnrollment({ seriesId: item.id, title: item.title, addedAt: item.added ?? null, requestedSeasons });
+              await this.completeEnrollment(enrollment.series, enrollment.rolling, enrollment.operation, { applyBaseline: true, importHistory: false, deferFileDeletion: repairHistoryAfterTriage, requestedSeasons });
               this.db.completeNewShowTriageEnrollment(item.id);
             } catch (error) {
               // completeEnrollment releases in its finally block; this also releases
@@ -1422,7 +1426,7 @@ export class PacearrServices {
       // pilot baseline from that state first so manual enrollment does not wait for a
       // potentially long full-history read before Sonarr can act.
       this.seedRollingProgressFromWatchHistory(series.id, rolling.id);
-      const requestedSeasons = options.expandRequestedSeasons ? this.recordRequestedSeasons(series, rolling) : [];
+      const requestedSeasons = options.requestedSeasons?.length ? this.recordRequestedSeasons(options.requestedSeasons, rolling) : [];
       if (options.applyBaseline) {
         // Never deletes files: the history read may reveal an active season missing
         // from the local progress cache, and viewer positions below may expand or
@@ -1505,9 +1509,9 @@ export class PacearrServices {
    * retains them. Excluded seasons are never expanded. Dry run records nothing, but still
    * returns the seasons for the plan to preview.
    */
-  private recordRequestedSeasons(series: SonarrSeries, rolling: RollingShowRecord): number[] {
+  private recordRequestedSeasons(requestedSeasons: number[], rolling: RollingShowRecord): number[] {
     const excluded = exclusionCheck(this.db.getRollingExclusions(rolling.id));
-    const requested = selectRequestedSeasons(series).filter((seasonNumber) => !excluded.season(seasonNumber));
+    const requested = requestedSeasons.filter((seasonNumber) => !excluded.season(seasonNumber));
     if (!this.isDryRun()) {
       const expandedAt = new Date().toISOString();
       for (const seasonNumber of requested) this.db.markSeasonExpanded(rolling.id, seasonNumber, expandedAt, { reason: "requested" });

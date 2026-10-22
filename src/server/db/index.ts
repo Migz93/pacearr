@@ -505,11 +505,18 @@ export class PacearrDatabase {
     return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").get(seriesId));
   }
 
-  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null }): void {
+  /** The first attempt's row is kept, so a retry never replaces its requested-season snapshot. */
+  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null; requestedSeasons: number[] }): void {
     this.db.prepare(`
-      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at)
-      VALUES (?, ?, ?, ?)
-    `).run(input.seriesId, input.title, input.addedAt, now());
+      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at, requested_seasons)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, now(), JSON.stringify(input.requestedSeasons));
+  }
+
+  getNewShowTriageRequestedSeasons(seriesId: number): number[] {
+    const row = this.db.prepare("SELECT requested_seasons AS requestedSeasons FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?")
+      .get(seriesId) as { requestedSeasons: string | null } | undefined;
+    return parseJson<number[]>(row?.requestedSeasons ?? null, []);
   }
 
   completeNewShowTriageEnrollment(seriesId: number): void {
