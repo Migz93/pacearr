@@ -115,9 +115,11 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
 /**
  * Saving state for a settings tab's UnsavedChangesBar. "Saved" clears itself after a
  * moment; the form has already re-synced from the reloaded settings by then, so the
- * bar has nothing left to show and drops away.
+ * bar has nothing left to show and drops away. An error clears once the form is back
+ * at its saved values (edited back or discarded), since there is then nothing left to
+ * save and the bar would otherwise be stuck showing it with both buttons disabled.
  */
-function useSaveStatus() {
+function useSaveStatus(dirty: boolean) {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +129,10 @@ function useSaveStatus() {
     const timer = setTimeout(() => setSuccess(false), 2500);
     return () => clearTimeout(timer);
   }, [success]);
+
+  useEffect(() => {
+    if (!dirty) setError(null);
+  }, [dirty]);
 
   async function run(action: () => Promise<void>) {
     setSaving(true);
@@ -142,7 +148,7 @@ function useSaveStatus() {
     }
   }
 
-  return { saving, success, error, clearError: () => setError(null), run };
+  return { saving, success, error, run };
 }
 
 function sameValues<T>(a: T, b: T) {
@@ -175,8 +181,8 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
 function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
   const initial = useMemo(() => generalFormFromSettings(settings.app), [settings.app]);
   const [form, setForm] = useState<GeneralForm>(initial);
-  const status = useSaveStatus();
   const dirty = !sameValues(form, initial);
+  const status = useSaveStatus(dirty);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -372,7 +378,7 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => { setForm(initial); status.clearError(); }}
+        onDiscard={() => setForm(initial)}
       />
     </div>
   );
@@ -404,7 +410,6 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   const [serversError, setServersError] = useState<string | null>(null);
   const initial = useMemo(() => plexFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<PlexForm>(initial);
-  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const { artworkEnabled: initialArtwork, ...initialConnection } = initial;
@@ -413,6 +418,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
   // flips the artwork toggle must not post it.
   const connectionDirty = !sameValues(connection, initialConnection);
   const dirty = connectionDirty || artworkEnabled !== initialArtwork;
+  const status = useSaveStatus(dirty);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -525,7 +531,7 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => { setForm(initial); status.clearError(); }}
+        onDiscard={() => setForm(initial)}
       />
     </div>
   );
@@ -568,7 +574,6 @@ function sonarrFormFromSettings(settings: SettingsResponse): SonarrForm {
 function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
   const initial = useMemo(() => sonarrFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<SonarrForm>(initial);
-  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const baseUrl = form.baseUrl.trim();
@@ -579,6 +584,8 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
   // toggle must not post it. An empty key keeps the saved one, so it isn't a change.
   const connectionDirty = baseUrl !== initial.baseUrl || apiKey !== "";
   const tagsDirty = form.tagsEnabled !== initial.tagsEnabled;
+  const dirty = connectionDirty || tagsDirty;
+  const status = useSaveStatus(dirty);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -625,12 +632,12 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
         onTagsEnabledChange={(value) => setForm({ ...form, tagsEnabled: value })}
       />
       <UnsavedChangesBar
-        dirty={connectionDirty || tagsDirty}
+        dirty={dirty}
         saving={status.saving}
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => { setForm(initial); status.clearError(); }}
+        onDiscard={() => setForm(initial)}
         saveDisabled={connectionDirty && credentialsIncomplete}
       />
     </div>
@@ -743,7 +750,6 @@ function tautulliFormFromSettings(settings: SettingsResponse): TautulliForm {
 function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
   const initial = useMemo(() => tautulliFormFromSettings(settings), [settings]);
   const [form, setForm] = useState<TautulliForm>(initial);
-  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const baseUrl = form.baseUrl.trim();
@@ -751,6 +757,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
   const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
   const credentials = { enabled: form.enabled, baseUrl, apiKey };
   const dirty = form.enabled !== initial.enabled || baseUrl !== initial.baseUrl || apiKey !== "";
+  const status = useSaveStatus(dirty);
 
   useEffect(() => setForm(initial), [initial]);
 
@@ -797,7 +804,7 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
         success={status.success}
         error={status.error}
         onSave={() => void save()}
-        onDiscard={() => { setForm(initial); status.clearError(); }}
+        onDiscard={() => setForm(initial)}
         saveDisabled={form.enabled && credentialsIncomplete}
       />
     </div>

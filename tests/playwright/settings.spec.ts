@@ -68,3 +68,18 @@ test("the save bar only appears once something changes", async ({ page }) => {
   await activityWindow.fill(original);
   await expect(saveButton).toBeHidden();
 });
+
+// An empty field fails client-side validation, so nothing is sent to the server.
+test("a save error clears once the form is back at its saved values", async ({ page }) => {
+  await openPage(page, "/settings", "Settings");
+  const activityWindow = page.getByRole("spinbutton", { name: "Viewer activity window" });
+  const original = await activityWindow.inputValue();
+
+  await activityWindow.fill("");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Viewer activity window must be a positive whole number of days.")).toBeVisible();
+
+  await activityWindow.fill(original);
+  await expect(page.getByText("Viewer activity window must be a positive whole number of days.")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
+});

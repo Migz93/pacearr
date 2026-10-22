@@ -245,7 +245,8 @@ export function TestConnection({ testing, disabled, result, onTest }: TestConnec
  * The one save model for every settings tab: edits stay local until saved, and this bar
  * pins to the bottom of the viewport once something has changed, so the save is never a
  * scroll away and it's clear there is something unsaved. After a save it stays just
- * long enough to confirm it; an error stays until the next save or discard.
+ * long enough to confirm it; an error stays until the next save, or until the
+ * form is back at its saved values.
  */
 export function UnsavedChangesBar({ dirty, saving, success, error, onSave, onDiscard, saveDisabled = false }: {
   dirty: boolean;
