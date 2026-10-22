@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, ClipboardCopy, Eye, Pause, Pencil, Play, RefreshCw, X } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "../lib/api";
 import { badgeClass, cn, formatRelativeTime } from "../lib/utils";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, Field, iconButtonClass, NumberField, primaryButtonClass, SaveBar, secondaryButtonClass, SectionCard, SelectInput, TextInput, ToggleField } from "../components/FormControls";
+import { compactPrimaryButtonClass, compactSecondaryButtonClass, DependentSettings, Field, iconButtonClass, primaryButtonClass, secondaryButtonClass, SectionCard, SelectInput, SettingNumber, SettingRow, SettingToggle, TestConnection, TextInput, UnsavedChangesBar } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
@@ -80,7 +80,7 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
     <Page>
       <PageHeader title="Settings" />
 
-      <SelectInput className="hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
+      <SelectInput className="mb-4 hidden max-[820px]:block" aria-label="Select settings tab" value={activeTab} onChange={(value) => setTab(value as Tab)}>
         {TABS.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
       </SelectInput>
 
@@ -93,7 +93,9 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
       </div>
 
       {error && <ErrorBanner message={error} />}
-      {loading ? (
+      {/* Only the first load replaces the page. A reload after a save keeps the tab
+          mounted, so its "Saved" confirmation survives and the form re-syncs in place. */}
+      {loading && !settings ? (
         <PageLoading label="Loading settings..." />
       ) : (
         <>
@@ -108,6 +110,43 @@ export default function Settings({ onSaved }: { onSaved: () => Promise<void> }) 
       )}
     </Page>
   );
+}
+
+/**
+ * Saving state for a settings tab's UnsavedChangesBar. "Saved" clears itself after a
+ * moment; the form has already re-synced from the reloaded settings by then, so the
+ * bar has nothing left to show and drops away.
+ */
+function useSaveStatus() {
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!success) return;
+    const timer = setTimeout(() => setSuccess(false), 2500);
+    return () => clearTimeout(timer);
+  }, [success]);
+
+  async function run(action: () => Promise<void>) {
+    setSaving(true);
+    setSuccess(false);
+    setError(null);
+    try {
+      await action();
+      setSuccess(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { saving, success, error, clearError: () => setError(null), run };
+}
+
+function sameValues<T>(a: T, b: T) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 type GeneralForm = Omit<SettingsResponse["app"], "earlyPrefetchTriggerEpisodesRemaining" | "earlyPrefetchEpisodeCount" | "newShowTriageEpisodeThreshold" | "viewerActivityWindowDays" | "historyRetentionDays" | "progressiveCleanupDelayDays" | "recommendationMinimumSavingsGb"> & {
@@ -134,18 +173,15 @@ function generalFormFromSettings(app: SettingsResponse["app"]): GeneralForm {
 }
 
 function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const [form, setForm] = useState<GeneralForm>(() => generalFormFromSettings(settings.app));
-  const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const initial = useMemo(() => generalFormFromSettings(settings.app), [settings.app]);
+  const [form, setForm] = useState<GeneralForm>(initial);
+  const status = useSaveStatus();
+  const dirty = !sameValues(form, initial);
 
-  useEffect(() => setForm(generalFormFromSettings(settings.app)), [settings.app]);
+  useEffect(() => setForm(initial), [initial]);
 
-  async function save() {
-    setSaving(true);
-    setSuccess(false);
-    setError(null);
-    try {
+  function save() {
+    return status.run(async () => {
       const trigger = Number(form.earlyPrefetchTriggerEpisodesRemaining);
       const count = Number(form.earlyPrefetchEpisodeCount);
       const triageThreshold = Number(form.newShowTriageEpisodeThreshold);
@@ -156,43 +192,37 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
       const progressiveCleanupDelayDays = form.progressiveCleanupDelayDays.trim() === "" ? Number.NaN : Number(form.progressiveCleanupDelayDays);
       const recommendationMinimumSavingsGb = form.recommendationMinimumSavingsGb.trim() === "" ? Number.NaN : Number(form.recommendationMinimumSavingsGb);
       if (form.earlyPrefetchEnabled && (!Number.isInteger(trigger) || trigger < 1 || !Number.isInteger(count) || count < 1)) {
-        setError("Early prefetch values must be positive whole numbers.");
-        return;
+        throw new Error("Early prefetch values must be positive whole numbers.");
       }
       if (form.newShowTriageEnabled && (!Number.isInteger(triageThreshold) || triageThreshold < 1)) {
-        setError("New-show triage episode limit must be a positive whole number.");
-        return;
+        throw new Error("New-show triage episode limit must be a positive whole number.");
       }
       // The server clamps every one of these to a safe value regardless (see
       // /api/settings/app in app.ts), so a bad value here can't corrupt anything — but
       // without this check it fails silently: the field just snaps to the clamped number
       // after the save completes, with no indication anything was wrong.
       if (!Number.isInteger(viewerActivityWindowDays) || viewerActivityWindowDays < 1) {
-        setError("Viewer activity window must be a positive whole number of days.");
-        return;
+        throw new Error("Viewer activity window must be a positive whole number of days.");
       }
       if (!Number.isInteger(historyRetentionDays) || historyRetentionDays < 1) {
-        setError("History retention must be a positive whole number of days.");
-        return;
+        throw new Error("History retention must be a positive whole number of days.");
       }
-      if (!Number.isInteger(progressiveCleanupDelayDays) || progressiveCleanupDelayDays < 0) {
-        setError("Cleanup delay must be a whole number of days, zero or more.");
-        return;
+      if (form.progressiveCleanupEnabled && (!Number.isInteger(progressiveCleanupDelayDays) || progressiveCleanupDelayDays < 0)) {
+        throw new Error("Cleanup delay must be a whole number of days, zero or more.");
       }
       if (!Number.isFinite(recommendationMinimumSavingsGb) || recommendationMinimumSavingsGb < 0) {
-        setError("Minimum savings must be zero or more.");
-        return;
+        throw new Error("Minimum savings must be zero or more.");
       }
       // Only the fields this tab owns. Spreading the whole form would PATCH back the
       // job intervals as they were when the tab loaded, silently undoing a schedule
-      // changed on the Jobs tab in the meantime.
+      // changed on the Jobs tab in the meantime. Dependent values are only sent while
+      // their parent is on, since they are disabled (and unvalidated) otherwise.
       await apiPatch("/api/settings/app", {
         dryRun: form.dryRun,
-        artworkEnabled: form.artworkEnabled,
         viewerActivityWindowDays,
         historyRetentionDays,
         progressiveCleanupEnabled: form.progressiveCleanupEnabled,
-        progressiveCleanupDelayDays,
+        ...(form.progressiveCleanupEnabled ? { progressiveCleanupDelayDays } : {}),
         recommendationMinimumSavingsGb,
         trustProxy: form.trustProxy,
         earlyPrefetchEnabled: form.earlyPrefetchEnabled,
@@ -201,36 +231,26 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         newShowTriageEnabled: form.newShowTriageEnabled,
         ...(form.newShowTriageEnabled ? { newShowTriageEpisodeThreshold: triageThreshold, searchNewlyMonitoredSeasonsEnabled: form.searchNewlyMonitoredSeasonsEnabled } : {}),
       });
-      setSuccess(true);
       await onSave();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
-  // One card per concern, one control per row. Hints say what the setting does to your
-  // shows, not how the mechanism works — anything longer than a line belongs in docs/.
+  // Cards are grouped by what's being decided, one setting per row. Hints say what the
+  // setting does to your shows in a line; anything longer belongs in the card's
+  // description or in docs/.
   return (
     <div className="grid gap-4">
       <SectionCard title="Safety">
-        <ToggleField
+        <SettingToggle
           label="Dry run"
-          hint="Show what Pacearr would do without actually changing or deleting anything. On by default."
+          hint="Show what Pacearr would do without changing or deleting anything. On by default."
           checked={form.dryRun}
           onChange={(value) => setForm({ ...form, dryRun: value })}
         />
       </SectionCard>
 
-      <SectionCard title="Rolling behaviour">
-        <ToggleField
-          label="Rolling artwork"
-          hint="Mark managed shows in Plex so you can tell at a glance which ones Pacearr is trimming."
-          checked={form.artworkEnabled}
-          onChange={(value) => setForm({ ...form, artworkEnabled: value })}
-        />
-        <NumberField
+      <SectionCard title="Watching and expansion" description="When a show counts as being watched, and how far ahead Pacearr downloads.">
+        <SettingNumber
           label="Viewer activity window"
           hint="How recently someone must have watched to still count as watching a show."
           unit="days"
@@ -238,89 +258,88 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           value={form.viewerActivityWindowDays}
           onChange={(value) => setForm({ ...form, viewerActivityWindowDays: value })}
         />
-        <ToggleField
+        <SettingToggle
           label="Early season prefetch"
-          hint="Start downloading the next season before someone finishes the current one, so playback never stalls."
+          hint="Start downloading the next season before someone finishes the current one."
           checked={form.earlyPrefetchEnabled}
           onChange={(value) => setForm({ ...form, earlyPrefetchEnabled: value })}
         />
-        {/* Both numbers only describe how prefetch behaves, so they are meaningless
-            while it is off. */}
-        {form.earlyPrefetchEnabled && (
-          <>
-            <NumberField
-              id="early-prefetch-trigger"
-              label="Episodes remaining trigger"
-              hint="How close to the end of a season this kicks in."
-              unit="episodes left"
-              min={1}
-              value={form.earlyPrefetchTriggerEpisodesRemaining}
-              onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })}
-            />
-            <NumberField
-              id="early-prefetch-count"
-              label="Episodes to prefetch"
-              hint="How many episodes of the next season to grab."
-              unit="episodes"
-              min={1}
-              value={form.earlyPrefetchEpisodeCount}
-              onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
-            />
-          </>
-        )}
-        <ToggleField
+        <DependentSettings enabled={form.earlyPrefetchEnabled} label="Early season prefetch options">
+          <SettingNumber
+            id="early-prefetch-trigger"
+            label="Episodes remaining trigger"
+            hint="How close to the end of a season prefetch starts."
+            unit="episodes left"
+            min={1}
+            value={form.earlyPrefetchTriggerEpisodesRemaining}
+            onChange={(value) => setForm({ ...form, earlyPrefetchTriggerEpisodesRemaining: value })}
+          />
+          <SettingNumber
+            id="early-prefetch-count"
+            label="Episodes to prefetch"
+            hint="How many episodes of the next season to grab."
+            unit="episodes"
+            min={1}
+            value={form.earlyPrefetchEpisodeCount}
+            onChange={(value) => setForm({ ...form, earlyPrefetchEpisodeCount: value })}
+          />
+        </DependentSettings>
+        <SettingToggle
           label="Expand next season on finale"
-          hint="When someone starts the last episode of a season, download the whole next season instead of waiting for its first episode."
+          hint="When someone starts a season's last episode, download the whole next season."
           checked={form.expandNextSeasonOnFinaleEnabled}
           onChange={(value) => setForm({ ...form, expandNextSeasonOnFinaleEnabled: value })}
         />
-        <ToggleField
+      </SectionCard>
+
+      <SectionCard title="New shows" description="What happens to shows as they arrive in Sonarr. Works best with Search on Add off, so nothing downloads only to be purged.">
+        <SettingToggle
           label="Auto-triage new Sonarr shows"
-          hint="Automatically pace shows with more than the episode limit. Recommended: disable Search on Add in sources that add to Sonarr, so files are not downloaded only to be purged."
+          hint="Pace new shows longer than the episode limit, and search shorter ones in full."
           checked={form.newShowTriageEnabled}
           onChange={(value) => setForm({ ...form, newShowTriageEnabled: value })}
         />
         {/* Both run in the triage poll, so they only apply while it is on. */}
-        {form.newShowTriageEnabled && (
-          <>
-            <NumberField
-              id="new-show-triage-episode-threshold"
-              label="Episode limit"
-              hint="Shows with more episodes than this are enrolled into Pacearr; smaller shows are searched in full."
-              unit="episodes"
-              min={1}
-              value={form.newShowTriageEpisodeThreshold}
-              onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
-            />
-            <ToggleField
-              label="Search newly monitored seasons"
-              hint="Search a season once it's monitored on a show Pacearr isn't pacing, such as a later season requested in Seerr. Turn on if Search on Add is off."
-              checked={form.searchNewlyMonitoredSeasonsEnabled}
-              onChange={(value) => setForm({ ...form, searchNewlyMonitoredSeasonsEnabled: value })}
-            />
-          </>
-        )}
+        <DependentSettings enabled={form.newShowTriageEnabled} label="Auto-triage options">
+          <SettingNumber
+            id="new-show-triage-episode-threshold"
+            label="Episode limit"
+            hint="Shows with more episodes than this are paced by Pacearr."
+            unit="episodes"
+            min={1}
+            value={form.newShowTriageEpisodeThreshold}
+            onChange={(value) => setForm({ ...form, newShowTriageEpisodeThreshold: value })}
+          />
+          <SettingToggle
+            label="Search newly monitored seasons"
+            hint="Search a season once it's monitored on a show Pacearr isn't pacing, such as one requested in Seerr."
+            checked={form.searchNewlyMonitoredSeasonsEnabled}
+            onChange={(value) => setForm({ ...form, searchNewlyMonitoredSeasonsEnabled: value })}
+          />
+        </DependentSettings>
       </SectionCard>
 
-      <SectionCard title="Cleanup">
-        <ToggleField
+      <SectionCard title="Cleanup" description="What happens to seasons nobody is watching any more.">
+        <SettingToggle
           label="Progressive cleanup"
-          hint="Trim seasons back to the first episode once nobody is watching them any more."
+          hint="Trim unwatched seasons back to their first episode."
           checked={form.progressiveCleanupEnabled}
           onChange={(value) => setForm({ ...form, progressiveCleanupEnabled: value })}
         />
-        <NumberField
-          label="Cleanup delay"
-          hint="How long to wait before trimming a season nobody is watching. 0 trims straight away."
-          unit="days"
-          min={0}
-          value={form.progressiveCleanupDelayDays}
-          onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: value })}
-        />
+        <DependentSettings enabled={form.progressiveCleanupEnabled} label="Progressive cleanup options">
+          <SettingNumber
+            label="Cleanup delay"
+            hint="How long a season sits unwatched before it's trimmed. 0 trims straight away."
+            unit="days"
+            min={0}
+            value={form.progressiveCleanupDelayDays}
+            onChange={(value) => setForm({ ...form, progressiveCleanupDelayDays: value })}
+          />
+        </DependentSettings>
       </SectionCard>
 
-      <SectionCard title="Recommendations">
-        <NumberField
+      <SectionCard title="Recommendations" description="Shows Pacearr suggests pacing, by the space they would free.">
+        <SettingNumber
           label="Minimum savings"
           hint="Hide recommendations that wouldn't free up at least this much space."
           unit="GB"
@@ -330,8 +349,8 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
         />
       </SectionCard>
 
-      <SectionCard title="Data and access">
-        <NumberField
+      <SectionCard title="Advanced">
+        <SettingNumber
           label="History retention"
           hint="How long to keep entries on the History page."
           unit="days"
@@ -339,31 +358,63 @@ function GeneralTab({ settings, onSave }: { settings: SettingsResponse; onSave: 
           value={form.historyRetentionDays}
           onChange={(value) => setForm({ ...form, historyRetentionDays: value })}
         />
-        <ToggleField
+        <SettingToggle
           label="Trust proxy"
-          hint="Turn on if Pacearr sits behind a reverse proxy. Needs a restart to take effect."
+          hint="Turn on if Pacearr sits behind a reverse proxy. Takes effect after a restart."
           checked={form.trustProxy}
           onChange={(value) => setForm({ ...form, trustProxy: value })}
         />
-        <SaveBar saving={saving} success={success} error={error} label="Save general" onSave={() => void save()} />
       </SectionCard>
+
+      <UnsavedChangesBar
+        dirty={dirty}
+        saving={status.saving}
+        success={status.success}
+        error={status.error}
+        onSave={() => void save()}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
+      />
     </div>
   );
+}
+
+interface PlexForm {
+  serverUri: string;
+  machineIdentifier: string;
+  hostname: string;
+  port: string;
+  useSsl: boolean;
+  artworkEnabled: boolean;
+}
+
+function plexFormFromSettings(settings: SettingsResponse): PlexForm {
+  return {
+    serverUri: settings.plex?.serverUrl ?? "",
+    machineIdentifier: settings.plex?.machineIdentifier ?? "",
+    hostname: settings.plex?.hostname ?? "",
+    port: String(settings.plex?.port ?? 32400),
+    useSsl: settings.plex?.useSsl ?? false,
+    artworkEnabled: settings.app.artworkEnabled,
+  };
 }
 
 function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
   const [availableServers, setAvailableServers] = useState<PlexConnectionOption[]>([]);
   const [loadingServers, setLoadingServers] = useState(false);
-  const [selectedServerUri, setSelectedServerUri] = useState(settings.plex?.serverUrl ?? "");
-  const [selectedMachineIdentifier, setSelectedMachineIdentifier] = useState(settings.plex?.machineIdentifier ?? "");
-  const [hostname, setHostname] = useState(settings.plex?.hostname ?? "");
-  const [port, setPort] = useState(String(settings.plex?.port ?? 32400));
-  const [useSsl, setUseSsl] = useState(settings.plex?.useSsl ?? false);
-  const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [serversError, setServersError] = useState<string | null>(null);
+  const initial = useMemo(() => plexFormFromSettings(settings), [settings]);
+  const [form, setForm] = useState<PlexForm>(initial);
+  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const { artworkEnabled: initialArtwork, ...initialConnection } = initial;
+  const { artworkEnabled, ...connection } = form;
+  // Saving the connection re-tests it and re-discovers Plex users, so a save that only
+  // flips the artwork toggle must not post it.
+  const connectionDirty = !sameValues(connection, initialConnection);
+  const dirty = connectionDirty || artworkEnabled !== initialArtwork;
+
+  useEffect(() => setForm(initial), [initial]);
 
   const groupedServers = useMemo(() => availableServers.map((option) => ({
     value: option.uri,
@@ -371,25 +422,25 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     option,
   })), [availableServers]);
 
-  function switchToManual() {
-    setSelectedServerUri("");
-    setSelectedMachineIdentifier("");
+  // Typing an address by hand drops the picked server, so the save goes in manual mode.
+  function editManually(patch: Partial<PlexForm>) {
+    setForm((current) => ({ ...current, serverUri: "", machineIdentifier: "", ...patch }));
   }
 
   function buildPayload(): PlexConfigPayload {
-    const parsedPort = Math.min(65535, Math.max(1, Math.floor(Number(port) || 32400)));
-    return selectedServerUri && selectedMachineIdentifier
-      ? { mode: "preset", serverUrl: selectedServerUri, machineIdentifier: selectedMachineIdentifier }
-      : { mode: "manual", hostname: hostname.trim(), port: parsedPort, useSsl };
+    const parsedPort = Math.min(65535, Math.max(1, Math.floor(Number(form.port) || 32400)));
+    return form.serverUri && form.machineIdentifier
+      ? { mode: "preset", serverUrl: form.serverUri, machineIdentifier: form.machineIdentifier }
+      : { mode: "manual", hostname: form.hostname.trim(), port: parsedPort, useSsl: form.useSsl };
   }
 
   async function loadServers() {
     setLoadingServers(true);
-    setError(null);
+    setServersError(null);
     try {
       setAvailableServers(await apiGet<PlexConnectionOption[]>("/api/setup/plex/servers"));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setServersError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoadingServers(false);
     }
@@ -411,83 +462,125 @@ function PlexTab({ settings, onSave }: { settings: SettingsResponse; onSave: () 
     }
   }
 
-  async function save() {
-    setSaving(true);
-    setSuccess(false);
-    setError(null);
-    try {
-      await apiPost("/api/settings/plex", buildPayload());
-      setSuccess(true);
+  function save() {
+    return status.run(async () => {
+      if (connectionDirty) await apiPost("/api/settings/plex", buildPayload());
+      if (artworkEnabled !== initialArtwork) await apiPatch("/api/settings/app", { artworkEnabled });
       await onSave();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   return (
-    <SectionCard title="Plex" description="Connect Pacearr to your Plex server. Load your available servers, or enter the address yourself.">
-      <div>
-        <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-server-select">Server</label>
-        <div className="grid grid-cols-[minmax(0,1fr)_42px] items-end gap-2">
-          <SelectInput id="plex-server-select" value={selectedServerUri} onChange={(value) => {
-            const match = groupedServers.find((entry) => entry.value === value)?.option;
-            if (!match) {
-              switchToManual();
-              return;
-            }
-            setSelectedServerUri(match.uri);
-            setSelectedMachineIdentifier(match.machineIdentifier);
-            setHostname(match.address);
-            setPort(String(match.port));
-            setUseSsl(match.protocol === "https");
-          }}>
-            <option value="">Press the button to load available servers</option>
-            {groupedServers.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
-          </SelectInput>
-          <button type="button" className={iconButtonClass} disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
-            <RefreshCw size={15} className={loadingServers ? "animate-spin" : ""} />
-          </button>
-        </div>
-      </div>
-      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-[18px] max-[820px]:grid-cols-1">
-        <div>
-          <label className="mb-1.5 mt-0 block text-[13px] font-bold text-on-surface" htmlFor="plex-hostname">Hostname or IP Address</label>
-          <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
-            <span className="border-r border-outline-variant/30 bg-background-container-high px-3 py-2.5 text-[13px] text-on-surface-variant">{useSsl ? "https://" : "http://"}</span>
-            <input id="plex-hostname" className="w-full border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={hostname} onChange={(event) => { switchToManual(); setHostname(event.target.value); }} placeholder="192.168.1.10" />
+    <div className="grid gap-4">
+      <SectionCard title="Connection" description="Connect Pacearr to your Plex server. Load your available servers, or enter the address yourself.">
+        {serversError && <ErrorBanner className="mb-0" message={serversError} />}
+        <SettingRow label="Server" hint="Pick one of the servers on your Plex account." wide htmlFor="plex-server-select">
+          <div className="grid grid-cols-[minmax(0,1fr)_40px] items-center gap-2">
+            <SelectInput id="plex-server-select" aria-describedby="plex-server-select-hint" value={form.serverUri} onChange={(value) => {
+              const match = groupedServers.find((entry) => entry.value === value)?.option;
+              if (!match) {
+                editManually({});
+                return;
+              }
+              setForm((current) => ({
+                ...current,
+                serverUri: match.uri,
+                machineIdentifier: match.machineIdentifier,
+                hostname: match.address,
+                port: String(match.port),
+                useSsl: match.protocol === "https",
+              }));
+            }}>
+              <option value="">Press refresh to load servers</option>
+              {groupedServers.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+            </SelectInput>
+            <button type="button" className={iconButtonClass} disabled={loadingServers} onClick={() => void loadServers()} title="Load available servers" aria-label="Load available servers">
+              <RefreshCw size={15} className={loadingServers ? "animate-spin" : ""} />
+            </button>
           </div>
-        </div>
-        <Field label="Port">
-          <TextInput type="number" value={port} onChange={(value) => { switchToManual(); setPort(value); }} placeholder="32400" />
-        </Field>
-      </div>
-      <ToggleField label="Use SSL" checked={useSsl} onChange={(value) => { switchToManual(); setUseSsl(value); }} />
-      <SaveBar
-        saving={saving}
-        success={success}
-        error={error}
-        label="Save Plex"
+        </SettingRow>
+        <SettingRow label="Hostname or IP address" hint="Or enter the address yourself." wide htmlFor="plex-hostname">
+          <div className="flex overflow-hidden rounded-lg border border-outline-variant/30 bg-background focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary">
+            <span className="border-r border-outline-variant/30 bg-background-container-high px-3 py-2.5 text-[13px] text-on-surface-variant">{form.useSsl ? "https://" : "http://"}</span>
+            <input id="plex-hostname" aria-describedby="plex-hostname-hint" className="w-full min-w-0 border-0 bg-transparent px-3 py-2.5 text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" value={form.hostname} onChange={(event) => editManually({ hostname: event.target.value })} placeholder="192.168.1.10" />
+          </div>
+        </SettingRow>
+        <SettingNumber label="Port" min={1} value={form.port} onChange={(value) => editManually({ port: value })} />
+        <SettingToggle label="Use SSL" checked={form.useSsl} onChange={(value) => editManually({ useSsl: value })} />
+        <TestConnection testing={testing} disabled={!form.serverUri && !form.hostname.trim()} result={testResult} onTest={() => void testConnection()} />
+      </SectionCard>
+
+      <SectionCard title="Library">
+        <SettingToggle
+          label="Rolling artwork"
+          hint="Mark managed shows in Plex so you can tell at a glance which ones Pacearr is trimming."
+          checked={form.artworkEnabled}
+          onChange={(value) => setForm({ ...form, artworkEnabled: value })}
+        />
+      </SectionCard>
+
+      <UnsavedChangesBar
+        dirty={dirty}
+        saving={status.saving}
+        success={status.success}
+        error={status.error}
         onSave={() => void save()}
-        test={{ testing, disabled: !selectedServerUri && !hostname.trim(), result: testResult, onTest: () => void testConnection() }}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
       />
-    </SectionCard>
+    </div>
   );
 }
 
+/**
+ * The masked API key field shared by the Sonarr and Tautulli tabs. A configured key shows
+ * as asterisks until focused; leaving it empty keeps the saved key.
+ */
+function ApiKeyInput({ configured, touched, value, onChange, ...rest }: {
+  configured: boolean;
+  touched: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  id?: string;
+  "aria-describedby"?: string;
+}) {
+  return (
+    <TextInput
+      {...rest}
+      type="password"
+      value={touched ? value : configured ? "**************" : ""}
+      onFocus={() => { if (!touched) onChange(""); }}
+      onChange={onChange}
+    />
+  );
+}
+
+interface SonarrForm {
+  baseUrl: string;
+  apiKey: string;
+  apiKeyTouched: boolean;
+  tagsEnabled: boolean;
+}
+
+function sonarrFormFromSettings(settings: SettingsResponse): SonarrForm {
+  return { baseUrl: settings.sonarr?.baseUrl ?? "", apiKey: "", apiKeyTouched: false, tagsEnabled: settings.app.sonarrTagsEnabled };
+}
+
 function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const [form, setForm] = useState({ baseUrl: settings.sonarr?.baseUrl ?? "", apiKey: "" });
-  const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const initial = useMemo(() => sonarrFormFromSettings(settings), [settings]);
+  const [form, setForm] = useState<SonarrForm>(initial);
+  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [apiKeyTouched, setApiKeyTouched] = useState(false);
   const baseUrl = form.baseUrl.trim();
   const apiKey = form.apiKey.trim();
   const credentialsIncomplete = !baseUrl || (!apiKey && !settings.sonarr?.apiKeyConfigured);
   const credentials = { baseUrl, apiKey };
+  // Saving the connection queues a library refresh, so a save that only flips the tag
+  // toggle must not post it. An empty key keeps the saved one, so it isn't a change.
+  const connectionDirty = baseUrl !== initial.baseUrl || apiKey !== "";
+  const tagsDirty = form.tagsEnabled !== initial.tagsEnabled;
+
+  useEffect(() => setForm(initial), [initial]);
 
   async function testConnection() {
     setTesting(true);
@@ -502,49 +595,44 @@ function SonarrTab({ settings, onSave }: { settings: SettingsResponse; onSave: (
     }
   }
 
-  async function save() {
-    setSaving(true);
-    setSuccess(false);
-    setError(null);
-    try {
-      await apiPost("/api/settings/sonarr", credentials);
-      setSuccess(true);
-      setForm((current) => ({ ...current, apiKey: "" }));
-      setApiKeyTouched(false);
+  function save() {
+    return status.run(async () => {
+      if (connectionDirty) await apiPost("/api/settings/sonarr", credentials);
+      if (tagsDirty) await apiPatch("/api/settings/app", { sonarrTagsEnabled: form.tagsEnabled });
       await onSave();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   return (
     <div className="grid gap-4">
-      <SectionCard title="Sonarr" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
-        <Field label="Base URL" hint="Example: http://sonarr:8989">
+      <SectionCard title="Connection" description="Connect Sonarr so Pacearr can monitor and trim your enrolled shows.">
+        <SettingRow label="Base URL" hint="For example http://sonarr:8989" wide>
           <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://sonarr:8989" />
-        </Field>
-        <Field label="API key" hint="Leave unchanged to keep the configured key.">
-          <input
-            type="password"
-            className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
-            value={apiKeyTouched ? form.apiKey : settings.sonarr?.apiKeyConfigured ? "**************" : ""}
-            onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
-            onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
+        </SettingRow>
+        <SettingRow label="API key" hint="Leave unchanged to keep the configured key." wide>
+          <ApiKeyInput
+            configured={Boolean(settings.sonarr?.apiKeyConfigured)}
+            touched={form.apiKeyTouched}
+            value={form.apiKey}
+            onChange={(value) => setForm({ ...form, apiKey: value, apiKeyTouched: true })}
           />
-        </Field>
-        <SaveBar
-          saving={saving}
-          success={success}
-          error={error}
-          label="Save Sonarr"
-          onSave={() => void save()}
-          saveDisabled={credentialsIncomplete}
-          test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
-        />
+        </SettingRow>
+        <TestConnection testing={testing} disabled={credentialsIncomplete} result={testResult} onTest={() => void testConnection()} />
       </SectionCard>
-      <SonarrTagsCard settings={settings} onSave={onSave} />
+      <SonarrTagsCard
+        configured={Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured)}
+        tagsEnabled={form.tagsEnabled}
+        onTagsEnabledChange={(value) => setForm({ ...form, tagsEnabled: value })}
+      />
+      <UnsavedChangesBar
+        dirty={connectionDirty || tagsDirty}
+        saving={status.saving}
+        success={status.success}
+        error={status.error}
+        onSave={() => void save()}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
+        saveDisabled={connectionDirty && credentialsIncomplete}
+      />
     </div>
   );
 }
@@ -553,13 +641,7 @@ function pluralShows(count: number) {
   return `${count} show${count === 1 ? "" : "s"}`;
 }
 
-function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const configured = Boolean(settings.sonarr?.baseUrl && settings.sonarr.apiKeyConfigured);
-  const [tagsEnabled, setTagsEnabled] = useState(settings.app.sonarrTagsEnabled);
-  useEffect(() => setTagsEnabled(settings.app.sonarrTagsEnabled), [settings.app.sonarrTagsEnabled]);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+function SonarrTagsCard({ configured, tagsEnabled, onTagsEnabledChange }: { configured: boolean; tagsEnabled: boolean; onTagsEnabledChange: (value: boolean) => void }) {
   const [preview, setPreview] = useState<SonarrTagImportPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -598,51 +680,29 @@ function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSa
     }
   }
 
-  async function saveTagSetting() {
-    setSaving(true);
-    setSaved(false);
-    setSaveError(null);
-    try {
-      await apiPatch("/api/settings/app", { sonarrTagsEnabled: tagsEnabled });
-      setSaved(true);
-      await onSave();
-    } catch (caught) {
-      setSaveError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const nothingToImport = preview !== null && preview.toEnroll.length === 0 && preview.toIgnore.length === 0;
 
   return (
     <SectionCard
-      title="Sonarr tags"
+      title="Tags"
       description="Mirror enrolled and ignored shows onto Sonarr as tags, so they can be recovered if Pacearr's database is lost."
     >
-      <ToggleField
+      <SettingToggle
         label="Write tags to Sonarr"
         hint="Tags enrolled shows pacearr-enrolled and ignored shows pacearr-ignored."
         checked={tagsEnabled}
-        onChange={(value) => { setTagsEnabled(value); setSaved(false); }}
+        onChange={onTagsEnabledChange}
       />
-      <SaveBar
-        saving={saving}
-        success={saved}
-        error={saveError}
-        label="Save tag setting"
-        onSave={() => void saveTagSetting()}
-        saveDisabled={tagsEnabled === settings.app.sonarrTagsEnabled}
-      />
-      <div className="flex flex-wrap items-center gap-3">
+      <SettingRow
+        label="Import from Sonarr tags"
+        hint={result
+          ? <span aria-live="polite" className={`font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>
+          : "Restore enrolled and ignored shows from their tags, after losing Pacearr's records."}
+      >
         <button type="button" className={secondaryButtonClass} disabled={!configured || loading} aria-busy={loading} onClick={() => void loadPreview()}>
-          {loading ? "Checking Sonarr..." : "Import from Sonarr tags"}
+          {loading ? "Checking Sonarr..." : "Review import"}
         </button>
-        <span aria-live="polite">{result && <span className={`text-[13px] font-bold ${result.ok ? "text-success" : "text-error"}`}>{result.message}</span>}</span>
-      </div>
-      <p className="text-xs leading-relaxed text-on-surface-variant">
-        Restores enrolled and ignored shows from their Sonarr tags. Useful when recovering missing Pacearr records.
-      </p>
+      </SettingRow>
       {preview && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-overlay/60 p-[18px]">
           <div ref={dialogRef} className="max-h-[82vh] w-full max-w-[480px] overflow-auto rounded-xl border border-outline-variant/30 bg-background-container p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="tag-import-title" tabIndex={-1}>
@@ -669,18 +729,30 @@ function SonarrTagsCard({ settings, onSave }: { settings: SettingsResponse; onSa
   );
 }
 
+interface TautulliForm {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  apiKeyTouched: boolean;
+}
+
+function tautulliFormFromSettings(settings: SettingsResponse): TautulliForm {
+  return { enabled: settings.tautulli.enabled, baseUrl: settings.tautulli.baseUrl, apiKey: "", apiKeyTouched: false };
+}
+
 function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave: () => Promise<void> }) {
-  const [form, setForm] = useState({ enabled: settings.tautulli.enabled, baseUrl: settings.tautulli.baseUrl, apiKey: "" });
-  const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const initial = useMemo(() => tautulliFormFromSettings(settings), [settings]);
+  const [form, setForm] = useState<TautulliForm>(initial);
+  const status = useSaveStatus();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [apiKeyTouched, setApiKeyTouched] = useState(false);
   const baseUrl = form.baseUrl.trim();
   const apiKey = form.apiKey.trim();
   const credentialsIncomplete = !baseUrl || (!apiKey && !settings.tautulli.apiKeyConfigured);
-  const credentials = { ...form, baseUrl, apiKey };
+  const credentials = { enabled: form.enabled, baseUrl, apiKey };
+  const dirty = form.enabled !== initial.enabled || baseUrl !== initial.baseUrl || apiKey !== "";
+
+  useEffect(() => setForm(initial), [initial]);
 
   async function testConnection() {
     setTesting(true);
@@ -695,48 +767,40 @@ function TautulliTab({ settings, onSave }: { settings: SettingsResponse; onSave:
     }
   }
 
-  async function save() {
-    setSaving(true);
-    setSuccess(false);
-    setError(null);
-    try {
+  function save() {
+    return status.run(async () => {
       await apiPost("/api/settings/tautulli", credentials);
-      setSuccess(true);
-      setForm((current) => ({ ...current, apiKey: "" }));
-      setApiKeyTouched(false);
       await onSave();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   return (
-    <SectionCard title="Tautulli" description="Optional. Import richer watch history than Plex alone provides.">
-      <ToggleField label="Enable Tautulli import" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
-      <Field label="Base URL" hint="Example: http://tautulli:8181">
-        <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://tautulli:8181" />
-      </Field>
-      <Field label="API key" hint="Leave unchanged to keep the configured key.">
-        <input
-          type="password"
-          className="w-full rounded-lg border border-outline-variant/30 bg-background px-3 py-2.5 text-on-surface"
-          value={apiKeyTouched ? form.apiKey : settings.tautulli.apiKeyConfigured ? "**************" : ""}
-          onFocus={() => { if (!apiKeyTouched) { setApiKeyTouched(true); setForm({ ...form, apiKey: "" }); } }}
-          onChange={(event) => { setApiKeyTouched(true); setForm({ ...form, apiKey: event.target.value }); }}
-        />
-      </Field>
-      <SaveBar
-        saving={saving}
-        success={success}
-        error={error}
-        label="Save Tautulli"
+    <div className="grid gap-4">
+      <SectionCard title="Connection" description="Optional. Import richer watch history than Plex alone provides.">
+        <SettingToggle label="Enable Tautulli import" checked={form.enabled} onChange={(value) => setForm({ ...form, enabled: value })} />
+        <SettingRow label="Base URL" hint="For example http://tautulli:8181" wide>
+          <TextInput value={form.baseUrl} onChange={(value) => setForm({ ...form, baseUrl: value })} placeholder="http://tautulli:8181" />
+        </SettingRow>
+        <SettingRow label="API key" hint="Leave unchanged to keep the configured key." wide>
+          <ApiKeyInput
+            configured={settings.tautulli.apiKeyConfigured}
+            touched={form.apiKeyTouched}
+            value={form.apiKey}
+            onChange={(value) => setForm({ ...form, apiKey: value, apiKeyTouched: true })}
+          />
+        </SettingRow>
+        <TestConnection testing={testing} disabled={credentialsIncomplete} result={testResult} onTest={() => void testConnection()} />
+      </SectionCard>
+      <UnsavedChangesBar
+        dirty={dirty}
+        saving={status.saving}
+        success={status.success}
+        error={status.error}
         onSave={() => void save()}
+        onDiscard={() => { setForm(initial); status.clearError(); }}
         saveDisabled={form.enabled && credentialsIncomplete}
-        test={{ testing, disabled: credentialsIncomplete, result: testResult, onTest: () => void testConnection() }}
       />
-    </SectionCard>
+    </div>
   );
 }
 

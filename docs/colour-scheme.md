@@ -9,7 +9,9 @@ reference these variables through Tailwind utility classes (`bg-*`, `text-*`,
 rules are Tailwind utility classes directly in component JSX; `styles.css`
 holds only the theme tokens and a small `@layer base` reset for bare
 elements (`body`, `button`, `h1`/`h2`). Form controls (`TextInput`,
-`SelectInput`, `Field`, `ToggleField`, `SectionCard`, `SaveBar`) are shared
+`SelectInput`, `Field`, `ToggleField`, `SectionCard`) and the settings-page
+building blocks (`SettingRow`, `SettingToggle`, `SettingNumber`,
+`DependentSettings`, `TestConnection`, `UnsavedChangesBar`) are shared
 components in `src/client/components/FormControls.tsx`, not global CSS. Page
 layout (`Page`, `PageHeader`, `PageLoading`, `ErrorBanner`) is shared the same
 way in `src/client/components/Page.tsx` — every authenticated app route

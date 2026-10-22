@@ -34,3 +34,37 @@ test("opening a one-hour job schedule preserves its 60-minute preset", async ({ 
     await expect.soft(restored).toBeOK();
   }
 });
+
+// Read-only against the live instance: every change is discarded, never saved.
+test("dependent settings stay visible but follow their parent toggle", async ({ page }) => {
+  await openPage(page, "/settings", "Settings");
+  const parent = page.getByRole("checkbox", { name: "Early season prefetch", exact: true });
+  const trigger = page.getByRole("spinbutton", { name: "Episodes remaining trigger" });
+  const wasOn = await parent.isChecked();
+
+  await expect(trigger).toBeVisible();
+  await expect(trigger).toBeEnabled({ enabled: wasOn });
+
+  await parent.click({ force: true });
+  await expect(trigger).toBeVisible();
+  await expect(trigger).toBeEnabled({ enabled: !wasOn });
+  await expect(page.getByText("You have unsaved changes")).toBeVisible();
+
+  await page.getByRole("button", { name: "Discard" }).click();
+  await expect(parent).toBeChecked({ checked: wasOn });
+  await expect(page.getByText("You have unsaved changes")).toBeHidden();
+});
+
+test("the save bar only appears once something changes", async ({ page }) => {
+  await openPage(page, "/settings", "Settings");
+  const saveButton = page.getByRole("button", { name: "Save changes" });
+  await expect(saveButton).toBeHidden();
+
+  const activityWindow = page.getByRole("spinbutton", { name: "Viewer activity window" });
+  const original = await activityWindow.inputValue();
+  await activityWindow.fill(String(Number(original) + 1));
+  await expect(saveButton).toBeVisible();
+
+  await activityWindow.fill(original);
+  await expect(saveButton).toBeHidden();
+});
