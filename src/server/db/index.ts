@@ -1036,8 +1036,9 @@ export class PacearrDatabase {
       this.clearExcludedEpisodesForSeasons(rollingShowId, previous.filter((season) => !expanded.includes(season)));
       this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(expanded), now(), rollingShowId);
-      // A season this adds was retained from a viewer's stored progress (or re-adopted
-      // from Sonarr), so it counts as watched. A season already recorded keeps its reason.
+      // A season this adds was retained from a viewer's stored progress, or re-adopted from
+      // a Sonarr tag with no known watch, so it is `watched` with no user, which the show page
+      // shows without a reason. A season already recorded keeps its reason.
       this.db.prepare(`DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number NOT IN (SELECT value FROM json_each(?))`)
         .run(rollingShowId, JSON.stringify(expanded));
       const recordWatched = this.db.prepare("INSERT OR IGNORE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason, expanded_at) VALUES (?, ?, 'watched', ?)");

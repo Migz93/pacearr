@@ -598,8 +598,9 @@ const migrations: Migration[] = [
     // Why each expanded season was expanded, so the show page can explain seasons with no
     // viewer behind them (a Seerr request kept at enrolment, or the Expand button).
     // rolling_shows.expanded_seasons stays the record of which seasons are expanded; a row
-    // here only describes one. Seasons already expanded could only have come from watch
-    // activity, so they start as `watched`, with no user or time.
+    // here only describes one. Seasons already expanded came from watch activity, a finale,
+    // or re-adoption from a Sonarr tag, and which is not known, so they start as `watched`
+    // with no user or time; the show page shows such a row without a reason.
     // requested_seasons snapshots which seasons an automatic enrolment treats as requested,
     // taken before any Sonarr change: a retry after a partial baseline would otherwise read
     // monitoring that the baseline had already changed. NULL (a pending row from before this

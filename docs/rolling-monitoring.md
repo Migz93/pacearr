@@ -186,15 +186,17 @@ Each expanded season records why, in `rolling_expanded_seasons`, alongside
 
 | Reason | Set by | User |
 |---|---|---|
-| `watched` | A viewer's position, any job; also a season the reconcile retains from stored progress, a season re-adopted from a Sonarr tag, and seasons expanded before reasons were recorded | The viewer, when known |
+| `watched` | A viewer's position, any job; also, with no user, a season the reconcile retains from stored progress, a season re-adopted from a Sonarr tag, and seasons expanded before reasons were recorded | The viewer, when known |
 | `finale` | Expand next season on finale | The viewer |
 | `requested` | Triage enrolment of a requested season | — |
 | `manual` | The Expand button | — |
 
 The reason goes wherever the season's expanded state goes: trim, reset, exclusion and
-unenrolment clear it. The show page shows it beside **Expanded**, with a tooltip, and
-once the reconcile has started an unwatched season's inactivity timer, the date it
-trims back to its pilot. `sonarr.expand_season` history records the `reason` and `userId`.
+unenrolment clear it. The show page shows it beside **Expanded**, with a tooltip. A
+`watched` row with no user may have no watch behind it, so it is shown as plain
+**Expanded** with "No reason recorded". Once the reconcile has started an unwatched
+season's inactivity timer, the page also shows the date it trims back to its pilot.
+`sonarr.expand_season` history records the `reason` and `userId`.
 Only `watched` and `finale` update the show's last activity.
 
 ## Exclusions

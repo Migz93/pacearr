@@ -115,11 +115,20 @@ const EXPANSION_LABELS: Record<SeasonExpansionSummary["reason"], string> = {
   manual: "Manual",
 };
 
+/**
+ * A `watched` row with no user may have no watch behind it (re-adopted from a Sonarr tag,
+ * or expanded before reasons were recorded), so it is shown without a reason.
+ */
+function isUnattributed(expansion: SeasonExpansionSummary): boolean {
+  return expansion.reason === "watched" && !expansion.displayName;
+}
+
 function expansionDescription(expansion: SeasonExpansionSummary): string {
   const on = expansion.expandedAt ? ` on ${formatDate(expansion.expandedAt)}` : "";
+  if (isUnattributed(expansion)) return "No reason recorded for this expansion";
   switch (expansion.reason) {
     case "watched":
-      return expansion.displayName ? `Watched by ${expansion.displayName}${on}` : "Expanded from watch activity";
+      return `Watched by ${expansion.displayName}${on}`;
     case "finale":
       return expansion.displayName
         ? `${expansion.displayName} reached the previous season's finale${on}`
@@ -713,7 +722,7 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
         {season.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this season. Existing files are kept.">Excluded</span>}
         {season.isExpanded && (
           <span className={badgeClass("success")} title={season.expansion ? expansionDescription(season.expansion) : undefined}>
-            Expanded{season.expansion ? ` · ${EXPANSION_LABELS[season.expansion.reason]}` : ""}
+            Expanded{season.expansion && !isUnattributed(season.expansion) ? ` · ${EXPANSION_LABELS[season.expansion.reason]}` : ""}
           </span>
         )}
         {season.expansion?.trimsAt && (
