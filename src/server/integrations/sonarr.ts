@@ -1,6 +1,6 @@
 import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeries, SonarrSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
-import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError, IntegrationHttpError } from "./request.js";
 
 export type SonarrTag = { id: number; label: string };
 
@@ -72,8 +72,8 @@ export class SonarrIntegration {
       this.logger.info("Sonarr connection test succeeded", { version: status.version ?? null });
       return { ok: true, message: `Connected to Sonarr${status.version ? ` ${status.version}` : ""}.` };
     } catch (error) {
-      this.logger.warn("Sonarr connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Sonarr connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 
@@ -180,7 +180,7 @@ export class SonarrIntegration {
       try {
         await this.request(`episodefile/${id}`, { method: "DELETE" });
       } catch (error) {
-        this.logger.error("Failed to delete Sonarr episode file", { episodeFileId: id, error: error instanceof Error ? error.message : String(error) });
+        this.logger.error("Failed to delete Sonarr episode file", { episodeFileId: id, error: formatIntegrationError(error) });
         throw error;
       }
     }
