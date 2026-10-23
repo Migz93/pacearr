@@ -2028,8 +2028,10 @@ for (const phase of ["series list", "deletion lookup"] as const) {
       try {
         await services.refreshSonarrLibrary();
         assert.equal(changed, true);
+        if (phase === "series list") assert.equal(db.getSonarrLibraryCache(), null, "the stale snapshot is not published");
         assert.deepEqual(lookups, phase === "series list" ? [] : ["/api/v3/series/2"], "no further deletion lookups after a connection change");
         await services.refreshSonarrLibrary();
+        assert.deepEqual(db.getSonarrLibraryCache()?.items.map((item) => item.series.id), [1, 2, 3, 4]);
         assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
         assert.deepEqual(db.listIgnoredRecommendationIds(), [3]);
         assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 4, tag: "ignored" }]);
