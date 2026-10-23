@@ -744,7 +744,7 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
               aria-label={`Expand season ${season.seasonNumber}`}
               title={dryRunEnabled
                 ? "Dry run: preview monitoring and searching the whole season. Sonarr is not changed."
-                : "Monitor and search the whole season. With progressive cleanup on, it returns to its pilot if nobody watches it within the cleanup delay."}
+                : "Monitor and search the whole season. With progressive cleanup on, if nobody watches it within the cleanup delay it returns to its pilot, and its other episodes' files are deleted when file deletion is enabled."}
               onClick={() => void onExpand(`${exclusionBasePath}/expansion`)}
             >
               <Expand size={14} className="text-success" /> Expand
