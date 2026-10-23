@@ -134,7 +134,8 @@ function expansionDescription(expansion: SeasonExpansionSummary): string {
         ? `${expansion.displayName} reached the previous season's finale${on}`
         : "Expanded from the previous season's finale";
     case "requested":
-      return `Requested when the show was added${on}`;
+      // expandedAt is when triage enrolled the show, which can be later than when it was added.
+      return `Requested when the show was added; kept expanded when it was enrolled${on}`;
     case "manual":
       return `Expanded manually${on}`;
   }
