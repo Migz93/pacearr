@@ -190,8 +190,9 @@ test("each way expanded-season state is cleared also clears its reason", () => {
     const at = "2026-10-22T09:00:00.000Z";
     db.markSeasonExpanded(rollingShowId, 1, at, { reason: "manual" });
     db.markSeasonExpanded(rollingShowId, 2, at, { reason: "requested" });
+    // A request or the Expand button is not watch activity; a finale is.
+    assert.equal(harness.rolling()!.lastActivityAt, null);
     db.markSeasonExpanded(rollingShowId, 3, at, { reason: "finale" });
-    // A request or the Expand button is not watch activity.
     assert.equal(harness.rolling()!.lastActivityAt, at);
 
     // Trim (progressive cleanup, exclusion).
