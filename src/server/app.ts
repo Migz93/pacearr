@@ -870,6 +870,9 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/rolling-shows/:id/reset", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.resetShow(Number(req.params.id)));
   }));
+  app.post("/api/rolling-shows/:id/seasons/:season/expansion", requireAuth, asyncRoute(async (req, res) => {
+    res.json(await services.expandSeasonManually(Number(req.params.id), Number(req.params.season)));
+  }));
   app.post("/api/rolling-shows/:id/seasons/:season/exclusion", requireAuth, asyncRoute(async (req, res) => {
     res.json(await services.setSeasonExcluded(Number(req.params.id), Number(req.params.season), true));
   }));

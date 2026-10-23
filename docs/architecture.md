@@ -117,7 +117,8 @@ Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs withou
 When enabled, the `new-show-triage` job polls Sonarr on a configurable interval
 (default every five minutes) and acts only on series added after its activation
 boundary. It searches smaller arrivals in full and enrolls larger arrivals onto
-the pilot baseline. With **Search newly monitored seasons** on, a season monitored later
+the pilot baseline, keeping any seasons requested on arrival (some, but not all,
+real seasons monitored) expanded. With **Search newly monitored seasons** on, a season monitored later
 on any unenrolled series is searched once as it becomes monitored. Completed
 decisions and partial automatic enrollments are persisted independently of the
 replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
@@ -143,7 +144,7 @@ It is designed as an operational admin surface rather than a public landing page
 - New-show triage is disabled by default and never changes series that predate its activation boundary.
 - Specials, season `0`, are ignored by rolling baseline and expansion logic.
 - All-season-pilot baseline keeps E01 of every real season monitored and searches those pilot episodes.
-- Expanded seasons are stored as a sorted unique season-number array.
+- Expanded seasons are stored as a sorted unique season-number array. Each one's reason (`watched`, `finale`, `requested`, `manual`) is stored in `rolling_expanded_seasons` and cleared wherever the season stops being expanded.
 - Duplicate imported watch events must not retrigger Sonarr actions.
 - Disabled users do not trigger expansion and should not block cleanup.
 - Destructive cleanup must be auditable through `history_events`.

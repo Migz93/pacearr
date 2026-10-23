@@ -26,6 +26,7 @@ import type {
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
   PacearrSonarrTag,
+  SeasonExpansionReason,
 } from "../../shared/types.js";
 import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
@@ -225,6 +226,16 @@ function usersByNormalisedName(users: UserRecord[], getName: (user: UserRecord) 
     else grouped.set(name, [user]);
   }
   return grouped;
+}
+
+export type SeasonExpansion = { reason: SeasonExpansionReason; userId?: number | null };
+
+export interface SeasonExpansionRecord {
+  seasonNumber: number;
+  reason: SeasonExpansionReason;
+  userId: number | null;
+  displayName: string | null;
+  expandedAt: string | null;
 }
 
 function rollingShowFromRow(row: any): RollingShowRecord {
@@ -494,11 +505,18 @@ export class PacearrDatabase {
     return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").get(seriesId));
   }
 
-  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null }): void {
+  /** The first attempt's row is kept, so a retry never replaces its requested-season snapshot. */
+  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null; requestedSeasons: number[] }): void {
     this.db.prepare(`
-      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at)
-      VALUES (?, ?, ?, ?)
-    `).run(input.seriesId, input.title, input.addedAt, now());
+      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at, requested_seasons)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, now(), JSON.stringify(input.requestedSeasons));
+  }
+
+  getNewShowTriageRequestedSeasons(seriesId: number): number[] {
+    const row = this.db.prepare("SELECT requested_seasons AS requestedSeasons FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?")
+      .get(seriesId) as { requestedSeasons: string | null } | undefined;
+    return parseJson<number[]>(row?.requestedSeasons ?? null, []);
   }
 
   completeNewShowTriageEnrollment(seriesId: number): void {
@@ -923,22 +941,45 @@ export class PacearrDatabase {
     return row ? rollingShowFromRow(row) : null;
   }
 
-  markSeasonExpanded(rollingShowId: number, seasonNumber: number, watchedAt: string): boolean {
+  markSeasonExpanded(rollingShowId: number, seasonNumber: number, expandedAt: string, expansion: SeasonExpansion): boolean {
     const show = this.getRollingShow(rollingShowId);
     if (!show) return false;
     if (show.expandedSeasons.includes(seasonNumber)) return false;
     const expanded = [...show.expandedSeasons, seasonNumber].sort((a, b) => a - b);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), watchedAt, now(), rollingShowId);
-    this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
+    this.transaction(() => {
+      // Only a viewer's watch is show activity; a request or the Expand button is not.
+      const watchActivity = expansion.reason === "watched" || expansion.reason === "finale";
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = CASE WHEN ? THEN ? ELSE last_activity_at END, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), watchActivity ? 1 : 0, expandedAt, now(), rollingShowId);
+      this.db.prepare(`
+        INSERT OR REPLACE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason, user_id, expanded_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(rollingShowId, seasonNumber, expansion.reason, expansion.userId ?? null, expandedAt);
+      this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
+    });
     return true;
   }
 
+  /** Why each expanded season was expanded. A season with no row is treated as `watched`. */
+  listSeasonExpansions(rollingShowId: number): SeasonExpansionRecord[] {
+    return this.db.prepare(`
+      SELECT res.season_number AS seasonNumber, res.reason, res.user_id AS userId,
+        u.display_name AS displayName, res.expanded_at AS expandedAt
+      FROM rolling_expanded_seasons res
+      LEFT JOIN users u ON u.id = res.user_id
+      WHERE res.rolling_show_id = ?
+      ORDER BY res.season_number
+    `).all(rollingShowId) as SeasonExpansionRecord[];
+  }
+
   resetExpandedSeasons(rollingShowId: number): void {
-    this.clearExcludedEpisodesForSeasons(rollingShowId, this.getRollingShow(rollingShowId)?.expandedSeasons ?? []);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
-    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
-    this.clearPrefetchedEpisodes(rollingShowId);
+    this.transaction(() => {
+      this.clearExcludedEpisodesForSeasons(rollingShowId, this.getRollingShow(rollingShowId)?.expandedSeasons ?? []);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ?").run(rollingShowId);
+      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+      this.clearPrefetchedEpisodes(rollingShowId);
+    });
   }
 
   clearPrefetchedEpisodes(rollingShowId: number): void {
@@ -995,6 +1036,13 @@ export class PacearrDatabase {
       this.clearExcludedEpisodesForSeasons(rollingShowId, previous.filter((season) => !expanded.includes(season)));
       this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(expanded), now(), rollingShowId);
+      // A season this adds was retained from a viewer's stored progress, or re-adopted from
+      // a Sonarr tag with no known watch, so it is `watched` with no user, which the show page
+      // shows without a reason. A season already recorded keeps its reason.
+      this.db.prepare(`DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number NOT IN (SELECT value FROM json_each(?))`)
+        .run(rollingShowId, JSON.stringify(expanded));
+      const recordWatched = this.db.prepare("INSERT OR IGNORE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason, expanded_at) VALUES (?, ?, 'watched', ?)");
+      for (const seasonNumber of expanded) recordWatched.run(rollingShowId, seasonNumber, now());
       // Prefetch records only represent individually retained episodes in an
       // otherwise unexpanded season. Reconciliation can promote a season from
       // stored viewer progress without passing through markSeasonExpanded.
@@ -1013,13 +1061,16 @@ export class PacearrDatabase {
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
-    const show = this.getRollingShow(rollingShowId);
-    if (!show) return;
-    if (show.expandedSeasons.includes(seasonNumber)) this.clearExcludedEpisodesForSeasons(rollingShowId, [seasonNumber]);
-    const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), now(), rollingShowId);
-    this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    this.transaction(() => {
+      const show = this.getRollingShow(rollingShowId);
+      if (!show) return;
+      if (show.expandedSeasons.includes(seasonNumber)) this.clearExcludedEpisodesForSeasons(rollingShowId, [seasonNumber]);
+      const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number = ?").run(rollingShowId, seasonNumber);
+      this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    });
   }
 
   /**

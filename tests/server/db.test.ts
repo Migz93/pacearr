@@ -219,7 +219,7 @@ test("early-prefetched episodes persist their triggering user and clear on expan
     db.clearPrefetchedEpisodes(show.id);
     assert.deepEqual(db.listPrefetchedEpisodes(show.id), []);
     assert.equal(db.recordPrefetchedEpisodes(show.id, user.id, 2, [2], "2026-08-03T11:00:00.000Z"), 1);
-    db.markSeasonExpanded(show.id, 2, "2026-08-03T12:00:00.000Z");
+    db.markSeasonExpanded(show.id, 2, "2026-08-03T12:00:00.000Z", { reason: "watched" });
     assert.deepEqual(db.listPrefetchedEpisodes(show.id), []);
   } finally {
     cleanup();
@@ -1174,9 +1174,9 @@ test("expanded seasons are monotonic and not duplicated", () => {
   const { db, cleanup } = createDb();
   try {
     const show = db.upsertRollingShow({ id: 7, title: "Severance", tvdbId: 371980, year: 2022 });
-    assert.equal(db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z"), true);
-    assert.equal(db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z"), false);
-    assert.equal(db.markSeasonExpanded(show.id, 1, "2026-04-01T10:00:00.000Z"), true);
+    assert.equal(db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z", { reason: "watched" }), true);
+    assert.equal(db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z", { reason: "watched" }), false);
+    assert.equal(db.markSeasonExpanded(show.id, 1, "2026-04-01T10:00:00.000Z", { reason: "watched" }), true);
     assert.deepEqual(db.getRollingShow(show.id)?.expandedSeasons, [1, 2]);
   } finally {
     cleanup();
@@ -1187,8 +1187,8 @@ test("expanded seasons can be removed during progressive cleanup", () => {
   const { db, cleanup } = createDb();
   try {
     const show = db.upsertRollingShow({ id: 7, title: "Severance", tvdbId: 371980, year: 2022 });
-    db.markSeasonExpanded(show.id, 1, "2026-04-01T10:00:00.000Z");
-    db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z");
+    db.markSeasonExpanded(show.id, 1, "2026-04-01T10:00:00.000Z", { reason: "watched" });
+    db.markSeasonExpanded(show.id, 2, "2026-04-01T10:00:00.000Z", { reason: "watched" });
     db.removeExpandedSeason(show.id, 1);
     assert.deepEqual(db.getRollingShow(show.id)?.expandedSeasons, [2]);
   } finally {

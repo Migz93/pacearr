@@ -879,7 +879,7 @@ test("rolling reconciliation waits for the default seven-day inactivity delay", 
   try {
     db.updateAppSettings({ dryRun: false });
     const rolling = db.upsertRollingShow({ id: 901, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString());
 
     await services.reconcileRollingShows();
@@ -900,7 +900,7 @@ test("rolling reconciliation honours a custom delay and immediate cleanup at zer
   try {
     db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
     const rolling = db.upsertRollingShow({ id: 902, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString());
     await services.reconcileRollingShows();
     assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
@@ -935,8 +935,8 @@ test("progressive cleanup deletes a multipart file shared only by eligible non-p
   try {
     db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
     const rolling = db.upsertRollingShow({ id: 904, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
-    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
+    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z", { reason: "watched" });
 
     await (services as unknown as { performProgressiveCleanup: (rollingShowId: number, currentSeason: number, observedAt: Date) => Promise<void> })
       .performProgressiveCleanup(rolling.id, 3, new Date("2026-01-02T00:00:00.000Z"));
@@ -960,7 +960,7 @@ test("a returning active viewer clears an inactive season's cleanup timer", asyn
     const [user] = db.upsertUsers([{ plexUserId: "plex-delay", plexAccountId: "delay", tautulliUserId: null, username: "delay", displayName: "Delay", avatarUrl: null }]);
     db.updateUser(user.id, { enabled: true });
     const rolling = db.upsertRollingShow({ id: 903, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, "2026-01-01T00:00:00.000Z");
     db.upsertRollingUserProgress(rolling.id, user.id, 1, 2, new Date().toISOString());
 
@@ -1246,11 +1246,11 @@ test("dry-run expansion does not clear existing prefetch targets", async () => {
   try {
     const [user] = db.upsertUsers([{ plexUserId: "plex-dry-expand", plexAccountId: "dry-expand", tautulliUserId: null, username: "dry-expand", displayName: "Dry Expand", avatarUrl: null }]);
     const rolling = db.upsertRollingShow({ id: 908, title: "Dry Run Expansion" });
-    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z", { reason: "watched" });
     db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
     db.updateAppSettings({ dryRun: true });
 
-    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test");
+    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test", { reason: "watched" });
 
     assert.equal(result, false);
     assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);

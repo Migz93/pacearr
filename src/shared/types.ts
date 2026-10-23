@@ -286,9 +286,29 @@ export interface ShowSeasonSummary {
   watchedUsers: number;
   latestWatchedAt: string | null;
   isExpanded: boolean;
+  /** Why an expanded season was expanded, and when it trims back to its pilot; null when not expanded. */
+  expansion: SeasonExpansionSummary | null;
   /** Permanently excluded from rolling management; never monitored or searched by Pacearr. */
   excluded: boolean;
   prefetchedEpisodes: PrefetchedEpisodeSummary[];
+}
+
+/**
+ * - `watched`: a viewer started the season (or the reason predates tracking).
+ * - `finale`: a viewer reached the previous season's last episode.
+ * - `requested`: monitored in Sonarr when triage auto-enrolled the show.
+ * - `manual`: the Expand button on the show page.
+ */
+export type SeasonExpansionReason = "watched" | "finale" | "requested" | "manual";
+
+export interface SeasonExpansionSummary {
+  reason: SeasonExpansionReason;
+  /** Null when unknown, e.g. seasons expanded before reasons were recorded. */
+  expandedAt: string | null;
+  userId: number | null;
+  displayName: string | null;
+  /** When the inactivity timer trims the season back to its pilot, if nobody watches it first. */
+  trimsAt: string | null;
 }
 
 export interface PrefetchedEpisodeSummary {
