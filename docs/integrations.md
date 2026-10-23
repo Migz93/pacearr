@@ -45,7 +45,9 @@ Poster downloads first request the selected thumbnail directly, preserving its
 bytes for overlay hash comparisons. If Plex redirects a thumbnail to a remote
 image, Pacearr instead requests `/photo/:/transcode` on the configured Plex
 server. Its source parameter is a validated local path with its own Plex token,
-so source reads also work when they require authentication. The transcoder fits the image within 1920 × 1920 without upscaling
+so source reads also work when they require authentication. A configured proxy
+subpath applies to the outer request only; the source is relative to Plex's root.
+The transcoder fits the image within 1920 × 1920 without upscaling
 (up to 1920 × 1080 for landscape episode art or 1280 × 1920 for 2:3 posters).
 Credentialed requests still reject redirects; Pacearr never follows the remote
 image URL. Artwork and integration warnings include nested error causes.

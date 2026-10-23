@@ -14,7 +14,8 @@ import type { Logger } from "../../src/server/logger.js";
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as unknown as Logger;
 
-test("redirected Plex thumbnails are backed up, overlaid and restored without contacting another origin", async () => {
+for (const proxyPrefix of ["", "/plex"]) {
+test(`redirected Plex thumbnails are backed up, overlaid and restored without contacting another origin${proxyPrefix ? " through a subpath proxy" : ""}`, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "pacearr-artwork-"));
   const original = await sharp({ create: { width: 1920, height: 1080, channels: 3, background: "#456789" } }).jpeg().toBuffer();
   const uploads = new Map<string, Buffer>();
@@ -28,7 +29,11 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
   const redirect = `http://127.0.0.1:${remoteAddress.port}/remote-image`;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, "http://plex.local");
-    requests.push(url);
+    requests.push(new URL(url));
+    if (proxyPrefix) {
+      if (!url.pathname.startsWith(`${proxyPrefix}/`)) { res.writeHead(404).end(); return; }
+      url.pathname = url.pathname.slice(proxyPrefix.length);
+    }
     if (url.searchParams.get("X-Plex-Token") !== "secret") { res.writeHead(401).end(); return; }
     if (url.pathname === "/thumb/episode") { res.writeHead(302, { Location: redirect }).end(); return; }
     if (url.pathname === "/photo/:/transcode") {
@@ -37,6 +42,8 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
         res.writeHead(401).end();
         return;
       }
+      // Plex looks up this path internally, after the proxy prefix is stripped.
+      if (source.pathname !== "/thumb/episode") { res.writeHead(404).end(); return; }
     }
     if (url.pathname === "/photo/:/transcode" || url.pathname === "/thumb/season" || url.pathname === "/thumb/season-changed") {
       res.writeHead(200, { "Content-Type": "image/jpeg" });
@@ -62,7 +69,7 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
   await once(server, "listening");
   const address = server.address();
   assert(address && typeof address !== "string");
-  const serverUrl = `http://127.0.0.1:${address.port}`;
+  const serverUrl = `http://127.0.0.1:${address.port}${proxyPrefix}`;
   try {
     const db = new PacearrDatabase({ port: 9302, dataDir: dir, sessionCookieName: "test", sessionTtlMs: 1000, logLevel: "error" });
     const series = { id: 1, title: "Test show", seasons: [{ seasonNumber: 1, monitored: true }] };
@@ -88,7 +95,7 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
       assert.equal(dimensions.width, 1920);
       assert.equal(dimensions.height, 1080);
     }
-    const transcodes = requests.filter((url) => url.pathname === "/photo/:/transcode");
+    const transcodes = requests.filter((url) => url.pathname === `${proxyPrefix}/photo/:/transcode`);
     assert.equal(transcodes.length, 1);
     assert.equal(transcodes[0].searchParams.get("url"), "/thumb/episode?X-Plex-Token=secret");
     assert.equal(transcodes[0].searchParams.get("width"), "1920");
@@ -101,7 +108,7 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
     season.thumb = "/thumb/season-changed";
     await artwork.syncShow(plex, rolling, series, []);
     assert.deepEqual(readFileSync(records.find((record) => record.itemType === "season")!.originalPosterPath), original);
-    assert.equal(requests.filter((url) => url.pathname === "/photo/:/transcode").length, 1);
+    assert.equal(requests.filter((url) => url.pathname === `${proxyPrefix}/photo/:/transcode`).length, 1);
     await artwork.restoreAll(plex, rolling.id);
     assert.deepEqual(uploads.get("season"), original);
     assert.deepEqual(uploads.get("episode"), original);
@@ -116,6 +123,7 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
     rmSync(dir, { recursive: true, force: true });
   }
 });
+}
 
 test("poster downloads preserve direct bytes, reject invalid responses and report failed transcoder causes", async () => {
   const originalFetch = globalThis.fetch;
@@ -154,7 +162,7 @@ test("poster downloads preserve direct bytes, reject invalid responses and repor
     requests.length = 0;
     await assert.rejects(proxied.downloadPoster("/thumb/1?version=2&X-Plex-Token=old#fragment"));
     assert.equal(requests[1].pathname, "/plex/photo/:/transcode");
-    assert.equal(requests[1].searchParams.get("url"), "/plex/thumb/1?version=2&X-Plex-Token=secret");
+    assert.equal(requests[1].searchParams.get("url"), "/thumb/1?version=2&X-Plex-Token=secret");
     for (const remote of ["https://images.plex.tv/image.jpg", "//images.plex.tv/image.jpg"]) {
       requests.length = 0;
       await assert.rejects(plex.downloadPoster(remote));

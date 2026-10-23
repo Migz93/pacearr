@@ -387,9 +387,9 @@ export class PlexIntegration {
       // Keep direct image bytes for overlay hash comparisons. Only Plex's remote
       // thumbnail redirect needs the transcoder; never follow it with our token.
       if (!(error instanceof Error && error.cause instanceof Error && error.cause.message === "unexpected redirect")) throw error;
-      // The transcoder's source fetch needs its own authentication. Keep it a
-      // validated local path so the token cannot be attached to a remote URL.
-      const source = this.buildServerUrl(thumb);
+      // Plex resolves the source internally, without a reverse proxy's prefix.
+      // Validate it against the server origin and authenticate only that local path.
+      const source = buildIntegrationUrl(new URL(this.settings.serverUrl).origin, thumb);
       source.searchParams.set("X-Plex-Token", this.settings.token);
       const params = new URLSearchParams({ url: source.pathname + source.search, width: "1920", height: "1920", minSize: "0", upscale: "0" });
       response = await this.requestServer(`/photo/:/transcode?${params}`, options);
