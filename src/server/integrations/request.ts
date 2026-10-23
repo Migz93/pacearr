@@ -49,3 +49,16 @@ export function fetchIntegration(url: URL, options: RequestInit = {}, timeoutMs 
     redirect: "error",
   });
 }
+
+/** Includes nested network failures without looping on a circular cause chain. */
+export function formatIntegrationError(error: unknown): string {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  let current = error;
+  do {
+    seen.add(current);
+    messages.push(current instanceof Error ? current.message : String(current));
+    current = current instanceof Error ? current.cause : undefined;
+  } while (current !== undefined && !seen.has(current));
+  return messages.join(" <- ");
+}

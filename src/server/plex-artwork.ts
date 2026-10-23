@@ -5,7 +5,7 @@ import sharp from "sharp";
 import type { PlexArtworkRecord, RollingShowRecord, SonarrSeries } from "../shared/types.js";
 import type { PacearrDatabase } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeArtworkItem, type PlexSeasonArtworkItem } from "./integrations/plex.js";
-import { isNotFoundError } from "./integrations/request.js";
+import { formatIntegrationError, isNotFoundError } from "./integrations/request.js";
 import type { Logger } from "./logger.js";
 
 type ArtworkItem = { ratingKey: string; seasonNumber: number; thumb: string; episodeNumber?: number };
@@ -61,7 +61,7 @@ export class PlexArtworkService {
           if (pilot) await this.overlayItem(plex, rolling, show.ratingKey, pilot, "episode");
         }
       } catch (error) {
-        this.logger.warn("Plex rolling artwork update failed", { seriesId: series.id, seasonNumber: season.seasonNumber, error: error instanceof Error ? error.message : String(error) });
+        this.logger.warn("Plex rolling artwork update failed", { seriesId: series.id, seasonNumber: season.seasonNumber, error: formatIntegrationError(error) });
       }
     }
   }
@@ -88,7 +88,7 @@ export class PlexArtworkService {
     const showDirs = new Set<string>();
     for (const record of records) for (const filePath of [record.originalPosterPath, record.overlayPosterPath]) {
       try { fs.unlinkSync(filePath); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork backup", { filePath, error: error instanceof Error ? error.message : String(error) });
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork backup", { filePath, error: formatIntegrationError(error) });
       }
       const dir = path.dirname(filePath);
       // Records that predate the per-show folder migration still point at
@@ -101,7 +101,7 @@ export class PlexArtworkService {
     for (const dir of showDirs) {
       try { fs.rmdirSync(dir); } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOTEMPTY" && code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork show folder", { dir, error: error instanceof Error ? error.message : String(error) });
+        if (code !== "ENOTEMPTY" && code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork show folder", { dir, error: formatIntegrationError(error) });
       }
     }
   }

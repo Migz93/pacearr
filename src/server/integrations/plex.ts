@@ -5,7 +5,7 @@ import type { Logger } from "../logger.js";
 import { createProgressLog } from "../progress-log.js";
 import { PLEX_USER_AGENT } from "../version.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration, IntegrationHttpError } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError, IntegrationHttpError } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
 const PLEX_TV_RESOURCES_URL = "https://plex.tv/api/v2/resources";
@@ -164,8 +164,8 @@ export class PlexIntegration {
       this.logger.info("Plex connection test succeeded", { machineIdentifier: machineIdentifier ?? null });
       return { ok: true, message: `Connected to Plex${machineIdentifier ? ` (${machineIdentifier})` : ""}.` };
     } catch (error) {
-      this.logger.warn("Plex connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Plex connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 
@@ -202,7 +202,7 @@ export class PlexIntegration {
         });
       }
     } catch (error) {
-      this.logger.warn("Failed to fetch Plex friends; continuing with owner", { error: error instanceof Error ? error.message : String(error) });
+      this.logger.warn("Failed to fetch Plex friends; continuing with owner", { error: formatIntegrationError(error) });
     }
     return users;
   }
@@ -379,7 +379,21 @@ export class PlexIntegration {
   }
 
   async downloadPoster(thumb: string): Promise<Buffer> {
-    const response = await this.requestServer(thumb, { headers: { Accept: "image/jpeg,image/png,image/webp,image/*" } });
+    const options = { headers: { Accept: "image/jpeg,image/png,image/webp,image/*" } };
+    let response: Response;
+    try {
+      response = await this.requestServer(thumb, options);
+    } catch (error) {
+      // Keep direct image bytes for overlay hash comparisons. Only Plex's remote
+      // thumbnail redirect needs the transcoder; never follow it with our token.
+      if (!(error instanceof Error && error.cause instanceof Error && error.cause.message === "unexpected redirect")) throw error;
+      // Plex resolves the source internally, without a reverse proxy's prefix.
+      // Validate it against the server origin and authenticate only that local path.
+      const source = buildIntegrationUrl(new URL(this.settings.serverUrl).origin, thumb);
+      source.searchParams.set("X-Plex-Token", this.settings.token);
+      const params = new URLSearchParams({ url: source.pathname + source.search, width: "1920", height: "1920", minSize: "0", upscale: "0" });
+      response = await this.requestServer(`/photo/:/transcode?${params}`, options);
+    }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.startsWith("image/")) throw new Error("Plex poster download returned a non-image response.");
     return Buffer.from(await response.arrayBuffer());

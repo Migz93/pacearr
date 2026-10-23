@@ -29,7 +29,7 @@ import pLimit from "p-limit";
 import type { PacearrDatabase, NormalizedWatchEventInput, SeasonExpansion } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeActivity } from "./integrations/plex.js";
 import { plexHistoryConnection, tautulliHistoryConnection } from "./history-sync.js";
-import { isNotFoundError } from "./integrations/request.js";
+import { formatIntegrationError, isNotFoundError } from "./integrations/request.js";
 import { SonarrIntegration } from "./integrations/sonarr.js";
 import { TautulliIntegration, TautulliMetadataUnavailableError, type TautulliEpisodeRecord } from "./integrations/tautulli.js";
 import type { ImageCacheService } from "./image-cache.js";
@@ -1602,7 +1602,7 @@ export class PacearrServices {
       const excludedSeasons = this.db.getRollingExclusions(rolling.id).seasons;
       await this.plexArtwork.syncShow(this.getPlex(), rolling, series, [...retainedSeasons, ...excludedSeasons]);
     } catch (error) {
-      this.logger.warn("Plex artwork synchronization failed", { seriesId: series.id, title: series.title, error: error instanceof Error ? error.message : String(error) });
+      this.logger.warn("Plex artwork synchronization failed", { seriesId: series.id, title: series.title, error: formatIntegrationError(error) });
     }
   }
 

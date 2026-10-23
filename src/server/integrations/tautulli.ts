@@ -2,7 +2,7 @@ import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.
 import type { Logger } from "../logger.js";
 import { createProgressLog, type ProgressLog } from "../progress-log.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError } from "./request.js";
 
 export interface TautulliEpisodeRecord {
   referenceId: string;
@@ -78,8 +78,8 @@ export class TautulliIntegration {
       this.logger.info("Tautulli connection test succeeded", { version: data?.tautulli_version ?? null });
       return { ok: true, message: `Connected to Tautulli${data?.tautulli_version ? ` ${data.tautulli_version}` : ""}.` };
     } catch (error) {
-      this.logger.warn("Tautulli connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Tautulli connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 

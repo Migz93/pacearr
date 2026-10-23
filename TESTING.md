@@ -20,8 +20,8 @@ SQLite database with no external services involved.
 ## Server Tests
 
 Server tests use Node's built-in test runner against a temporary SQLite
-database. Safe to run any time — they touch no real data and make no network
-calls.
+database. Safe to run any time — they touch no real data or external services.
+The Plex artwork redirect test uses temporary HTTP servers on loopback.
 
 ## Playwright End-To-End Tests
 
@@ -260,6 +260,14 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 |---|---|
 | `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
 | `getActiveSessions` parses real `get_activity` rows, which carry no start time, and keys them by playback session | Regression for #168 — real `get_activity` rows have no `started`/`date`, and the old parser skipped every one, so the job never recorded an event. The fixture matches a live payload. Rows are keyed by `session_id` (or by a session key scoped to viewer, episode and day), dated when observed, and malformed rows are still rejected |
+
+### `tests/server/plex-artwork.test.ts` — Plex artwork downloads and recovery
+
+| Test | What it checks |
+|---|---|
+| Redirected Plex thumbnails are backed up, overlaid and restored without contacting another origin | A local fake Plex returns a real 302 for an episode thumbnail; the transcoder supplies a full-HD image, the original is backed up, the overlay is rendered and uploaded, and restoration returns the original. The same flow also runs through a fake subpath proxy that strips its prefix before Plex resolves the internal source. The transcoder requires authentication on both its outer request and local source path; the redirect target receives no request. Direct bytes still recognize an existing overlay after its thumbnail URL changes. |
+| Poster downloads preserve direct bytes, reject invalid responses and report failed transcoder causes | Direct images retain their bytes; HTTP, network and non-image failures do not trigger the redirect fallback. Transcoder redirects are rejected with the nested cause retained, and every request stays on the configured origin with redirect protection and a timeout. Source authentication preserves query parameters while the proxy base path applies only to the outer request; remote thumbnail URLs are rejected before any request. |
+| Integration error formatting includes nested and non-Error causes and stops at cycles | Nested causes remain readable and circular causes cannot hang logging. Artwork warnings include the cause chain. |
 
 ### `tests/server/plex-integration.test.ts` — Plex library requests
 
