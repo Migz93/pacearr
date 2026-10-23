@@ -239,6 +239,7 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 
 | Test | What it checks |
 |---|---|
+| A library refresh skips tag reconciliation after its Sonarr connection changes | Changing either the URL or API key while the series list is being read sends no tag requests and preserves queued removals; a fresh refresh catches up on the saved connection. Saving identical credentials still reconciles. |
 | Tag writes add and remove only Pacearr's own tags, through the series editor | Ignore, enrol (ignored → enrolled), unenrol and restore each add or remove the matching Pacearr tag, every editor request uses `add`/`remove` with only Pacearr's tag IDs, and an unrelated tag on the series survives all of it |
 | A reconcile adds missing tags but never removes a tag Pacearr has no record for | With an empty database facing tagged series (the state after database loss), a library refresh sends no removal; an enrolled show missing its tag gets it |
 | A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |

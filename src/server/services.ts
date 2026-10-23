@@ -533,6 +533,7 @@ export class PacearrServices {
   }
 
   async refreshSonarrLibrary(): Promise<void> {
+    const connection = this.db.getSonarrSettings();
     const sonarr = this.getSonarr();
     const series = await sonarr.getSeries();
     const limit = pLimit(5);
@@ -549,6 +550,13 @@ export class PacearrServices {
     const generatedAt = this.db.saveSonarrLibraryCache(items);
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
     await this.removeSeriesDeletedFromSonarr(series, sonarr);
+    const currentConnection = this.db.getSonarrSettings();
+    if (connection?.baseUrl !== currentConnection?.baseUrl || connection?.apiKey !== currentConnection?.apiKey) {
+      // Saving the connection queues a fresh refresh; its series IDs and tags will
+      // belong to that connection, unlike the snapshot this run read.
+      this.logger.warn("Skipped Sonarr tag reconcile because the connection changed during the library refresh");
+      return;
+    }
     // Runs after the deleted-series check so a removed record is not tagged again.
     await this.sonarrTags.reconcile(series);
   }
