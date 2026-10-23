@@ -31,6 +31,13 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
     requests.push(url);
     if (url.searchParams.get("X-Plex-Token") !== "secret") { res.writeHead(401).end(); return; }
     if (url.pathname === "/thumb/episode") { res.writeHead(302, { Location: redirect }).end(); return; }
+    if (url.pathname === "/photo/:/transcode") {
+      const source = new URL(url.searchParams.get("url")!, "http://plex.local");
+      if (source.origin !== "http://plex.local" || source.searchParams.get("X-Plex-Token") !== "secret") {
+        res.writeHead(401).end();
+        return;
+      }
+    }
     if (url.pathname === "/photo/:/transcode" || url.pathname === "/thumb/season" || url.pathname === "/thumb/season-changed") {
       res.writeHead(200, { "Content-Type": "image/jpeg" });
       res.end(url.pathname === "/thumb/season-changed" ? uploads.get("season") : original);
@@ -83,7 +90,7 @@ test("redirected Plex thumbnails are backed up, overlaid and restored without co
     }
     const transcodes = requests.filter((url) => url.pathname === "/photo/:/transcode");
     assert.equal(transcodes.length, 1);
-    assert.equal(transcodes[0].searchParams.get("url"), "/thumb/episode");
+    assert.equal(transcodes[0].searchParams.get("url"), "/thumb/episode?X-Plex-Token=secret");
     assert.equal(transcodes[0].searchParams.get("width"), "1920");
     assert.equal(transcodes[0].searchParams.get("height"), "1920");
     assert.equal(transcodes[0].searchParams.get("minSize"), "0");
@@ -142,6 +149,17 @@ test("poster downloads preserve direct bytes, reject invalid responses and repor
     });
     assert.equal(requests.length, 2);
     assert.equal(requests[1].pathname, "/photo/:/transcode");
+    assert.equal(requests[1].searchParams.get("url"), "/thumb/1?X-Plex-Token=secret");
+    const proxied = new PlexIntegration({ serverUrl: "https://plex.example/plex", machineIdentifier: "", token: "secret" }, silentLogger);
+    requests.length = 0;
+    await assert.rejects(proxied.downloadPoster("/thumb/1?version=2&X-Plex-Token=old#fragment"));
+    assert.equal(requests[1].pathname, "/plex/photo/:/transcode");
+    assert.equal(requests[1].searchParams.get("url"), "/plex/thumb/1?version=2&X-Plex-Token=secret");
+    for (const remote of ["https://images.plex.tv/image.jpg", "//images.plex.tv/image.jpg"]) {
+      requests.length = 0;
+      await assert.rejects(plex.downloadPoster(remote));
+      assert.equal(requests.length, 0);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
