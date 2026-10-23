@@ -13,6 +13,8 @@ const PACEARR_TAGS: PacearrSonarrTag[] = ["enrolled", "ignored"];
 type TagIds = Partial<Record<PacearrSonarrTag, number>>;
 type SeriesLookup = (seriesId: number) => Promise<SonarrSeries | null>;
 
+class SonarrConnectionChangedError extends Error {}
+
 /**
  * Mirrors Pacearr's enrolments and ignores onto Sonarr series as tags, so they can be
  * recovered after the database is lost. Pacearr's records stay the source of truth.
@@ -77,9 +79,10 @@ export class SonarrTagMirror {
   /**
    * Adds every missing Pacearr tag and retries queued removals. `series` is a full
    * Sonarr series list read in the same pass, so each series' current tags are known
-   * without another request per show.
+   * without another request per show. The caller checks the connection against the
+   * one that supplied this list; recheck before writes and queue changes after waits.
    */
-  async reconcile(series: SonarrSeries[]): Promise<{ added: number; removed: number; pendingRemovals: number; deferred: number } | null> {
+  async reconcile(series: SonarrSeries[], isConnectionCurrent: () => boolean = () => true): Promise<{ added: number; removed: number; pendingRemovals: number; deferred: number } | null> {
     const blockedBy = this.writeBlocker();
     if (blockedBy) {
       this.logger.debug("Skipped Sonarr tag reconcile", { reason: blockedBy, pendingRemovals: this.db.listSonarrTagRemovals().length });
@@ -89,9 +92,13 @@ export class SonarrTagMirror {
       this.logger.debug("Skipped Sonarr tag reconcile because Sonarr returned no series");
       return null;
     }
+    const checkConnection = () => {
+      if (!isConnectionCurrent()) throw new SonarrConnectionChangedError();
+    };
     try {
+      checkConnection();
       const sonarr = this.getSonarr();
-      const tagIds = await this.resolveTagIds(sonarr, true);
+      const tagIds = await this.resolveTagIds(sonarr, true, checkConnection);
       const byId = new Map(series.map((item) => [item.id, item]));
       // A series another operation is working on is deferred: that operation's full
       // series PUT carries the tag list it read earlier, and would undo a tag write
@@ -103,14 +110,16 @@ export class SonarrTagMirror {
         this.db.listSonarrTagRemovals(),
         async (seriesId) => byId.get(seriesId) ?? getSeriesOrNull(sonarr, seriesId),
         busy,
+        checkConnection,
       );
-      let added = await this.addMissingTags(sonarr, tagIds, byId, busy);
+      let added = await this.addMissingTags(sonarr, tagIds, byId, busy, checkConnection);
 
       let deferred = 0;
       if (busy.size > 0) {
         const titles = (ids: Iterable<number>) => [...ids].map((seriesId) => byId.get(seriesId)?.title ?? String(seriesId));
         this.logger.info("Sonarr tag changes deferred for shows with another operation running; retrying once they finish", { shows: busy.size, titles: titles(busy) });
-        const freed = await this.waitForSeries(busy);
+        const freed = await this.waitForSeries(busy, checkConnection);
+        checkConnection();
         if (freed.size > 0) {
           // Re-read each freed series: its operation may have changed its tags or its
           // Pacearr state while this reconcile waited.
@@ -118,6 +127,7 @@ export class SonarrTagMirror {
           // A failed read stays deferred; only a 404 means the series is gone.
           const stillDeferred = new Set<number>();
           for (const seriesId of freed) {
+            checkConnection();
             try {
               const item = await getSeriesOrNull(sonarr, seriesId);
               if (item) fresh.set(seriesId, item);
@@ -132,8 +142,9 @@ export class SonarrTagMirror {
             this.db.listSonarrTagRemovals().filter((entry) => freed.has(entry.sonarrSeriesId) && !stillDeferred.has(entry.sonarrSeriesId)),
             async (seriesId) => fresh.get(seriesId) ?? getSeriesOrNull(sonarr, seriesId),
             stillDeferred,
+            checkConnection,
           );
-          added += await this.addMissingTags(sonarr, tagIds, fresh, stillDeferred);
+          added += await this.addMissingTags(sonarr, tagIds, fresh, stillDeferred, checkConnection);
           for (const seriesId of stillDeferred) busy.add(seriesId);
           for (const seriesId of freed) if (!stillDeferred.has(seriesId)) busy.delete(seriesId);
         }
@@ -142,10 +153,15 @@ export class SonarrTagMirror {
           this.logger.warn("Sonarr tag changes still deferred, for shows still busy or unreadable; the next library refresh retries", { shows: deferred, titles: titles(busy) });
         }
       }
+      checkConnection();
       const pendingRemovals = this.db.listSonarrTagRemovals().length;
       this.logger.info("Sonarr tag reconcile complete", { added, removed, pendingRemovals, deferred });
       return { added, removed, pendingRemovals, deferred };
     } catch (error) {
+      if (error instanceof SonarrConnectionChangedError) {
+        this.logger.warn("Stopped Sonarr tag reconcile because the connection changed", { pendingRemovals: this.db.listSonarrTagRemovals().length });
+        return null;
+      }
       this.logger.warn("Sonarr tag reconcile failed", { error: errorMessage(error) });
       return null;
     }
@@ -155,7 +171,7 @@ export class SonarrTagMirror {
    * Adds each Pacearr tag a show in `seriesById` is missing. A busy series is recorded
    * in `busy` instead. Returns how many tags were added.
    */
-  private async addMissingTags(sonarr: SonarrIntegration, tagIds: TagIds, seriesById: Map<number, SonarrSeries>, busy: Set<number>): Promise<number> {
+  private async addMissingTags(sonarr: SonarrIntegration, tagIds: TagIds, seriesById: Map<number, SonarrSeries>, busy: Set<number>, checkConnection: () => void): Promise<number> {
     const expected: Record<PacearrSonarrTag, number[]> = {
       enrolled: this.db.listRollingShows().map((show) => show.sonarrSeriesId),
       ignored: this.db.listIgnoredRecommendationIds(),
@@ -172,6 +188,7 @@ export class SonarrTagMirror {
         else missing.push(seriesId);
       }
       if (missing.length === 0) continue;
+      checkConnection();
       try {
         await sonarr.editSeriesTags(missing, [tagId], "add");
         added += missing.length;
@@ -184,10 +201,11 @@ export class SonarrTagMirror {
   }
 
   /** Waits, up to the retry timeout, for busy series to be free. Returns those that are. */
-  private async waitForSeries(seriesIds: Set<number>): Promise<Set<number>> {
+  private async waitForSeries(seriesIds: Set<number>, checkConnection: () => void): Promise<Set<number>> {
     const deadline = Date.now() + this.busyRetry.timeoutMs;
     while ([...seriesIds].some((seriesId) => this.isSeriesBusy(seriesId)) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, this.busyRetry.pollMs));
+      checkConnection();
     }
     return new Set([...seriesIds].filter((seriesId) => !this.isSeriesBusy(seriesId)));
   }
@@ -230,11 +248,12 @@ export class SonarrTagMirror {
   }
 
   /** Looks up Pacearr's tag IDs, creating a missing tag only when something will be added. */
-  private async resolveTagIds(sonarr: SonarrIntegration, createMissing: boolean): Promise<TagIds> {
+  private async resolveTagIds(sonarr: SonarrIntegration, createMissing: boolean, checkConnection: () => void = () => {}): Promise<TagIds> {
     const tagIds = tagIdsFromList(await sonarr.getTags());
     if (!createMissing) return tagIds;
     for (const tag of PACEARR_TAGS) {
       if (tagIds[tag] !== undefined) continue;
+      checkConnection();
       const created = await sonarr.createTag(SONARR_TAG_LABELS[tag]);
       if (!created) continue;
       tagIds[tag] = created.id;
@@ -251,6 +270,7 @@ export class SonarrTagMirror {
     lookup: SeriesLookup,
     /** When given, a busy series is recorded here and skipped rather than processed. */
     busy: Set<number> | null,
+    checkConnection: () => void = () => {},
   ): Promise<number> {
     if (entries.length === 0) return 0;
     const enrolled = new Set(this.db.listRollingShows().map((show) => show.sonarrSeriesId));
@@ -258,6 +278,7 @@ export class SonarrTagMirror {
     const toRemove: Record<PacearrSonarrTag, number[]> = { enrolled: [], ignored: [] };
 
     for (const { sonarrSeriesId: seriesId, tag } of entries) {
+      checkConnection();
       const current = enrolled.has(seriesId) ? "enrolled" : ignored.has(seriesId) ? "ignored" : null;
       if (current === tag) {
         // The show went back into that state before the removal was sent.
@@ -282,6 +303,7 @@ export class SonarrTagMirror {
         this.logger.warn("Could not read a Sonarr series for a queued tag removal; it stays queued", { seriesId, tag: SONARR_TAG_LABELS[tag], error: errorMessage(error) });
         continue;
       }
+      checkConnection();
       if (!series || !series.tags?.includes(tagId)) {
         this.db.clearSonarrTagRemoval(seriesId, tag);
         continue;
@@ -294,12 +316,16 @@ export class SonarrTagMirror {
       const seriesIds = toRemove[tag];
       const tagId = tagIds[tag];
       if (seriesIds.length === 0 || tagId === undefined) continue;
+      checkConnection();
       try {
         await sonarr.editSeriesTags(seriesIds, [tagId], "remove");
       } catch (error) {
         this.logger.warn("Pacearr tag removal failed in Sonarr; it stays queued", { tag: SONARR_TAG_LABELS[tag], seriesIds, error: errorMessage(error) });
         continue;
       }
+      // A write already sent can finish after settings change. Keep its removals
+      // queued so the follow-up refresh can also settle them on the saved instance.
+      checkConnection();
       for (const seriesId of seriesIds) this.db.clearSonarrTagRemoval(seriesId, tag);
       removed += seriesIds.length;
       this.logger.info("Pacearr tag removed in Sonarr", { tag: SONARR_TAG_LABELS[tag], seriesIds });
