@@ -31,6 +31,7 @@ list are checked and removed only when that is confirmed.
 |---|---|
 | Candidates | Enrolled or ignored series absent from the fetched list; an empty list is skipped entirely |
 | Confirmation | A direct `series/{id}` lookup must return 404; any other failure keeps the records |
+| Connection changed | The refresh skips cleanup if the saved Sonarr URL or API key changed. During cleanup it rechecks after deletion lookups and before changing records; if settings change during a Plex restore already sent, the enrolment and backups are kept. The queued follow-up refresh confirms deletions against the saved connection. |
 | Enrolment | Plex artwork is restored first (items Plex no longer has are skipped); a failed restore keeps the enrolment and its backups. Sonarr monitoring is not touched. Skipped while another operation holds the show |
 | Ignore | Removed with no external calls |
 | Dry run | Nothing is removed; each removal is previewed as a `dry_run.show.removed_from_sonarr` history event |

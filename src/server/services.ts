@@ -549,7 +549,6 @@ export class PacearrServices {
     })));
     const generatedAt = this.db.saveSonarrLibraryCache(items);
     this.logger.info("Sonarr library cache refreshed", { shows: items.length, generatedAt });
-    await this.removeSeriesDeletedFromSonarr(series, sonarr);
     const isConnectionCurrent = () => {
       const current = this.db.getSonarrSettings();
       return connection?.baseUrl === current?.baseUrl && connection?.apiKey === current?.apiKey;
@@ -557,9 +556,11 @@ export class PacearrServices {
     if (!isConnectionCurrent()) {
       // Saving the connection queues a fresh refresh; its series IDs and tags will
       // belong to that connection, unlike the snapshot this run read.
-      this.logger.warn("Skipped Sonarr tag reconcile because the connection changed during the library refresh");
+      this.logger.warn("Skipped Sonarr deleted-series cleanup and tag reconcile because the connection changed during the library refresh");
       return;
     }
+    await this.removeSeriesDeletedFromSonarr(series, sonarr, isConnectionCurrent);
+    if (!isConnectionCurrent()) return;
     // Runs after the deleted-series check so a removed record is not tagged again.
     await this.sonarrTags.reconcile(series, isConnectionCurrent);
   }
@@ -571,7 +572,7 @@ export class PacearrServices {
    * lookup, and only a 404 counts. An empty list is never trusted, so an empty or
    * misconfigured Sonarr cannot wipe every enrolment.
    */
-  private async removeSeriesDeletedFromSonarr(series: SonarrSeries[], sonarr: SonarrIntegration): Promise<void> {
+  private async removeSeriesDeletedFromSonarr(series: SonarrSeries[], sonarr: SonarrIntegration, isConnectionCurrent: () => boolean): Promise<void> {
     if (series.length === 0) {
       this.logger.debug("Skipped deleted-series check because Sonarr returned no series");
       return;
@@ -590,7 +591,13 @@ export class PacearrServices {
 
     const dryRun = this.isDryRun();
     let removed = 0;
+    const canContinue = () => {
+      if (isConnectionCurrent()) return true;
+      this.logger.warn("Stopped Sonarr deleted-series cleanup because the connection changed", { candidates: candidateIds.length, removed });
+      return false;
+    };
     for (const seriesId of candidateIds) {
+      if (!canContinue()) return;
       const rolling = rollingBySeries.get(seriesId) ?? null;
       const title = rolling?.title ?? ignoredBySeries.get(seriesId)?.title ?? String(seriesId);
       try {
@@ -600,6 +607,7 @@ export class PacearrServices {
         } catch (error) {
           if (!isNotFoundError(error)) throw error;
         }
+        if (!canContinue()) return;
         const details = { seriesId, enrolled: Boolean(rolling), ignored: ignoredBySeries.has(seriesId) };
         const hasRecord = details.enrolled || details.ignored;
         if (dryRun && !hasRecord) continue;
@@ -609,7 +617,9 @@ export class PacearrServices {
           this.logger.info("Dry run: would remove Pacearr records for a series deleted from Sonarr", { ...details, title });
           continue;
         }
-        if (rolling && !(await this.removeEnrollmentOfDeletedSeries(rolling))) continue;
+        const enrollmentRemoved = rolling ? await this.removeEnrollmentOfDeletedSeries(rolling, isConnectionCurrent) : true;
+        if (!canContinue()) return;
+        if (!enrollmentRemoved) continue;
         // No Sonarr tag removal: the series, and its tags, are already gone from Sonarr.
         // Drop any queued one without sending it, so it cannot apply to a reused ID later.
         const droppedTagRemovals = this.db.clearSonarrTagRemovalsForSeries(seriesId);
@@ -630,8 +640,8 @@ export class PacearrServices {
     this.logger.info("Deleted-series check complete", { candidates: candidateIds.length, removed, dryRun });
   }
 
-  /** Returns false when the enrolment was kept because another operation holds the show. */
-  private async removeEnrollmentOfDeletedSeries(rolling: RollingShowRecord): Promise<boolean> {
+  /** Returns false when a busy show or changed connection keeps the enrolment. */
+  private async removeEnrollmentOfDeletedSeries(rolling: RollingShowRecord, isConnectionCurrent: () => boolean): Promise<boolean> {
     const operation = this.acquireSeriesOperation(rolling.sonarrSeriesId);
     if (operation === null) {
       this.logger.info("Skipped removing a deleted series' enrolment while another show operation is running", { rollingShowId: rolling.id, seriesId: rolling.sonarrSeriesId, title: rolling.title });
@@ -642,6 +652,9 @@ export class PacearrServices {
       // overlays. Restore those first; a failure keeps the enrolment and its backups.
       const artwork = this.db.listPlexArtwork(rolling.id);
       if (artwork.length > 0) await this.plexArtwork.restoreAll(this.getPlex(), rolling.id, { skipMissingItems: true });
+      // A restore already sent may finish after Sonarr settings change. Preserve the
+      // enrolment and its backups until a refresh of the saved connection confirms it.
+      if (!isConnectionCurrent()) return false;
       this.db.deleteRollingShow(rolling.id);
       this.db.completeNewShowTriageEnrollment(rolling.sonarrSeriesId);
       this.plexArtwork.removeBackups(artwork);
