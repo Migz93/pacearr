@@ -2000,6 +2000,101 @@ test("A library refresh removes Pacearr records only for series Sonarr confirms 
   }
 });
 
+for (const phase of ["series list", "deletion lookup"] as const) {
+  for (const field of ["baseUrl", "apiKey"] as const) {
+    test(`a Sonarr ${field} change during the ${phase} preserves deleted-series candidates`, async () => {
+      const { db, services, cleanup } = createHarness();
+      db.updateAppSettings({ dryRun: false });
+      db.upsertRollingShow({ id: 2, title: "Enrolled" });
+      db.ignoreRecommendation(3, "Ignored");
+      db.queueSonarrTagRemoval(4, "ignored");
+      const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Listed" }], { 2: 404, 3: 404, 4: 404 });
+      const fakeFetch = globalThis.fetch;
+      let changed = false;
+      const lookups: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (changed && url.pathname === "/api/v3/series") {
+          return jsonResponse([1, 2, 3, 4].map((id) => ({ id, title: `New instance series ${id}` })));
+        }
+        if (/^\/api\/v3\/series\/\d+$/.test(url.pathname)) lookups.push(url.pathname);
+        const response = await fakeFetch(input, init);
+        if (!changed && url.pathname === (phase === "series list" ? "/api/v3/series" : "/api/v3/series/2")) {
+          db.saveSonarrSettings({ ...db.getSonarrSettings()!, [field]: field === "baseUrl" ? "http://new-sonarr:8989" : "new-key" });
+          changed = true;
+        }
+        return response;
+      }) as typeof fetch;
+      try {
+        await services.refreshSonarrLibrary();
+        assert.equal(changed, true);
+        if (phase === "series list") assert.equal(db.getSonarrLibraryCache(), null, "the stale snapshot is not published");
+        assert.deepEqual(lookups, phase === "series list" ? [] : ["/api/v3/series/2"], "no further deletion lookups after a connection change");
+        await services.refreshSonarrLibrary();
+        assert.deepEqual(db.getSonarrLibraryCache()?.items.map((item) => item.series.id), [1, 2, 3, 4]);
+        assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+        assert.deepEqual(db.listIgnoredRecommendationIds(), [3]);
+        assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 4, tag: "ignored" }]);
+        assert.ok(!db.listHistory(10).some((entry) => entry.action === "show.removed_from_sonarr"));
+      } finally {
+        stub.restore();
+        cleanup();
+      }
+    });
+  }
+}
+
+test("a Sonarr connection change during Plex restoration keeps the enrolment and artwork backup", async () => {
+  const { db, services, cleanup } = createHarness();
+  const backupDir = mkdtempSync(path.join(os.tmpdir(), "pacearr-connection-artwork-test-"));
+  const originalPosterPath = path.join(backupDir, "original.jpg");
+  writeFileSync(originalPosterPath, "original poster");
+  db.updateAppSettings({ dryRun: false });
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const rolling = db.upsertRollingShow({ id: 2, title: "Enrolled" });
+  db.ignoreRecommendation(3, "Ignored");
+  db.queueSonarrTagRemoval(2, "ignored");
+  const artwork = db.createPlexArtwork({
+    rollingShowId: rolling.id, plexShowRatingKey: "100", plexItemRatingKey: "101",
+    itemType: "season", seasonNumber: 1, originalPosterPath,
+    overlayPosterPath: path.join(backupDir, "overlay.jpg"), overlaySha256: "abc123",
+  });
+  db.setPlexArtworkOverlayApplied(artwork.id, true);
+  const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Listed" }], { 2: 404, 3: 404 });
+  const fakeFetch = globalThis.fetch;
+  let changed = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const response = await fakeFetch(input, init);
+    if (url.hostname === "plex" && url.pathname.endsWith("/posters")) {
+      db.saveSonarrSettings({ ...db.getSonarrSettings()!, baseUrl: "http://new-sonarr:8989" });
+      changed = true;
+    }
+    return response;
+  }) as typeof fetch;
+  try {
+    await services.refreshSonarrLibrary();
+    assert.equal(changed, true);
+    assert.deepEqual(stub.posterUploads, ["/library/metadata/101/posters"]);
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), [3]);
+    assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 2, tag: "ignored" }]);
+    assert.equal(db.listPlexArtwork(rolling.id).length, 1);
+    assert.equal(existsSync(originalPosterPath), true);
+    assert.ok(!db.listHistory(10).some((entry) => entry.action === "show.removed_from_sonarr"));
+
+    // A later refresh can acquire the same show again and finish confirmed cleanup.
+    globalThis.fetch = fakeFetch;
+    await services.refreshSonarrLibrary();
+    assert.equal(db.getRollingShow(rolling.id), null);
+    assert.equal(existsSync(originalPosterPath), false);
+  } finally {
+    stub.restore();
+    rmSync(backupDir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
 test("An empty Sonarr series list or dry run never removes Pacearr records", async () => {
   const { db, services, cleanup } = createHarness();
   const stub = installDeletedSeriesFetchStub([], { 2: 404 });

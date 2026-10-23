@@ -153,6 +153,57 @@ test("a reconcile adds missing tags but never removes a tag Pacearr has no recor
   }
 });
 
+for (const change of ["baseUrl", "apiKey", "unchanged"] as const) {
+  test(`library refresh checks for a ${change} connection before reconciling tags`, async () => {
+    const { db, services, cleanup } = createHarness({ dryRun: false });
+    const sonarr = installFakeSonarr({
+      series: [series(23, "Needs Enrolled Tag"), series(24, "Needs Tag Removed", [1, 51])],
+      tags: [{ id: 51, label: "pacearr-ignored" }],
+    });
+    db.upsertRollingShow({ id: 23, title: "Needs Enrolled Tag" });
+    db.queueSonarrTagRemoval(24, "ignored");
+    const savedConnection = {
+      baseUrl: change === "baseUrl" ? "http://new-sonarr:8989" : "http://sonarr:8989",
+      apiKey: change === "apiKey" ? "new-secret" : "secret",
+    };
+    const fakeFetch = globalThis.fetch;
+    const requests: Array<{ hostname: string; apiKey: string | null; pathname: string }> = [];
+    let connectionSaved = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push({ hostname: url.hostname, apiKey: new Headers(init?.headers).get("X-Api-Key"), pathname: url.pathname });
+      const response = await fakeFetch(input, init);
+      if (!connectionSaved && url.pathname === "/api/v3/series") {
+        // The series response belongs to the old connection, but settings are saved
+        // before the refresh can use it for tag reconciliation.
+        db.saveSonarrSettings(savedConnection);
+        connectionSaved = true;
+      }
+      return response;
+    }) as typeof fetch;
+    try {
+      await services.refreshSonarrLibrary();
+      assert.equal(connectionSaved, true);
+      if (change !== "unchanged") {
+        assert.deepEqual(sonarr.tagRequests(), [], "the stale refresh must send no tag requests to either connection");
+        assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 24, tag: "ignored" }]);
+        assert.deepEqual(sonarr.tagLabels(23), ["kometafranchise"]);
+        assert.deepEqual(sonarr.tagLabels(24), ["kometafranchise", "pacearr-ignored"]);
+        requests.length = 0;
+        await services.refreshSonarrLibrary();
+      }
+      assert.deepEqual(sonarr.tagLabels(23), ["kometafranchise", "pacearr-enrolled"]);
+      assert.deepEqual(sonarr.tagLabels(24), ["kometafranchise"]);
+      assert.deepEqual(db.listSonarrTagRemovals(), []);
+      assert.ok(requests.some((request) => request.pathname === "/api/v3/series/editor"));
+      assert.ok(requests.every((request) => request.hostname === new URL(savedConnection.baseUrl).hostname && request.apiKey === savedConnection.apiKey));
+    } finally {
+      sonarr.restore();
+      cleanup();
+    }
+  });
+}
+
 test("a tag removal that fails is queued and retried until it succeeds", async () => {
   const { db, services, cleanup } = createHarness({ dryRun: false });
   const sonarr = installFakeSonarr({ series: [series(30, "Gamma")] });
@@ -386,6 +437,102 @@ test("a reconcile defers a show another operation holds, logs it, and tags it on
     cleanup();
   }
 });
+
+test("a connection change during the busy-show wait stops tags and preserves queued removals", async () => {
+  const { db, services, cleanup } = createHarness({ dryRun: false });
+  const sonarr = installFakeSonarr({
+    series: [series(103, "Needs Enrolled Tag"), series(104, "Needs Removal", [1, 51])],
+    tags: [{ id: 50, label: "pacearr-enrolled" }, { id: 51, label: "pacearr-ignored" }],
+  });
+  const connection = db.getSonarrSettings()!;
+  let signalWaiting!: () => void;
+  const waiting = new Promise<void>((resolve) => { signalWaiting = resolve; });
+  const warnings: string[] = [];
+  const logger = {
+    debug() {}, error() {},
+    info(message: string) { if (message.startsWith("Sonarr tag changes deferred")) signalWaiting(); },
+    warn(message: string) { warnings.push(message); },
+  } as unknown as Logger;
+  let busy = true;
+  const mirror = new SonarrTagMirror(
+    db, logger, () => new SonarrIntegration(db.getSonarrSettings()!, logger, false),
+    () => busy, { timeoutMs: 300, pollMs: 10 },
+  );
+  try {
+    db.upsertRollingShow({ id: 103, title: "Needs Enrolled Tag" });
+    db.queueSonarrTagRemoval(104, "ignored");
+    const run = mirror.reconcile([...sonarr.state.series.values()], () => db.getSonarrSettings()!.baseUrl === connection.baseUrl);
+    await waiting;
+    db.saveSonarrSettings({ ...connection, baseUrl: "http://new-sonarr:8989" });
+    sonarr.state.series.delete(104); // A's missing series must not settle B's removal.
+    busy = false;
+    assert.equal(await run, null);
+    assert.ok(warnings.some((message) => message.startsWith("Stopped Sonarr tag reconcile")));
+    assert.ok(!sonarr.state.requests.some((request) => request.pathname === "/api/v3/series/104"));
+    assert.ok(!sonarr.state.requests.some((request) => request.method !== "GET"));
+    assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 104, tag: "ignored" }]);
+    assert.deepEqual(sonarr.tagLabels(103), ["kometafranchise"]);
+
+    sonarr.state.series.set(104, series(104, "B's Series", [1, 51]));
+    await services.refreshSonarrLibrary();
+    assert.deepEqual(sonarr.tagLabels(103), ["kometafranchise", "pacearr-enrolled"]);
+    assert.deepEqual(sonarr.tagLabels(104), ["kometafranchise"]);
+    assert.deepEqual(db.listSonarrTagRemovals(), []);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
+for (const phase of ["tag lookup", "tag creation", "removal lookup", "removal write", "addition write"] as const) {
+  test(`a connection change during ${phase} stops further tag writes and queue clearing`, async () => {
+    const { db, cleanup } = createHarness({ dryRun: false });
+    const sonarr = installFakeSonarr({
+      series: [series(105, "Enrolled"), series(106, "Removal", [1, 51]), series(107, "Ignored")],
+      tags: [
+        ...(phase === "tag creation" ? [] : [{ id: 50, label: "pacearr-enrolled" }]),
+        { id: 51, label: "pacearr-ignored" },
+      ],
+    });
+    const logger = silentLogger();
+    const connection = db.getSonarrSettings()!;
+    const mirror = new SonarrTagMirror(db, logger, () => new SonarrIntegration(db.getSonarrSettings()!, logger, false), () => false);
+    const fakeFetch = globalThis.fetch;
+    let changed = false;
+    const laterWrites: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (changed && method !== "GET") laterWrites.push(url.pathname);
+      const response = await fakeFetch(input, init);
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+      if ((phase === "tag lookup" && url.pathname === "/api/v3/tag" && method === "GET")
+        || (phase === "tag creation" && url.pathname === "/api/v3/tag" && method === "POST")
+        || (phase === "removal lookup" && url.pathname === "/api/v3/series/106")
+        || (phase === "removal write" && body?.applyTags === "remove")
+        || (phase === "addition write" && body?.applyTags === "add")) {
+        db.saveSonarrSettings({ ...connection, apiKey: "new-key" });
+        changed = true;
+      }
+      return response;
+    }) as typeof fetch;
+    try {
+      db.upsertRollingShow({ id: 105, title: "Enrolled" });
+      db.ignoreRecommendation(107, "Ignored");
+      db.queueSonarrTagRemoval(106, "ignored");
+      const snapshot = [...sonarr.state.series.values()].filter((item) => phase !== "removal lookup" || item.id !== 106);
+      const result = await mirror.reconcile(snapshot, () => db.getSonarrSettings()!.apiKey === connection.apiKey);
+      assert.equal(changed, true);
+      assert.equal(result, null);
+      assert.deepEqual(laterWrites, []);
+      assert.deepEqual(db.listSonarrTagRemovals(), phase === "addition write" ? [] : [{ sonarrSeriesId: 106, tag: "ignored" }]);
+      assert.deepEqual(sonarr.tagLabels(107), ["kometafranchise"], "no subsequent add batch is sent");
+    } finally {
+      sonarr.restore();
+      cleanup();
+    }
+  });
+}
 
 test("a deferred show whose re-read fails stays deferred instead of being counted as done", async () => {
   const { db, cleanup } = createHarness({ dryRun: false });
