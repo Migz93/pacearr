@@ -551,47 +551,44 @@ When a test is agreed and written, add a row for it in the relevant table above.
 
 ## Manual Smoke Test
 
-For a local Docker verification:
+1. In the app's devcontainer, run the checks listed in Project Facts in
+   [AGENTS.md](AGENTS.md#project-facts) and any tests relevant to the change. On the Docker host, build the production image
+   from that same checkout with a unique candidate tag. Record the source revision and the
+   resulting image ID.
+2. Start that image ID in a uniquely named disposable container on bridge
+   networking with fresh writable storage at `/config`, such as tmpfs or an
+   anonymous volume. Use no live data mounts, live integration credentials,
+   or restart policy. For browser checks, use a separate loopback port. For
+   startup and health checks alone, leave the port unpublished.
+3. Wait for Docker health and check that `GET /api/health` returns HTTP 200.
+   Verify that the app runs as a non-root user. Exercise the changed behaviour
+   where possible with disposable data or mocked integrations. Record which
+   checks require real configuration or data. Collect sanitized failure
+   evidence if needed and remove the disposable container and storage in
+   either case.
+4. After the required checks pass, deploy the exact tested image ID to the
+   live app by default for implementation work. Stop at validation when the
+   owner requests it. A failed required check stops the flow before replacement.
 
-```bash
-docker build -t pacearr .
-docker rm -f pacearr || true
-docker run -d \
-  --name pacearr \
-  --network bridge \
-  -p 9302:9302 \
-  -v /opt/pacearr:/config \
-  --restart unless-stopped \
-  pacearr
-timeout 90 sh -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" pacearr)" = healthy ]; do sleep 3; done' \
-  && echo healthy || { docker logs pacearr 2>&1 | tail -20; false; }
-```
+### Live replacement and verification
 
-This waits for the HEALTHCHECK, which reads `starting` until its first check
-passes, and prints `healthy`. If it prints logs instead, look for the
-`Pacearr listening` startup line.
+Inspect the current live container and preserve its data mount, port mapping,
+network, restart policy, and runtime overrides. Stop and retain the previous
+container under a temporary name while starting the replacement. Verify the
+new image ID, Docker health, HTTP health, and the relevant app behaviour. Keep
+the previous image available and remove the stopped previous container after
+verification passes. If verification fails, retain it and report the failure.
+Consider existing-data migrations before rolling back an image.
 
-Depending on DooD network behaviour, `curl http://127.0.0.1:9302/api/health`
-from inside the devcontainer may not reach the host-published port. Testing from
-inside the container is the most reliable check:
+Check configured behaviour separately from disposable startup. When relevant,
+verify that the dashboard and Settings load, that unauthenticated routes return
+the expected status, and that the changed feature works with the live
+configuration. Run a real sync or another operation that changes live data only
+when authorized. Report the limits of testing against existing data and real
+integrations.
 
-```bash
-docker exec pacearr node -e "fetch('http://127.0.0.1:9302/api/health').then(r => r.text()).then(console.log)"
-```
-
-Then open `http://localhost:9302` and smoke-test — use this after changes that
-touch external integrations, cleanup, or Docker behaviour:
-
-- Sign in with Plex OAuth or the manual token fallback
-- Configure the Plex server URL and machine identifier
-- Configure the Sonarr base URL and API key
-- Optionally configure Tautulli and save settings
-- Open Shows and confirm Sonarr series load
-- Enroll a known show and confirm Pacearr applies the all-season-pilot baseline
-- Run Import History and confirm relevant SxxE01 history expands seasons
-- Run Check Sessions while a Plex episode is active and confirm live expansion
-- Run inactive reset only when you are comfortable with cleanup/deletion
-  behaviour
-
-This section needs Docker. See "Where You're Running" in `AGENTS.md` — where it
-is unavailable, say so rather than substituting a workspace check.
+For configured verification, confirm Plex sign-in and Sonarr series loading.
+Check Tautulli when the change affects it. Enrollment, history import,
+session-driven expansion and inactive reset can modify data or trigger
+cleanup. Run those operations only with disposable fixtures or explicit
+authorization for live writes.
