@@ -1,9 +1,14 @@
 {
   "name": "dev-pacearr",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
   "runArgs": [
     "--name",
-    "zdev-pacearr"
+    "zdev-pacearr",
+    "--mount",
+    "type=volume,destination=/workspaces/pacearr/node_modules,volume-nocopy"
   ],
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/pacearr,type=bind,consistency=cached",
   "workspaceFolder": "/workspaces/pacearr",
@@ -16,7 +21,7 @@
     "HOME": "/home/node",
     "NPM_CONFIG_CACHE": "/home/node/.npm"
   },
-  "postCreateCommand": "npm ci && npx playwright install --with-deps chromium",
+  "postCreateCommand": "sudo chown node:node node_modules && npm ci && ./node_modules/.bin/playwright install chromium",
   "customizations": {
     "vscode": {
       "extensions": [
