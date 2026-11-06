@@ -506,8 +506,12 @@ Read-only. Safe to run against a live instance.
 
 ### `tests/playwright/settings.spec.ts` — Settings navigation and forms
 
-Read-only. Safe to run against a live instance: form tests discard their changes, or
-intercept their save requests in the browser so nothing reaches the server.
+The job schedule test sets the history-import interval to one hour via
+`PATCH /api/settings/app` and attempts to restore the original value in
+`finally`. An interrupted run can leave the interval changed. Use a configured
+disposable test instance by default and get the owner's authorization before
+running this write on live data. The other form tests discard changes or
+intercept writes in the browser.
 
 | Test | What it checks |
 |---|---|
@@ -534,13 +538,17 @@ Read-only. Safe to run against a live instance.
 
 ### `tests/playwright/users.spec.ts` — Users API shape
 
-The PATCH tests send writes and restore the previous state. Use disposable
-test data by default and obtain authorization before running them on live data.
+The discovery test sends `POST /api/users/discover`, which calls Plex, saves
+discovered users, and can link existing watch history to them. The PATCH tests
+send writes and attempt to restore the previous state in `finally`. Use a
+configured disposable test instance by default and get the owner's
+authorization before connecting to real Plex or running these tests on live
+data.
 
 | Test | What it checks |
 |---|---|
 | Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
-| PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; runs against live data and restores the original state in a `finally` block |
+| PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; attempts to restore the original state in a `finally` block |
 | PATCH-ing a user with a non-boolean `enabled` value is rejected, not coerced | `Boolean(...)` also accepted any truthy non-boolean (a string, an object) as `true`; the route now requires an actual boolean whenever the field is present at all |
 
 ### `tests/server/users-activity.test.ts` — Per-user shows dialog activity
