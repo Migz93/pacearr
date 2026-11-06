@@ -28,7 +28,7 @@ data directory, workspace or version files.
 | Workspace path | `/workspaces/pacearr` |
 | Version files | `package.json` and `package-lock.json` (`src/server/version.ts` reads the version from `package.json` at runtime, so there is nothing else to update) |
 | Checks to run before closing out work | `npm run check` |
-| Test suite | Server tests — `npm test` and `npm run test:server`. Playwright — `npm run test:e2e` against a live instance (see `TESTING.md`). |
+| Test suite | Server tests — `npm test` and `npm run test:server`. Playwright — `npm run test:e2e` against a configured disposable test instance (see [TESTING.md](TESTING.md#manual-smoke-test)). |
 | Integrations to flag in review | Plex, Sonarr, Tautulli — plus cleanup/deletion behaviour |
 
 ## Before You Start — What To Read
