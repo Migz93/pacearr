@@ -5,8 +5,6 @@
     "context": ".."
   },
   "runArgs": [
-    "--name",
-    "zdev-pacearr",
     "--mount",
     "type=volume,destination=/workspaces/pacearr/node_modules,volume-nocopy"
   ],
