@@ -20,3 +20,5 @@ coverage
 .devcontainer
 LOCAL.md
 plans
+
+tests/playwright/.auth
