@@ -28,7 +28,7 @@ separate.
 | `npm test` | Delegates to `npm run test:server`: builds the server, compiles server tests, and runs Node's test runner |
 | `npm run check` | Runs TypeScript checks for the client, shared types, server, and Playwright config/tests |
 | `npm run build` | Builds the Vite client and TypeScript server |
-| `npm run test:e2e` | Runs Playwright auth setup and the live-instance browser suite |
+| `npm run test:e2e` | Runs Playwright auth setup and the configured-instance browser suite |
 | `npm run test:e2e:auth` | Runs only the Playwright session-cookie setup |
 
 ## Server Tests
@@ -39,7 +39,11 @@ The Plex artwork redirect test uses temporary HTTP servers on loopback.
 
 ## Playwright End-To-End Tests
 
-Playwright tests run against a live, fully configured Pacearr instance. They do
+Use a configured test instance with disposable data for the full suite.
+Obtain the owner's authorization before running the suite against live data
+or real integrations.
+
+Playwright tests run against a running, fully configured Pacearr instance. They do
 not mock the API or use the server test database. Auth uses a real
 `pacearr_session` cookie because the devcontainer has no display for driving
 Plex OAuth.
@@ -564,8 +568,8 @@ under Tests. Mechanically:
   picked up by `npm run test:server`. Tests should build their own temporary
   database rather than sharing state.
 - **Playwright:** create a `*.spec.ts` file under `tests/playwright/`; the saved
-  session is loaded for each Chromium test. Use the live instance only and keep
-  generated artifacts under the existing ignored `tests/` paths.
+  session is loaded for each Chromium test. Use a configured test instance and
+  keep generated artifacts under the existing ignored `tests/` paths.
 
 When a test is agreed and written, add a row for it in the relevant table above.
 
@@ -588,8 +592,9 @@ When a test is agreed and written, add a row for it in the relevant table above.
    or `SESSION_COOKIE`. Reach the smoke container on a shared private bridge
    or through a loopback tunnel inside the devcontainer. Run the full
    `npm run test:e2e` suite separately against a configured instance with a
-   valid session. For startup and health checks alone, leave the port
-   unpublished.
+   valid session. Obtain the owner's authorization before running it against
+   live data or real integrations. For startup and health checks alone,
+   leave the port unpublished.
 3. Wait for Docker health and check that `GET /api/health` returns HTTP 200.
    Verify that the app runs as a non-root user. Exercise the changed behaviour
    where possible with disposable data or mocked integrations. Record which
