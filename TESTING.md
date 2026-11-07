@@ -599,8 +599,10 @@ When a test is agreed and written, add a row for it in the relevant table above.
    Before checks, verify that installed devcontainer dependencies match the
    recorded `package-lock.json`. If the lockfile changed since installation,
    or the match cannot be verified, run `npm ci` inside the devcontainer.
-   If the Playwright version changed, recreate the devcontainer so its cached
-   system libraries and installed Chromium also match the recorded lockfile.
+   If the Playwright version changed, rebuild the devcontainer image from the
+   recorded lockfile, then recreate the container and install the matching
+   Chromium. Follow the [devcontainer removal rules](AGENTS.md#close-out-finished-or-cancelled-work)
+   for concurrent use and retained volumes before recreating it.
    Run the checks listed in Project Facts in [AGENTS.md](AGENTS.md#project-facts)
    and any relevant server tests inside the app's devcontainer. Keep the
    recorded context unchanged through those checks and the build. Recheck it
