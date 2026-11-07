@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-server-tests
 Pulsarr
 hubarr
 data
@@ -20,3 +21,7 @@ coverage
 .devcontainer
 LOCAL.md
 plans
+
+tests/playwright/.auth
+tests/playwright-report
+tests/test-results
