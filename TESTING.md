@@ -435,6 +435,10 @@ Runs against a temporary SQLite database and an in-memory fake Sonarr that appli
 | Plex, Sonarr, and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; successful connection checks plus Plex.tv account, discovery, friends, and token-ping requests pass `redirect: "error"` and an abort signal to `fetch` |
 | Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
 
+### `tests/server/rate-limit-logging.test.ts` — Concurrent warning logs
+
+Covers pipelined requests at and beyond the limit, one warning per client/window, independent clients, and warning eligibility after the window resets.
+
 ### `tests/server/rate-limit.test.ts` — Rate limiting
 
 | Test | What it checks |
