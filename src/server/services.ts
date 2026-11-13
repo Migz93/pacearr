@@ -1350,15 +1350,8 @@ export class PacearrServices {
     await this.sonarrTags.applyChange(seriesId, { remove: "ignored" });
   }
 
-  private sonarrTagImportToken(): string {
-    const settings = this.db.getSonarrSettings();
-    return crypto.createHmac("sha256", this.db.getSessionSecret())
-      .update(JSON.stringify(["sonarr-tag-import", settings?.baseUrl, settings?.apiKey]))
-      .digest("hex");
-  }
-
   async previewSonarrTagImport(): Promise<SonarrTagImportPreview> {
-    const confirmationToken = this.sonarrTagImportToken();
+    const confirmationToken = this.db.getSonarrTagImportToken();
     const { preview } = await this.sonarrTags.planImport();
     this.logger.info("Sonarr tag import previewed", { toEnroll: preview.toEnroll.length, toIgnore: preview.toIgnore.length, alreadyKnown: preview.alreadyKnown.length, conflicts: preview.conflicts.length });
     return { ...preview, confirmationToken };
@@ -1371,9 +1364,9 @@ export class PacearrServices {
    */
   async importFromSonarrTags(confirmed: { confirmationToken: string; enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
     const connectionChanged = { ok: false, message: "Sonarr connection changed. Review the import again.", enrolled: 0, ignored: 0 };
-    if (confirmed.confirmationToken !== this.sonarrTagImportToken()) return connectionChanged;
+    if (confirmed.confirmationToken !== this.db.getSonarrTagImportToken()) return connectionChanged;
     const { preview, seriesById } = await this.sonarrTags.planImport();
-    if (confirmed.confirmationToken !== this.sonarrTagImportToken()) return connectionChanged;
+    if (confirmed.confirmationToken !== this.db.getSonarrTagImportToken()) return connectionChanged;
     const confirmedEnroll = new Set(confirmed.enrollSeriesIds);
     const confirmedIgnore = new Set(confirmed.ignoreSeriesIds);
     let enrolled = 0;

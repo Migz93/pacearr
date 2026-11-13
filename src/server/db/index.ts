@@ -584,8 +584,19 @@ export class PacearrDatabase {
     return { baseUrl: settings.baseUrl, apiKeyConfigured: Boolean(settings.apiKey) };
   }
 
+  getSonarrTagImportToken(): string {
+    const existing = this.getSetting<string>("sonarrTagImportToken");
+    if (existing) return existing;
+    const token = randomUUID();
+    this.setSetting("sonarrTagImportToken", token);
+    return token;
+  }
+
   saveSonarrSettings(settings: SonarrSettings): void {
-    this.setSetting("sonarr", settings);
+    this.transaction(() => {
+      this.setSetting("sonarr", settings);
+      this.setSetting("sonarrTagImportToken", randomUUID());
+    });
   }
 
   getTautulliSettings(): TautulliSettings {

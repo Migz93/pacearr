@@ -356,13 +356,15 @@ test("tag import rejects a changed Sonarr connection before and during confirmat
     assert.equal((await services.importFromSonarrTags(confirmed)).ok, false);
 
     db.saveSonarrSettings(originalConnection);
+    assert.equal((await services.importFromSonarrTags(confirmed)).ok, false, "switching back does not revive a preview");
+    const current = await services.previewSonarrTagImport();
     const fakeFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
       const response = await fakeFetch(input, init);
       db.saveSonarrSettings(replacementConnection);
       return response;
     };
-    assert.equal((await services.importFromSonarrTags(confirmed)).ok, false);
+    assert.equal((await services.importFromSonarrTags({ ...confirmed, confirmationToken: current.confirmationToken })).ok, false);
     assert.equal(db.getRollingShowBySeriesId(80), null);
     assert.deepEqual(db.listIgnoredRecommendationIds(), []);
   } finally {
