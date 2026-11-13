@@ -6,6 +6,20 @@ Pacearr has TypeScript checks, focused server/database tests, production build
 verification, and Docker smoke testing. Server tests run against a temporary
 SQLite database with no external services involved.
 
+## Docker Pull Request Checks
+
+| Workflow check | What it checks |
+|---|---|
+| Docker AMD64 build and startup | Production Docker build, fresh unconfigured startup, container health and HTTP endpoint, SQLite native module, writable `/config`, and non-root app process |
+| Docker ARM64 build | Production Docker build under QEMU for `linux/arm64`; startup is not tested |
+
+These run automatically on pull requests without publishing images. Builds need
+network access to container registries and apt/npm package sources. The startup
+smoke test uses an unconfigured instance and does not call configured
+integrations. See [Docker Pull Request Checks](docs/workflow.md#docker-pull-request-checks)
+for runner, diagnostics, and coverage details. Configured end-to-end tests remain
+separate.
+
 ## Commands
 
 | Command | What it does |
@@ -14,21 +28,46 @@ SQLite database with no external services involved.
 | `npm test` | Delegates to `npm run test:server`: builds the server, compiles server tests, and runs Node's test runner |
 | `npm run check` | Runs TypeScript checks for the client, shared types, server, and Playwright config/tests |
 | `npm run build` | Builds the Vite client and TypeScript server |
-| `npm run test:e2e` | Runs Playwright auth setup and the live-instance browser suite |
+| `npm run test:e2e` | Runs Playwright auth setup and the configured-instance browser suite |
 | `npm run test:e2e:auth` | Runs only the Playwright session-cookie setup |
 
 ## Server Tests
 
 Server tests use Node's built-in test runner against a temporary SQLite
-database. Safe to run any time — they touch no real data and make no network
-calls.
+database. Safe to run any time — they touch no real data or external services.
+The Plex artwork redirect test uses temporary HTTP servers on loopback.
 
 ## Playwright End-To-End Tests
 
-Playwright tests run against a live, fully configured Pacearr instance. They do
+Use a configured test instance with disposable data for the full suite.
+Obtain the owner's authorization before running the suite against live data
+or real integrations.
+
+Playwright tests run against a running, fully configured Pacearr instance. They do
 not mock the API or use the server test database. Auth uses a real
 `pacearr_session` cookie because the devcontainer has no display for driving
 Plex OAuth.
+
+### Reaching the App From a Devcontainer
+
+If the app runs on the Docker host, set `BASE_URL` in `.env.playwright` to
+the app's published URL on a hostname or address reachable from the
+devcontainer. Use the deployment's actual published host port or its
+configured reverse proxy URL. Inside a devcontainer, `localhost` refers to
+that container. Verify connectivity from the devcontainer before running the
+suite.
+
+For a loopback-only host port, use an existing reachable reverse proxy or
+forward the port over SSH. For a manual browser check, run the SSH local
+forward on your browser machine. For Playwright, the forward must listen
+inside the devcontainer, for example
+`ssh -N -L 127.0.0.1:<local-port>:127.0.0.1:<host-port> <docker-host>`
+from the devcontainer if it already has authorized SSH access. Set
+`BASE_URL` to the forwarded URL. Keep the host port bound to loopback.
+
+Use the same app URL in your browser to obtain the session cookie. When the
+URL changes, clear `tests/playwright/.auth/storageState.json` and set a fresh
+`SESSION_COOKIE` for the new URL before rerunning the auth setup.
 
 ### First-Time Setup
 
@@ -80,6 +119,8 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | Rolling show enrollment is idempotent | A Sonarr series can only create one Pacearr rolling-show row |
 | Watch event import is idempotent | Duplicate source events are ignored and do not inflate watch history |
+| Watch events with the same source event ID from two connections are both stored | Plex history keys and Tautulli reference IDs are only unique per server, so another server's event with the same ID is stored rather than dropped, and a user or series repair only touches the row from its own connection |
+| A watch event stored under its server's URL moves to the stable ID only when it is the same watch | A row stored under the URL fallback moves to the install ID when the server reports the same ID, time, season, episode, show and viewer; a different install reusing the ID for another watch, or for the same second and episode of another show or viewer, is stored separately and the old row stays under the URL; other sources at the same URL are untouched |
 | Expanded seasons are monotonic and not duplicated | Expansion state is sorted and duplicate-safe |
 | Expanded seasons can be removed during progressive cleanup | Progressive cleanup can remove a season from expansion state |
 | Prefetched episodes persist and clear with their lifecycle | Prefetch records retain their triggering user, reject duplicates, clear explicitly, and clear when the season expands |
@@ -116,6 +157,9 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Tautulli username backfill uses a managed user's friendly name when their username is blank | A database upgraded from before the editable field gets a usable Tautulli friendly name for a matched managed user whose event username is blank |
 | Migration 17 repairs duplicate Tautulli IDs before adding the unique index | A pre-release duplicate retains the earliest user deterministically while later duplicate mappings are cleared |
 | Migration 22 separates Tautulli active-session events without losing existing watch events | Rebuilds the source constraint so live activity cannot advance the completed-history cursor, while preserving existing history |
+| Migration 27 stamps existing watch events with the connection configured at upgrade | Plex and Tautulli rows get the configured URL, never the stable ID, since the configured server may have replaced the one a row came from (each moves to the ID when its server reports the same watch again); the Plex cursor is restamped with the URL so the next import is a full read; an event under the same connection stays a duplicate while another server's event with the same ID is accepted |
+| Migration 27 treats malformed connection settings as unconfigured instead of failing | A hand-edited setting holding a non-string URL or machine identifier stamps `''` (or the URL fallback) rather than throwing on parameter binding and blocking startup |
+| Migration 25 clears ignore records for shows that are already enrolled | A show can no longer be both enrolled and ignored; an upgrade removes overlaps earlier versions allowed and leaves other ignore records alone |
 
 ### `tests/server/history-noise.test.ts` — History records only real changes
 
@@ -171,6 +215,7 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A run requested before setup completes runs once setup does, even when not otherwise due | A queued run skipped for setup is still owed: after setup it runs as a catch-up despite a recent last run |
 | A job whose last run failed before a restart catches up | A persisted `error` status retries after boot even when the last success is within the interval |
 | A failed catch-up run waits a full interval before retrying | A persistently failing job cannot retry in a tight loop even though `lastRunAt` only advances on success |
+| runAfterActiveAndWait waits for a fresh run after an active one, not the active run | A caller that needs work started after its request (the Sonarr tag import's full history read) is not satisfied by a run already in progress: it resolves only after a queued fresh run finishes |
 
 ### `tests/server/schedule-interval.test.ts` — Scheduled interval bounds
 
@@ -178,6 +223,15 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | Oversized finite intervals are clamped | Values that are finite as minutes, hours, or days but invalid as milliseconds are bounded before persistence or scheduler conversion |
 | Invalid interval forms stay safe | App-settings fall back safely for non-finite minute, hour, and day values; direct Jobs edits reject invalid or non-aligned minute values rather than silently rounding them |
+
+### `tests/server/progress-log.test.ts` — Long-job progress logging
+
+| Test | What it checks |
+|---|---|
+| A loop that finishes within the interval logs nothing | Short runs of a long job stay quiet |
+| Progress is reported once per interval with the running count and total | A long loop logs `processed`/`total` (plus its own fields) at each interval, never more often |
+| The next interval is measured from the last line | A slow item that crosses the interval late does not let the following item log early |
+| Several items per tick, with an unknown total | A paged read counts a whole page per tick, and a loop with no known length logs `processed` without a `total` |
 
 ### `tests/server/logger.test.ts` — Log ring, file, and merge behavior
 
@@ -209,13 +263,37 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | New-show triage creates a boundary only on enable | The authenticated HTTP route sets a new activation boundary on disabled → enabled, while enabled → enabled saves preserve it |
 | Saving a newly usable or changed Tautulli connection queues a history import | Through the HTTP route: a disabled save imports nothing, enabling imports once, an identical save does not import again, and a new server URL imports again |
+| Turning on the season search clears recorded seasons only when it becomes active | Through the HTTP route: the toggle alone does nothing while triage is off; turning both on clears every record and increments the activation number; saving again while on changes neither; turning either setting off and on again clears again with a new number; a non-boolean is rejected |
 | Saving Plex resumes waiting jobs after user discovery and queues a history import only when discovery succeeds | Through the HTTP route with discovery stubbed: a new connection runs discover → resume → import; an identical save does not import; a failed discovery still resumes waiting jobs but does not import |
 
 ### `tests/server/sonarr-dry-run.test.ts` — Sonarr mutation boundary
 
 | Test | What it checks |
 |---|---|
-| Dry-run blocks Sonarr mutations | Monitoring updates, searches, and file deletions send no HTTP requests while dry-run mode is enabled |
+| Dry-run blocks Sonarr mutations | Monitoring updates, searches, file deletions, tag creation and series-tag edits send no HTTP requests while dry-run mode is enabled |
+
+### `tests/server/sonarr-tags.test.ts` — Sonarr tag mirror and import
+
+Runs against a temporary SQLite database and an in-memory fake Sonarr that applies series-editor tag changes.
+
+| Test | What it checks |
+|---|---|
+| A library refresh skips tag reconciliation after its Sonarr connection changes | Changing either the URL or API key while the series list is being read sends no tag requests and preserves queued removals; a fresh refresh catches up on the saved connection. Saving identical credentials still reconciles. |
+| Tag writes add and remove only Pacearr's own tags, through the series editor | Ignore, enrol (ignored → enrolled), unenrol and restore each add or remove the matching Pacearr tag, every editor request uses `add`/`remove` with only Pacearr's tag IDs, and an unrelated tag on the series survives all of it |
+| A reconcile adds missing tags but never removes a tag Pacearr has no record for | With an empty database facing tagged series (the state after database loss), a library refresh sends no removal; an enrolled show missing its tag gets it |
+| A connection change during tag reconciliation stops further writes and queue clearing | A change during the busy-show wait, tag lookup/creation, removal lookup/write, or addition write stops further tag writes. Unsettled removals remain queued, including a removal whose in-flight write finishes after the change; a fresh refresh catches up after the busy-show case. |
+| A tag removal that fails is queued and retried until it succeeds | A removal Sonarr rejects stays in `sonarr_tag_removals` across refreshes and is sent and cleared once Sonarr accepts it |
+| Dry run sends no tag request, and queued removals catch up once it is off | No `/tag` or `/series/editor` request in dry run; afterwards queued removals and missing adds are applied, and a removal for a show ignored again before it was sent is dropped rather than stripping the current tag |
+| Tag writing is off by default: nothing is sent, removals queue, and import still works | `sonarrTagsEnabled` defaults to false; while off, no `/tag` or `/series/editor` request is sent but removals are queued, the import preview still works, and turning writing on applies the queued removal and missing adds |
+| A series confirmed deleted from Sonarr drops its queued tag removals without sending them | With tag writing off, a queued removal for a restored show (no record left) and one for an enrolled show are both cleared once Sonarr confirms each series is gone, and no tag request is sent |
+| A reconcile defers a show another operation holds, logs it, and tags it once it is free | A busy show is not written during the main pass; its title is logged; one that becomes free within the retry window is tagged in the same run, and one still busy is reported as deferred for the next refresh |
+| A deferred show whose re-read fails stays deferred instead of being counted as done | A transient Sonarr error re-reading a freed show is logged and keeps it in the deferred count, rather than being treated as a deleted series and silently dropped |
+| A full history read cannot clear a newer enrollment guard | A guard renewed during the read remains set after the read succeeds |
+| Rolling reconciliation rechecks the history guard under the series lock | A show marked while another show is processed receives no Sonarr requests |
+| An interrupted enrollment stays protected across a service restart | With a zero-day cleanup delay, the new service leaves Sonarr monitoring and episode files alone while the show awaits history |
+| Tag import rejects a changed Sonarr connection | Changes before confirmation or during its Sonarr reads leave enrollment and ignore records untouched |
+| A re-adopted show is not reconciled or cleaned up until a full history read completes | With a zero-day cleanup delay, a rolling reconcile before history is rebuilt sends nothing for an imported show; a successful full history reconciliation clears the guard and the next reconcile treats it normally |
+| Importing from Sonarr tags is additive, skips conflicts, and re-adopts without a pilot baseline | The preview splits tagged shows into enrol/ignore/already known/conflict and treats a queued removal as absent; the import only creates records the confirmation listed, never changes an existing one, records still-monitored seasons as expanded, and sends nothing to Sonarr |
 
 ---
 
@@ -225,6 +303,25 @@ Runs against a temporary SQLite database. Safe to run any time.
 |---|---|
 | `getHistory` maps valid Tautulli history without collapsing `username` and `user` | Regression for #75 — these fields stay distinct, and a malformed neighboring row cannot discard valid history from the same response |
 | `getActiveSessions` parses real `get_activity` rows, which carry no start time, and keys them by playback session | Regression for #168 — real `get_activity` rows have no `started`/`date`, and the old parser skipped every one, so the job never recorded an event. The fixture matches a live payload. Rows are keyed by `session_id` (or by a session key scoped to viewer, episode and day), dated when observed, and malformed rows are still rejected |
+
+### `tests/server/plex-artwork.test.ts` — Plex artwork downloads and recovery
+
+| Test | What it checks |
+|---|---|
+| Redirected Plex thumbnails are backed up, overlaid and restored without contacting another origin | A local fake Plex returns a real 302 for an episode thumbnail; the transcoder supplies a full-HD image, the original is backed up, the overlay is rendered and uploaded, and restoration returns the original. The same flow also runs through a fake subpath proxy that strips its prefix before Plex resolves the internal source. The transcoder requires authentication on both its outer request and local source path; the redirect target receives no request. Direct bytes still recognize an existing overlay after its thumbnail URL changes. |
+| Poster downloads preserve direct bytes, reject invalid responses and report failed transcoder causes | Direct images retain their bytes; HTTP, network and non-image failures do not trigger the redirect fallback. Transcoder redirects are rejected with the nested cause retained, and every request stays on the configured origin with redirect protection and a timeout. Source authentication preserves query parameters while the proxy base path applies only to the outer request; remote thumbnail URLs are rejected before any request. |
+| Integration error formatting includes nested and non-Error causes and stops at cycles | Nested causes remain readable and circular causes cannot hang logging. Artwork warnings include the cause chain. |
+
+### `tests/server/plex-integration.test.ts` — Plex library requests
+
+| Test | What it checks |
+|---|---|
+| `findShowForArtwork` requests a single seed item per TV section | Regression for #200 — the seed request to `/library/sections/{key}/all`, which fetches one show so the lookup can call that show's `/matches` endpoint, sends both `X-Plex-Container-Start=0` and `X-Plex-Container-Size=1` as URL query parameters. Plex ignores the size without the start, so dropping it downloads the whole section per identifier and times out under load |
+| `findShowForArtwork` picks the copy in Sonarr's folder when one show is in several libraries | Regression for #201 — when the ID match finds one Plex GUID in two TV sections, the copy whose `Location` folder equals Sonarr's `series.path` (ignoring a trailing `/` or `\`) gets the artwork, not the lookup being skipped as ambiguous |
+| `findShowForArtwork` skips a show in several libraries when none is in Sonarr's folder | The folder tie-break needs an exact match; with no copy in Sonarr's folder (for example differing mount points) the lookup still returns `null` rather than guessing a library |
+| `findShowForArtwork` skips a show in several libraries when more than one is in Sonarr's folder | The folder match must be unique; when two libraries point at the same folder, the lookup returns `null` instead of picking the first matching copy |
+| `findShowForArtwork` never lets Sonarr's folder pick between different shows | Candidates with different Plex GUIDs stay ambiguous even when one folder matches Sonarr's path, so a bad upstream ID match can never change an unrelated show's poster (#111) |
+| `findShowForArtwork` uses a single match whether or not its folder is Sonarr's | The folder is only a tie-break; a single ID match is used as before, including when no Sonarr path is supplied |
 
 ### `tests/server/tautulli-active-session.test.ts` — Tautulli active-session recovery
 
@@ -254,6 +351,44 @@ Runs against a temporary SQLite database. Safe to run any time.
 | A first watch inside an unexpanded season expands it and still prefetches the next when near its end | Expanding the current season no longer suppresses prefetch from the same watch: S2E4 of 5 expands S2 and prefetches S3 E02–E03 |
 | Scheduled reconciliation keeps a finale-expanded season while its viewer is still on the previous season | With a zero cleanup delay, the six-hourly sweep neither unmonitors, deletes nor un-expands the next season while the viewer's progress is still on the finale |
 
+### `tests/server/exclusions.test.ts` — Season and episode exclusions
+
+| Test | What it checks |
+|---|---|
+| Rolling plan never monitors, searches or deletes the files of excluded items | An excluded season is dropped from retention and its flag disabled; excluded episodes are target-unmonitored, never pilot- or season-searched, and their files are protected while ordinary non-pilot files are still deleted |
+| Excluding an expanded season unmonitors all of it without searching or deleting files | The one-off Sonarr update unmonitors every episode, sends no search or `DELETE`, removes the season from `expanded_seasons` and records `show.season_excluded` |
+| Watching an excluded season does not expand it or trigger any Sonarr work | Live watches of E01 and the finale send nothing to Sonarr, and the rolling reconcile's catch-up of that stored position never monitors, searches or expands the season |
+| A finale does not expand, or prefetch into, an excluded next season | With finale expansion and early prefetch both on, a season 1 finale leaves the excluded season 2 untouched and stores no prefetch records |
+| Expanding a season keeps its excluded episode unmonitored and unsearched | Sonarr re-monitors every episode when a season is monitored, so the expansion unmonitors the excluded episode again afterwards |
+| Trimming an expanded season back to its pilot resets its episode exclusions | The scheduled reconcile trims an inactive expanded season in one pass: its excluded E01 is monitored again, the excluded non-pilot's file is deleted with the rest, `resetExcludedEpisodes` is recorded, and an exclusion in a never-expanded season is kept |
+| Progressive cleanup from a watch also resets the trimmed season's episode exclusions | The same reset through `cleanupSeasonToPilot`, triggered by a viewer moving on to the next season |
+| A dry-run trim keeps the season's episode exclusions | Dry run sends nothing to Sonarr and leaves expanded seasons and exclusions unchanged |
+| Including a season restores only its pilot and searches it when missing | The season returns to the pilot-only baseline: `EpisodeSearch` for E01 only, no expansion |
+| Including an episode restores the monitoring its season implies | Monitored and searched in an expanded season; left unmonitored, with nothing sent, in a pilot-only season |
+| Including an episode monitors it when an active viewer holds its not-yet-expanded season | Include uses the rolling plan's target, so a season retained by an active viewer but not yet marked expanded gets the episode monitored and searched immediately |
+| Including the episode an active viewer is on counts that viewer toward its season | The viewer's progress on the episode being included is judged without its exclusion, so their season is retained and the episode is monitored and searched |
+| Dry run stores an exclusion without changing Sonarr or expanded seasons | No Sonarr writes, `expanded_seasons` unchanged, the exclusion is stored and `dry_run.show.season_excluded` is recorded |
+
+### `tests/server/season-expansion-reasons.test.ts` — Expansion reasons, manual expansion and requested seasons
+
+| Test | What it checks |
+|---|---|
+| Requested seasons are only the monitored ones when some, but not all, real seasons are monitored | Every real season monitored, or none, selects nothing; specials are ignored |
+| Migration 29 records existing expanded seasons as watched and skips malformed state | Seasons expanded before reasons existed keep showing as watched, with no user or time, and a malformed `expanded_seasons` value cannot block startup |
+| Each way expanded-season state is cleared also clears its reason | Trim, reconcile, reset and unenrolment drop the reason; a season the reconcile keeps keeps its reason, and one it adds from viewer progress is `watched` |
+| A season expanded by watching records the viewer, and excluding it clears the reason | The reason, user and time are stored and written to history; excluding the season removes them |
+| The Expand button monitors and searches the season once and records it as manual | One `SeasonSearch`, every episode monitored, `manual` reason and history, and the show's last activity unchanged |
+| The Expand button refuses an expanded, excluded, missing or busy season | Each is refused as `ok: false` with nothing sent to Sonarr |
+| A dry-run Expand records the planned expansion without changing Sonarr or expanded seasons | Only `dry_run.sonarr.expand_season` is recorded |
+| A manually expanded season nobody watches shows its trim date and is trimmed after the cleanup delay | The show page has no trim date until the reconcile starts the timer, then the timer plus **Cleanup delay**; after the delay the season is trimmed to E01 and its reason cleared |
+| Triage enrolment keeps the requested season expanded, searches it once and records it as requested | The requested season is never unmonitored, gets one `SeasonSearch` and a `requested` reason; the other seasons get the pilot baseline |
+| Triage enrolment keeps the requested season through the deferred history-repair pass | With history configured, the later `auto-triage-history` pass does not search it again or unmonitor it, and starts its inactivity timer |
+| A triage enrolment that failed part-way keeps its requested season when the next poll resumes it | The resumed enrolment uses the stored classification, monitors the season and searches it once |
+| A whole-show request whose baseline failed part-way is not reclassified as requested seasons on resume | The classification is stored with the pending enrolment before any Sonarr change, so seasons the failed baseline left monitored are not expanded on the retry |
+| A requested season nobody watches is trimmed to its pilot after the cleanup delay, and a viewer keeps it | Normal retention applies to requested seasons |
+| Triage enrolment of a series with every season monitored applies the plain pilot baseline | A whole-show request expands nothing |
+| A manual enrolment keeps today's pilot baseline even when some seasons are monitored | Requested seasons are kept only for automatic triage enrolment |
+
 ### `tests/server/new-show-triage.test.ts` — Automatic Sonarr arrival triage
 
 | Test | What it checks |
@@ -275,6 +410,24 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Unenrolling a partial automatic enrollment clears its pending marker | A later manual enrollment cannot inherit stale automatic triage state after unenrollment |
 | A full-series search waits for another series operation | Triage retries instead of overlapping a concurrent enrollment or rolling mutation |
 | Retrying a partial large-show enrollment resumes it | A retry reuses the persisted rolling-show row without writing a second enrollment history entry |
+| Dry run enabled during a poll leaves a new series pending | A full-series search blocked by a dry run switched on mid-poll is not recorded, so the first live poll searches it |
+| A season monitored after a search triage is searched once | A later-requested season gets one `SeasonSearch`; repeat polls send nothing; a season unmonitored and monitored again is searched again |
+| A search triage recorded before season tracking starts from its monitored seasons | A row with no recorded seasons is filled without searching, then a later season is searched |
+| An enrolled search-triaged show is left to rolling monitoring | No season search while enrolled, and the seasons an unenrolment monitors are recorded without searching |
+| A failed newly monitored season search is retried | The failed season stays unrecorded and is searched on the next poll |
+| Enrolling and unenrolling between polls does not search every season | Unenrolment forgets the recorded seasons, so the next poll records the re-monitored seasons without searching |
+| Dry run defers a newly monitored season search | No command in dry run; the season is searched on the first live poll |
+| Dry run enabled during a poll leaves seasons unrecorded | Dry run switched on after the poll read its settings, or while a season search awaits Sonarr, sends no further search and records nothing as searched; a later live poll searches the rest |
+| A season unmonitored during dry run is forgotten | The record drops an unmonitored season even when dry run skips the search, so monitoring it again is searched once live |
+| An unenrolment during another show's season search is not undone | Recorded seasons are re-read under the series lock, and a series unenrolled after the poll's series list was read is skipped until the next poll, so the poll cannot record a stale state that would search every re-monitored season |
+| A season monitored on a series that predates triage is searched once | A `baseline` series gets its monitored seasons recorded without searching, then one `SeasonSearch` per season monitored later |
+| Newly monitored seasons are left alone while the setting is off | No search and no record while **Search newly monitored seasons** is off |
+| Recording many existing series reads only the poll's series list | Filling empty records makes no per-series Sonarr reads |
+| Turning the season check on during a new series' search leaves its record empty | A record written from the poll's older snapshot after the activation clear would survive it, so it is left for the first active poll, which records without searching |
+| A series listed without its seasons is neither recorded nor pruned | Triage records nothing for a search with no season data, the next poll with seasons records them without searching, and a later list missing them keeps the record |
+| Turning the setting off mid-poll stops season searches | A season search in flight when the setting is turned off is the last one sent |
+| Triage turned off and on with the same boundary mid-poll still stops the season check | The season check's own activation number changes even when the triage timestamp repeats, so the in-flight poll sends no more searches and writes no record after the clear |
+| A triage activation change stops season searches | Disabling triage while a season search awaits Sonarr stops later seasons and series in that poll, and leaves the series in flight unrecorded, since turning it back on clears every record |
 
 ### `tests/server/security-hardening.test.ts` — Session and integration credential boundaries
 
@@ -285,6 +438,10 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Session signature validation rejects malformed non-ASCII input safely | A visually 64-character but UTF-8-long signature returns false instead of reaching `timingSafeEqual` with mismatched byte lengths |
 | Plex, Sonarr, and Tautulli reject unsafe URLs and configure credentialed request safeguards | Non-HTTP(S) and embedded-credential URLs are refused; successful connection checks plus Plex.tv account, discovery, friends, and token-ping requests pass `redirect: "error"` and an abort signal to `fetch` |
 | Integration request paths cannot replace the configured origin | Absolute, non-HTTP(S), and protocol-relative paths cannot escape the administrator-configured Sonarr or Tautulli origin |
+
+### `tests/server/rate-limit-logging.test.ts` — Concurrent warning logs
+
+Covers pipelined requests at and beyond the limit, one warning per client/window, independent clients, and warning eligibility after the window resets.
 
 ### `tests/server/rate-limit.test.ts` — Rate limiting
 
@@ -301,9 +458,14 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Test | What it checks |
 |---|---|
 | History import batches events outside the activity window while still applying rolling logic to recent ones | A mixed batch of one old and one recent watch event routes the old one through the batched insert-only path (no season expansion) and the recent one through the Sonarr-touching path (expands its season), with accurate imported/matched/unmatched counts across both |
+| History import moves a Tautulli event to the later date of a resumed play and applies it as a new watch | Regression for #207 — an incremental read of a merged play under an already-stored reference ID moves its date forward, the viewer's progress follows, a resume inside the activity window expands its season, and neither an older re-read nor another Tautulli user's play reusing the ID moves it |
+| A full history read moves a stored Tautulli event to a resumed play's date and refreshes progress | The batched insert-only path (full reads and plays outside the window) also moves the date and refreshes the viewer's rolling progress, without running rolling logic |
 | A dry-run history import expands an unexpanded season only once | The watch-event expansion and active-progress reconciliation share virtual expansion state, so dry run records one expansion and one changed result for the same season |
 | History import uses the cached Sonarr library | Prevents every history import from repeating the full Sonarr `/series` request when the library refresh job has already populated its cache |
-| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different server or records no server; the same server still resumes incrementally |
+| History import reads a changed or unknown Tautulli server in full instead of resuming from another server's cursor | A watch older than the stored cursor is imported when the cursor belongs to a different install or records no server; the same install still resumes incrementally; a cursor stamped with the configured URL is read in full once, since the install behind the URL may have changed |
+| History import keeps a new Plex server's events that reuse an old server's history keys | A second server's event with the same `historyKey` is imported rather than dropped, and learning a server's machine identifier after it was identified by URL imports no duplicates |
+| History import identifies Tautulli by its install ID, across URL changes and upgrades | Rows stored under the URL (as after upgrading) move to Tautulli's `pms_uuid` with no duplicates, a new URL for the same install imports nothing again, and a new install's events are kept even when they reuse reference IDs, including a reinstall behind the same URL and API key with no settings save |
+| History import does not attribute a replaced Tautulli's history to the install now at its URL | A fresh install that replaced the old one behind the same URL before the upgrade keeps its watch that reuses an old reference ID, and the old install's row is not moved to the new install ID |
 | Discovering Plex users links history imported before they were known and refreshes their progress | A friend's orphaned event (Plex.tv account ID) and the owner's (server-local ID `1`) are linked on discovery, and both viewers' rolling progress reflects them |
 | Discovering Plex users leaves history unlinked when its account ID belongs to more than one user | A friend whose Plex.tv ID is `1` (the owner's server-local ID) and two stored users sharing an account ID: neither event is linked, so no viewer's progress moves |
 | Tautulli history resolves through its own rating-key metadata, not its title | A Tautulli `grandparent_rating_key` is resolved through Tautulli metadata and its TVDB/IMDb GUIDs, so a display-title mismatch cannot block a verified Sonarr association |
@@ -327,6 +489,13 @@ Runs against a temporary SQLite database. Safe to run any time.
 | Scheduled reconciliation clears prefetches promoted to a retained season | When active viewer progress makes a prefetched season fully retained, the sweep expands it through the same `expandSeason` path a live watch uses (audited as `active-progress-reconcile`), which removes its per-episode prefetch records so the UI cannot display stale prefetch markers |
 | Progressive cleanup toggle protects stale prefetches | Disabling progressive cleanup prevents stale-prefetch records and files from being reclaimed |
 | Progressive cleanup deletes a multipart file shared only by eligible non-pilot seasons once | The complete cleanup batch is evaluated together, so one eligible season does not incorrectly protect a file needed only by another eligible season |
+| Enrolled lists every enrolled show, including one the Sonarr library cache has not seen yet | Regression for #196 — membership comes from `rolling_shows`, so an enrolment between library refreshes is listed and searchable immediately with its placeholder Sonarr fields flagged as unknown, while cached shows keep their Sonarr enrichment and the Sonarr tab stays a library-cache view |
+| Ignored lists every ignore record, whatever the recommendation cache holds | An ignored show below the savings threshold keeps its cached details, one absent from every cache is listed by its stored title with its size and savings flagged as unknown, and restoring removes it and updates the count |
+| Enrolling a show clears its ignore, and an enrolled show cannot be ignored | Enrolment removes the ignore record, a later ignore is refused, and a stale cached recommendation for the enrolled show is not listed |
+| A library refresh removes Pacearr records only for series Sonarr confirms deleted | A series missing from the list loses its enrolment or ignore only when its direct lookup returns 404; a stale list read (lookup 200) or a failing lookup (500) keeps the records, and each removal is recorded in history |
+| A Sonarr connection change stops deleted-series cleanup | Changing the URL or API key during the series-list read skips publishing the stale library cache, and a fresh refresh publishes the new list. A change during the series-list read or deletion lookup preserves enrolments, ignores and queued removals; a change during Plex artwork restoration also keeps the enrolment and backup, releases the operation lock, and lets a fresh refresh retry cleanup. |
+| An empty Sonarr series list or dry run never removes Pacearr records | An empty list (misconfigured or reset Sonarr) is not treated as every series deleted, and dry run keeps both the enrolment and the ignore record, recording a `dry_run.` history event for each instead |
+| A deleted series keeps its enrolment and artwork backup until Plex artwork is restored or gone | A failed Plex poster restore keeps the enrolment and the only copy of the original poster; once Plex reports the item gone (404), the enrolment and backup are removed |
 
 ### `tests/server/rolling-plan.test.ts` — Rolling-plan selection and retention
 
@@ -344,15 +513,28 @@ Read-only. Safe to run against a live instance.
 | Sidebar navigation links are present | The five primary navigation links render inside the app navigation |
 | Unauthenticated requests redirect to the login page | A fresh browser context is redirected from `/dashboard` to `/login` |
 
-### `tests/playwright/settings.spec.ts` — Settings navigation
+### `tests/playwright/settings.spec.ts` — Settings navigation and forms
 
-Read-only. Safe to run against a live instance.
+The job schedule test sets the history-import interval to one hour via
+`PATCH /api/settings/app` and attempts to restore the original value in
+`finally`. An interrupted run can leave the interval changed. Use a configured
+disposable test instance by default and get the owner's authorization before
+running this write on live data. The other form tests discard changes or
+intercept writes in the browser.
 
 | Test | What it checks |
 |---|---|
 | All settings tabs are visible | General, Plex, Sonarr, Tautulli, Logs, Jobs, and About render |
 | Clicking settings tabs updates the URL | Each tab writes its expected `?tab=` query parameter |
 | Opening a one-hour job schedule preserves its 60-minute preset | The Jobs editor reads its rendered “Every 1 hour” description as 60 minutes, so saving without a change cannot turn the schedule into every minute |
+| Dependent settings stay visible but follow their parent toggle | Early season prefetch's options stay on the page whichever way the toggle is set, are enabled only while it is on, and Discard restores the toggle |
+| The save bar only appears once something changes | The General tab's save bar is hidden until a field changes, and hides again once the field is back at its saved value |
+| A save error can be dismissed once the form is back at its saved values | A client-side validation error shows in the save bar; once the field is restored, the bar offers Dismiss, which clears the error and the bar |
+| A settings tab and tab switching are locked while its save is in flight | While a held save is pending, the tab's fields and the other tab buttons are disabled; once it fails they re-enable, and after reverting the field the error can be dismissed |
+| A Plex save sends the artwork setting before the connection | The artwork PATCH, which is safe to repeat, is sent before the connection POST, so a failed PATCH cannot leave an already-saved connection to be posted again on retry |
+| A Sonarr save sends the connection before the tag setting | A library refresh started by turning tag writing on cannot run ahead of a newly saved connection |
+| A save whose settings reload fails says it was saved and blocks saving until refresh | When the save succeeds but reloading the settings fails, the save bar says the save went through, and a page banner asks for a refresh; discarding keeps the banner and saving stays disabled, so stale values cannot undo the save |
+| Discarding after a partly failed save shows what the server now holds | When a Sonarr connection save lands but the tags save fails, the form re-syncs from the reloaded settings, so Discard leaves the saved base URL in place instead of the old one |
 
 ### `tests/playwright/shows.spec.ts` — Shows navigation and filters
 
@@ -365,10 +547,17 @@ Read-only. Safe to run against a live instance.
 
 ### `tests/playwright/users.spec.ts` — Users API shape
 
+The discovery test sends `POST /api/users/discover`, which calls Plex, saves
+discovered users, and can link existing watch history to them. The PATCH tests
+send writes and attempt to restore the previous state in `finally`. Use a
+configured disposable test instance by default and get the owner's
+authorization before connecting to real Plex or running these tests on live
+data.
+
 | Test | What it checks |
 |---|---|
 | Discovering users returns the same per-user activity fields as the users list | `POST /api/users/discover` used to return the raw discovery shape (missing `activeShowCount`/`lastWatchedAt`), so clicking Refresh silently dropped active viewers out of the Active section until the next reload |
-| PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; runs against live data and restores the original state in a `finally` block |
+| PATCH-ing a user with no `enabled` field in the body leaves their enabled state unchanged | `PATCH /api/users/:id` used to wrap the body's `enabled` in `Boolean(...)` unconditionally, turning a genuinely absent field into `false` and silently disabling the user; attempts to restore the original state in a `finally` block |
 | PATCH-ing a user with a non-boolean `enabled` value is rejected, not coerced | `Boolean(...)` also accepted any truthy non-boolean (a string, an object) as `true`; the route now requires an actual boolean whenever the field is present at all |
 
 ### `tests/server/users-activity.test.ts` — Per-user shows dialog activity
@@ -399,54 +588,195 @@ under Tests. Mechanically:
   picked up by `npm run test:server`. Tests should build their own temporary
   database rather than sharing state.
 - **Playwright:** create a `*.spec.ts` file under `tests/playwright/`; the saved
-  session is loaded for each Chromium test. Use the live instance only and keep
-  generated artifacts under the existing ignored `tests/` paths.
+  session is loaded for each Chromium test. Use a configured test instance and
+  keep generated artifacts under the existing ignored `tests/` paths.
 
 When a test is agreed and written, add a row for it in the relevant table above.
 
 ## Manual Smoke Test
 
-For a local Docker verification:
+1. Before running checks, record the source revision and planned candidate
+   tag in a task section in the Docker host checkout's ignored `LOCAL.md`.
+   Identify the task by branch or PR and a unique test ID. Create the file if
+   absent and preserve other entries. Verify that the build context matches
+   the recorded revision after applying the Docker ignore rules. If it differs,
+   record the added, changed, or missing paths, with SHA-256 hashes for added
+   or modified file contents and any relevant file modes or symlink targets.
+   Include uncommitted, untracked, or Git-ignored files that Docker includes.
+   Exclude credentials from the context and record.
+   Before checks, verify that installed devcontainer dependencies match the
+   recorded `package-lock.json`. If the lockfile changed since installation,
+   or the match cannot be verified, run `npm ci` inside the devcontainer.
+   If the Playwright version changed, rebuild the devcontainer image from the
+   recorded lockfile, then recreate the container and install the matching
+   Chromium. Follow the [devcontainer removal rules](AGENTS.md#close-out-finished-or-cancelled-work)
+   for concurrent use and retained volumes before recreating it.
+   Run the checks listed in Project Facts in [AGENTS.md](AGENTS.md#project-facts)
+   and any relevant server tests inside the app's devcontainer. Keep the
+   recorded context unchanged through those checks and the build. Recheck it
+   before building. If it changes, update the record and rerun the required
+   checks against the new context before building. On the Docker host, build
+   the production image from that verified checkout with the recorded unique
+   candidate tag. Record planned exact container and volume names and SSH
+   forward identifiers before creating them. Add the image ID and actual
+   resource IDs as they become available.
+2. Start that image ID in a disposable container named `zdev-<app>-smoke-<id>`,
+   using the app name and a unique test ID. Use bridge networking and fresh
+   writable storage at `/config`, using tmpfs or a uniquely named disposable
+   volume recorded before creation. Use no live data mounts, live integration
+   credentials, or restart policy. For a browser outside Docker, use a
+   separate loopback port and forward it as described above. Use a fresh
+   browser profile or isolated browser context for the smoke instance because
+   cookies can be shared across ports on the same hostname. Limit browser
+   checks here to unauthenticated startup and onboarding routes. For a
+   standalone Playwright smoke script, create a clean context without the
+   live `storageState.json` or `SESSION_COOKIE`. Use the smoke container's IP
+   and app port if the test runner can reach it on the default bridge.
+   Otherwise, use a loopback tunnel as described above. For startup and
+   health checks alone, leave the port unpublished.
+3. Wait for Docker health. From the Docker host, check for HTTP 200 inside
+   the smoke container, including when its port is unpublished. Set
+   `smoke` to the exact container name and `app_port` to the port in Project
+   Facts:
 
-```bash
-docker build -t pacearr .
-docker rm -f pacearr || true
-docker run -d \
-  --name pacearr \
-  --network bridge \
-  -p 9302:9302 \
-  -v /opt/pacearr:/config \
-  --restart unless-stopped \
-  pacearr
-timeout 90 sh -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" pacearr)" = healthy ]; do sleep 3; done' \
-  && echo healthy || { docker logs pacearr 2>&1 | tail -20; false; }
-```
+   ```sh
+   docker exec "$smoke" node -e '
+     const port = process.env.PORT || process.argv[1];
+     fetch("http://127.0.0.1:" + port + "/api/health", {signal: AbortSignal.timeout(5000)})
+       .then(response => { if (response.status !== 200) process.exitCode = 1; })
+       .catch(() => { process.exitCode = 1; });
+   ' "$app_port"
+   ```
 
-This waits for the HEALTHCHECK, which reads `starting` until its first check
-passes, and prints `healthy`. If it prints logs instead, look for the
-`Pacearr listening` startup line.
+   Verify that the app runs as a non-root user. Exercise the changed behaviour
+   where possible with disposable data or mocked integrations. Record which
+   checks require real configuration or data. Collect sanitized failure
+   evidence if needed and remove the disposable container and storage in
+   either case.
+4. When the change needs configured browser validation, start the candidate
+   image ID as `zdev-<app>-e2e-<id>` with the same disposable storage rules
+   at `/config` and a test URL reachable by the browser. Get the owner's
+   authorization before connecting real integrations or testing against live
+   data. Disposable `/config` storage does not isolate external resources.
+   Use isolated test integrations and test-only accounts and users, or obtain
+   specific authorization for the external writes the tests and background
+   jobs can make. Use a fresh browser profile or isolated context for
+   onboarding with test data and obtaining a test session, even on the live
+   hostname. For each disposable instance, verify its image ID and use its
+   `BASE_URL` in `.env.playwright`. Clear
+   `tests/playwright/.auth/storageState.json` and set `SESSION_COOKIE` in
+   `.env.playwright` to that instance's test session cookie,
+   even when reusing the URL. Clear any stale exported values for those
+   variables and check for concurrent use before changing shared auth files.
+   Run the relevant Playwright tests or the full `npm run test:e2e` suite as
+   needed. Record any validation gaps and follow
+   [disposable test cleanup](#disposable-test-cleanup), including on failure.
+5. After the required checks pass, deploy the exact tested image ID to the
+   live app by default for implementation work. Stop at validation when the
+   owner requests it. A failed or incomplete required check stops the flow
+   before replacement.
 
-Depending on DooD network behaviour, `curl http://127.0.0.1:9302/api/health`
-from inside the devcontainer may not reach the host-published port. Testing from
-inside the container is the most reliable check:
+### Disposable test cleanup
 
-```bash
-docker exec pacearr node -e "fetch('http://127.0.0.1:9302/api/health').then(r => r.text()).then(console.log)"
-```
+Clean up after validation and check for leftovers at PR close or cancellation.
+Read the task section in the Docker host checkout's `LOCAL.md` even if a
+different chat created the resources. Check exact names or IDs and concurrent
+use before removing anything. Before removing a configured E2E instance,
+confirm new scheduled and manual integration runs are prevented throughout
+the active-job check and container removal. Then check its active integration
+jobs and wait for them to finish. If prevention cannot be confirmed, job
+status cannot be verified, or a bounded wait expires, retain the instance,
+its storage, and the task record, and report the deferred cleanup.
+Otherwise, remove only the task's smoke and E2E containers with
+`docker rm -fv`, then remove its recorded disposable volumes if unused.
+Close only the task's recorded SSH forwards. At closeout, check
+task candidate tags against the live and rollback image IDs. Remove only
+unused task tags that are no longer needed for a pending deployment or review.
+Preserve resources whose ownership or use is unclear. A shared name prefix
+alone does not establish ownership. Keep the task record until cleanup is
+verified, including entries for any resources whose cleanup was deferred.
+Keep the separate `Live recovery` entry and its rollback tag according to
+[live replacement and verification](#live-replacement-and-verification).
 
-Then open `http://localhost:9302` and smoke-test — use this after changes that
-touch external integrations, cleanup, or Docker behaviour:
+### Live replacement and verification
 
-- Sign in with Plex OAuth or the manual token fallback
-- Configure the Plex server URL and machine identifier
-- Configure the Sonarr base URL and API key
-- Optionally configure Tautulli and save settings
-- Open Shows and confirm Sonarr series load
-- Enroll a known show and confirm Pacearr applies the all-season-pilot baseline
-- Run Import History and confirm relevant SxxE01 history expands seasons
-- Run Check Sessions while a Plex episode is active and confirm live expansion
-- Run inactive reset only when you are comfortable with cleanup/deletion
-  behaviour
+Before stopping or removing the live container, write a separate
+`Live recovery` entry in the Docker host checkout's ignored `LOCAL.md`.
+Link it to the task and record the live name, prior and candidate image IDs,
+the `<app>:rollback-<id>` tag, and the deployment method. Record non-secret
+settings and reference existing secure sources for credentials.
 
-This section needs Docker. See "Where You're Running" in `AGENTS.md` — where it
-is unavailable, say so rather than substituting a workspace check.
+Before replacement, assess pending database migrations and whether the prior
+image can use the resulting schema. Record that assessment and the owner's
+data recovery policy in the recovery entry. If compatibility is unknown or
+the migration prevents image rollback, record how to identify a compatible
+backup and restore it, including any unverified steps or recovery gaps.
+Follow the owner's selected backup policy from local instructions. Report
+recovery gaps before replacement and obtain the owner's decision if no
+usable recovery path is established. Restoring data requires owner approval.
+
+- For a standalone deployment, inspect the current container privately with
+  `docker inspect`. Record the complete recreation settings or an equivalent
+  `docker run` command. Include environment overrides, user, entrypoint,
+  command, labels, healthcheck, mounts, port bindings, network attachments,
+  restart policy, extra hosts, logging, and any other applicable host settings.
+- For a Compose deployment, prepare a persistent deployment-local override
+  outside the Git checkout. Set the service image to the tested image's
+  unique local tag and set `pull_policy: never`. Clear any inherited
+  `build` section with `build: !reset null`. Verify the merged service uses
+  that tag with pulls and builds disabled and that the tag resolves to the
+  tested image ID. Record the tag, the override's absolute path, the complete
+  ordered file list with the override last, the project and service names,
+  working directory, active profiles, any environment file paths, and
+  runtime overrides.
+
+Before stopping live, verify the record and its secure sources can recreate
+the service. Apply the rollback tag to the recorded prior image and verify it
+resolves to that ID. Follow [disposable test cleanup](#disposable-test-cleanup)
+before replacing the live app. If configured E2E cleanup is deferred, preserve
+the instance and storage, report the reason, and wait for the owner's decision
+before live replacement.
+
+An explicit request to deploy, update or replace the live image is sufficient
+authorization to stop and recreate the container and resume its existing
+startup and scheduled integration work. Proceed without a separate
+confirmation about manual jobs, schedule changes or automatic startup work.
+An idle window and prevention of new jobs are not prerequisites. The owner
+accepts that running jobs may be interrupted during an authorized replacement.
+Preserve existing application settings unless the requested change requires
+otherwise, and record any required setting changes in the recovery entry.
+Apply this policy to standalone and Compose deployments.
+
+- For a standalone deployment, stop and remove the current live container
+  while preserving its data. Start the exact tested image under the original
+  live name with the recorded settings.
+- For a Compose deployment, use the recorded file list and project settings
+  to stop and remove the old service container while preserving its data.
+  Recreate only that service with pulls and builds disabled. Use the same
+  file list and project settings for subsequent operations.
+
+Verify the image ID, Docker health, HTTP health, and relevant app behaviour.
+If verification fails, report the failure and keep the prior image available.
+For an approved rollback with compatible live data, apply the same deployment
+authorization policy above. Stop and remove the failed replacement if it
+exists, preserving its data. Recreate the live container from the recorded
+rollback tag and settings through the same deployment method. For Compose,
+set the recorded persistent image override to the rollback tag and use the
+recorded file list and project settings to recreate the service. Repeat the
+health checks. Preserve the recovery entry,
+the settings it references, and the rollback tag during task closeout.
+Remove the entry and tag only after the owner confirms fallback is no longer
+needed and the tag is verified unused.
+
+Check configured behaviour separately from disposable startup. When relevant,
+verify that the dashboard and Settings load, that unauthenticated routes return
+the expected status, and that the changed feature works with the live
+configuration. Run a real sync or another operation that changes live data only
+when authorized. Report the limits of testing against existing data and real
+integrations.
+
+For configured verification, confirm Plex sign-in and Sonarr series loading.
+Check Tautulli when the change affects it. Enrollment, history import,
+session-driven expansion and inactive reset can modify data or trigger
+cleanup. Run those operations only with disposable fixtures or explicit
+authorization for live writes.

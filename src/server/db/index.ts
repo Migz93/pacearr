@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type {
@@ -7,6 +8,7 @@ import type {
   PlexOwnerRecord,
   PlexSettingsInput,
   PlexSettingsView,
+  RollingExclusions,
   RollingShowRecord,
   RollingShowUserRecord,
   SessionUser,
@@ -24,6 +26,8 @@ import type {
   DashboardShowActivity,
   PlexArtworkRecord,
   PrefetchedEpisodeRecord,
+  PacearrSonarrTag,
+  SeasonExpansionReason,
 } from "../../shared/types.js";
 import { actionsInCategory, type HistoryCategory } from "../../shared/history.js";
 import type { RuntimeConfig } from "../config.js";
@@ -45,6 +49,7 @@ export const MAX_SAFE_RETENTION_DAYS = 100_000_000;
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   dryRun: true,
   artworkEnabled: false,
+  sonarrTagsEnabled: false,
   viewerActivityWindowDays: 30,
   historyRetentionDays: 7,
   sessionPollIntervalMinutes: 15,
@@ -68,10 +73,27 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   newShowTriageIntervalMinutes: 5,
   newShowTriageEpisodeThreshold: 80,
   newShowTriageEnabledAt: null,
+  searchNewlyMonitoredSeasonsEnabled: false,
+  searchNewlyMonitoredSeasonsActivation: 0,
 };
+
+export interface WatchEventInsertResult {
+  inserted: boolean;
+  id: number | null;
+  adopted: boolean;
+  /** Set when a duplicate moved the stored event to a later date; carries the stored row's user. */
+  advanced?: { userId: number | null };
+}
 
 export interface NormalizedWatchEventInput {
   source: EventSourceKind;
+  /** The server the event came from (see history-sync.ts); its ID is only unique there. */
+  sourceConnection: string;
+  /**
+   * The URL fallback the same server's events may already be stored under (migration 27,
+   * or while its stable ID was unknown). Set only when it differs from sourceConnection.
+   */
+  fallbackConnection?: string;
   sourceEventId: string;
   userId: number | null;
   plexAccountId: string | null;
@@ -207,6 +229,16 @@ function usersByNormalisedName(users: UserRecord[], getName: (user: UserRecord) 
   return grouped;
 }
 
+export type SeasonExpansion = { reason: SeasonExpansionReason; userId?: number | null };
+
+export interface SeasonExpansionRecord {
+  seasonNumber: number;
+  reason: SeasonExpansionReason;
+  userId: number | null;
+  displayName: string | null;
+  expandedAt: string | null;
+}
+
 function rollingShowFromRow(row: any): RollingShowRecord {
   return {
     id: row.id,
@@ -235,6 +267,8 @@ function historyFromRow(row: any): HistoryEvent {
 
 export class PacearrDatabase {
   private readonly db: Database.Database;
+  private adoptFallbackStatement?: Database.Statement;
+  private advanceTautulliStatement?: Database.Statement;
   private readonly logger?: Logger;
 
   constructor(config: RuntimeConfig, logger?: Logger) {
@@ -327,6 +361,11 @@ export class PacearrDatabase {
       .map((row) => row.sonarr_series_id);
   }
 
+  listIgnoredRecommendations(): Array<{ sonarrSeriesId: number; title: string }> {
+    return (this.db.prepare("SELECT sonarr_series_id, title FROM ignored_recommendations").all() as Array<{ sonarr_series_id: number; title: string }>)
+      .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, title: row.title }));
+  }
+
   ignoreRecommendation(seriesId: number, title: string): void {
     this.db.prepare(`
       INSERT INTO ignored_recommendations (sonarr_series_id, title, created_at)
@@ -337,6 +376,27 @@ export class PacearrDatabase {
 
   unignoreRecommendation(seriesId: number): void {
     this.db.prepare("DELETE FROM ignored_recommendations WHERE sonarr_series_id = ?").run(seriesId);
+  }
+
+  queueSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare(`
+      INSERT INTO sonarr_tag_removals (sonarr_series_id, tag, queued_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(sonarr_series_id, tag) DO NOTHING
+    `).run(seriesId, tag, now());
+  }
+
+  listSonarrTagRemovals(): Array<{ sonarrSeriesId: number; tag: PacearrSonarrTag }> {
+    return (this.db.prepare("SELECT sonarr_series_id, tag FROM sonarr_tag_removals ORDER BY queued_at, sonarr_series_id").all() as Array<{ sonarr_series_id: number; tag: PacearrSonarrTag }>)
+      .map((row) => ({ sonarrSeriesId: row.sonarr_series_id, tag: row.tag }));
+  }
+
+  clearSonarrTagRemovalsForSeries(seriesId: number): number {
+    return this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ?").run(seriesId).changes;
+  }
+
+  clearSonarrTagRemoval(seriesId: number, tag: PacearrSonarrTag): void {
+    this.db.prepare("DELETE FROM sonarr_tag_removals WHERE sonarr_series_id = ? AND tag = ?").run(seriesId, tag);
   }
 
   /**
@@ -411,22 +471,53 @@ export class PacearrDatabase {
       .map((row) => row.sonarr_series_id));
   }
 
-  recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search" }): void {
+  recordNewShowTriage(input: { seriesId: number; title: string; addedAt: string | null; decision: "baseline" | "enroll" | "search"; searchedSeasons?: number[] }): void {
     this.db.prepare(`
-      INSERT OR IGNORE INTO new_show_triage (sonarr_series_id, title, added_at, decision, completed_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(input.seriesId, input.title, input.addedAt, input.decision, now());
+      INSERT OR IGNORE INTO new_show_triage (sonarr_series_id, title, added_at, decision, completed_at, searched_seasons)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, input.decision, now(), input.searchedSeasons ? JSON.stringify(input.searchedSeasons) : null);
+  }
+
+  /** Every triaged series, whatever the decision. `searchedSeasons` is null until the monitored seasons are first recorded. */
+  listTriagedSeries(): Array<{ seriesId: number; title: string; searchedSeasons: number[] | null }> {
+    const rows = this.db.prepare("SELECT sonarr_series_id, title, searched_seasons FROM new_show_triage ORDER BY sonarr_series_id")
+      .all() as Array<{ sonarr_series_id: number; title: string; searched_seasons: string | null }>;
+    return rows.map((row) => ({ seriesId: row.sonarr_series_id, title: row.title, searchedSeasons: parseJson<number[] | null>(row.searched_seasons, null) }));
+  }
+
+  /** Undefined when the series has no triage row; null when its seasons are not yet recorded. */
+  getNewShowTriageSearchedSeasons(seriesId: number): number[] | null | undefined {
+    const row = this.db.prepare("SELECT searched_seasons FROM new_show_triage WHERE sonarr_series_id = ?")
+      .get(seriesId) as { searched_seasons: string | null } | undefined;
+    return row ? parseJson<number[] | null>(row.searched_seasons, null) : undefined;
+  }
+
+  /** Forgets every recorded season, so the next poll records what is monitored then without searching. */
+  clearNewShowTriageSearchedSeasons(): void {
+    this.db.prepare("UPDATE new_show_triage SET searched_seasons = NULL WHERE searched_seasons IS NOT NULL").run();
+  }
+
+  setNewShowTriageSearchedSeasons(seriesId: number, seasons: number[] | null): void {
+    this.db.prepare("UPDATE new_show_triage SET searched_seasons = ? WHERE sonarr_series_id = ?")
+      .run(seasons ? JSON.stringify(seasons) : null, seriesId);
   }
 
   hasPendingNewShowTriageEnrollment(seriesId: number): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?").get(seriesId));
   }
 
-  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null }): void {
+  /** The first attempt's row is kept, so a retry never replaces its requested-season snapshot. */
+  startNewShowTriageEnrollment(input: { seriesId: number; title: string; addedAt: string | null; requestedSeasons: number[] }): void {
     this.db.prepare(`
-      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at)
-      VALUES (?, ?, ?, ?)
-    `).run(input.seriesId, input.title, input.addedAt, now());
+      INSERT OR IGNORE INTO new_show_triage_pending_enrollments (sonarr_series_id, title, added_at, started_at, requested_seasons)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.seriesId, input.title, input.addedAt, now(), JSON.stringify(input.requestedSeasons));
+  }
+
+  getNewShowTriageRequestedSeasons(seriesId: number): number[] {
+    const row = this.db.prepare("SELECT requested_seasons AS requestedSeasons FROM new_show_triage_pending_enrollments WHERE sonarr_series_id = ?")
+      .get(seriesId) as { requestedSeasons: string | null } | undefined;
+    return parseJson<number[]>(row?.requestedSeasons ?? null, []);
   }
 
   completeNewShowTriageEnrollment(seriesId: number): void {
@@ -493,8 +584,19 @@ export class PacearrDatabase {
     return { baseUrl: settings.baseUrl, apiKeyConfigured: Boolean(settings.apiKey) };
   }
 
+  getSonarrTagImportToken(): string {
+    const existing = this.getSetting<string>("sonarrTagImportToken");
+    if (existing) return existing;
+    const token = randomUUID();
+    this.setSetting("sonarrTagImportToken", token);
+    return token;
+  }
+
   saveSonarrSettings(settings: SonarrSettings): void {
-    this.setSetting("sonarr", settings);
+    this.transaction(() => {
+      this.setSetting("sonarr", settings);
+      this.setSetting("sonarrTagImportToken", randomUUID());
+    });
   }
 
   getTautulliSettings(): TautulliSettings {
@@ -621,30 +723,30 @@ export class PacearrDatabase {
 
   /**
    * Repairs one previously-imported Tautulli watch event whose user_id is still NULL.
-   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_event_id), so a
+   * insertWatchEvent(Batch) uses INSERT OR IGNORE keyed on (source, source_connection, source_event_id), so a
    * duplicate — including an event first imported before the #75 matching fix, when the
    * resolved name didn't match anything yet — is silently skipped on every later import and
    * never revisited on its own. Scoped to a single event by its unique key rather than a
    * broader relink like linkUnassignedWatchEventsByPlexAccount, since Tautulli events carry
    * no stable account identifier to relink by.
    */
-  repairUnmatchedTautulliWatchEvent(sourceEventId: string, userId: number): boolean {
-    return this.repairUnmatchedWatchEventUser("tautulli", sourceEventId, userId);
+  repairUnmatchedTautulliWatchEvent(sourceConnection: string, sourceEventId: string, userId: number): boolean {
+    return this.repairUnmatchedWatchEventUser("tautulli", sourceConnection, sourceEventId, userId);
   }
 
-  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceEventId: string, userId: number): boolean {
+  repairUnmatchedWatchEventUser(source: EventSourceKind, sourceConnection: string, sourceEventId: string, userId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events
       SET user_id = ?
-      WHERE source = ? AND source_event_id = ? AND user_id IS NULL
-    `).run(userId, source, sourceEventId).changes > 0;
+      WHERE source = ? AND source_connection = ? AND source_event_id = ? AND user_id IS NULL
+    `).run(userId, source, sourceConnection, sourceEventId).changes > 0;
   }
 
-  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceEventId: string, seriesId: number): boolean {
+  repairUnmatchedWatchEventSeries(source: EventSourceKind, sourceConnection: string, sourceEventId: string, seriesId: number): boolean {
     return this.db.prepare(`
       UPDATE watch_events SET sonarr_series_id = ?
-      WHERE source = ? AND source_event_id = ? AND sonarr_series_id IS NULL
-    `).run(seriesId, source, sourceEventId).changes > 0;
+      WHERE source = ? AND source_connection = ? AND source_event_id = ? AND sonarr_series_id IS NULL
+    `).run(seriesId, source, sourceConnection, sourceEventId).changes > 0;
   }
 
   listLatestWatchProgressForUser(userId: number): Array<{ sonarrSeriesId: number; seasonNumber: number; episodeNumber: number; watchedAt: string }> {
@@ -761,17 +863,39 @@ export class PacearrDatabase {
 
   upsertRollingShow(series: SonarrSeries): RollingShowRecord {
     const stamp = now();
-    this.db.prepare(`
-      INSERT INTO rolling_shows (sonarr_series_id, title, tvdb_id, imdb_id, year, expanded_seasons, last_activity_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, '[]', NULL, ?, ?)
-      ON CONFLICT(sonarr_series_id) DO UPDATE SET
-        title = excluded.title,
-        tvdb_id = excluded.tvdb_id,
-        imdb_id = excluded.imdb_id,
-        year = excluded.year,
-        updated_at = excluded.updated_at
-    `).run(series.id, series.title, series.tvdbId ?? null, series.imdbId ?? null, series.year ?? null, stamp, stamp);
-    return this.getRollingShowBySeriesId(series.id)!;
+    return this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO rolling_shows (sonarr_series_id, title, tvdb_id, imdb_id, year, expanded_seasons, last_activity_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, '[]', NULL, ?, ?)
+        ON CONFLICT(sonarr_series_id) DO UPDATE SET
+          title = excluded.title,
+          tvdb_id = excluded.tvdb_id,
+          imdb_id = excluded.imdb_id,
+          year = excluded.year,
+          updated_at = excluded.updated_at
+      `).run(series.id, series.title, series.tvdbId ?? null, series.imdbId ?? null, series.year ?? null, stamp, stamp);
+      // An enrolled show is not a recommendation, so it cannot stay ignored.
+      this.unignoreRecommendation(series.id);
+      return this.getRollingShowBySeriesId(series.id)!;
+    });
+  }
+
+  markRollingShowAwaitingHistory(id: number): void {
+    this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = ? WHERE id = ?").run(randomUUID(), id);
+  }
+
+  isRollingShowAwaitingHistory(id: number): boolean {
+    return this.db.prepare("SELECT 1 FROM rolling_shows WHERE id = ? AND awaiting_history_since IS NOT NULL").get(id) !== undefined;
+  }
+
+  listRollingShowsAwaitingHistory(): Array<{ id: number; guard: string }> {
+    return this.db.prepare("SELECT id, awaiting_history_since AS guard FROM rolling_shows WHERE awaiting_history_since IS NOT NULL")
+      .all() as Array<{ id: number; guard: string }>;
+  }
+
+  clearRollingShowsAwaitingHistory(shows: Array<{ id: number; guard: string }>): void {
+    const clear = this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = NULL WHERE id = ? AND awaiting_history_since = ?");
+    this.transaction(() => { for (const { id, guard } of shows) clear.run(id, guard); });
   }
 
   deleteRollingShow(id: number): void {
@@ -830,21 +954,45 @@ export class PacearrDatabase {
     return row ? rollingShowFromRow(row) : null;
   }
 
-  markSeasonExpanded(rollingShowId: number, seasonNumber: number, watchedAt: string): boolean {
+  markSeasonExpanded(rollingShowId: number, seasonNumber: number, expandedAt: string, expansion: SeasonExpansion): boolean {
     const show = this.getRollingShow(rollingShowId);
     if (!show) return false;
     if (show.expandedSeasons.includes(seasonNumber)) return false;
     const expanded = [...show.expandedSeasons, seasonNumber].sort((a, b) => a - b);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), watchedAt, now(), rollingShowId);
-    this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
+    this.transaction(() => {
+      // Only a viewer's watch is show activity; a request or the Expand button is not.
+      const watchActivity = expansion.reason === "watched" || expansion.reason === "finale";
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, last_activity_at = CASE WHEN ? THEN ? ELSE last_activity_at END, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), watchActivity ? 1 : 0, expandedAt, now(), rollingShowId);
+      this.db.prepare(`
+        INSERT OR REPLACE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason, user_id, expanded_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(rollingShowId, seasonNumber, expansion.reason, expansion.userId ?? null, expandedAt);
+      this.clearPrefetchedEpisodesForSeason(rollingShowId, seasonNumber);
+    });
     return true;
   }
 
+  /** Why each expanded season was expanded. A season with no row is treated as `watched`. */
+  listSeasonExpansions(rollingShowId: number): SeasonExpansionRecord[] {
+    return this.db.prepare(`
+      SELECT res.season_number AS seasonNumber, res.reason, res.user_id AS userId,
+        u.display_name AS displayName, res.expanded_at AS expandedAt
+      FROM rolling_expanded_seasons res
+      LEFT JOIN users u ON u.id = res.user_id
+      WHERE res.rolling_show_id = ?
+      ORDER BY res.season_number
+    `).all(rollingShowId) as SeasonExpansionRecord[];
+  }
+
   resetExpandedSeasons(rollingShowId: number): void {
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
-    this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
-    this.clearPrefetchedEpisodes(rollingShowId);
+    this.transaction(() => {
+      this.clearExcludedEpisodesForSeasons(rollingShowId, this.getRollingShow(rollingShowId)?.expandedSeasons ?? []);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = '[]', updated_at = ? WHERE id = ?").run(now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ?").run(rollingShowId);
+      this.db.prepare("DELETE FROM rolling_season_inactivity WHERE rolling_show_id = ?").run(rollingShowId);
+      this.clearPrefetchedEpisodes(rollingShowId);
+    });
   }
 
   clearPrefetchedEpisodes(rollingShowId: number): void {
@@ -897,8 +1045,17 @@ export class PacearrDatabase {
   replaceExpandedSeasons(rollingShowId: number, seasonNumbers: number[]): number {
     const expanded = [...new Set(seasonNumbers)].filter((season) => season > 0).sort((a, b) => a - b);
     return this.db.transaction(() => {
+      const previous = this.getRollingShow(rollingShowId)?.expandedSeasons ?? [];
+      this.clearExcludedEpisodesForSeasons(rollingShowId, previous.filter((season) => !expanded.includes(season)));
       this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(expanded), now(), rollingShowId);
+      // A season this adds was retained from a viewer's stored progress, or re-adopted from
+      // a Sonarr tag with no known watch, so it is `watched` with no user, which the show page
+      // shows without a reason. A season already recorded keeps its reason.
+      this.db.prepare(`DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number NOT IN (SELECT value FROM json_each(?))`)
+        .run(rollingShowId, JSON.stringify(expanded));
+      const recordWatched = this.db.prepare("INSERT OR IGNORE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason, expanded_at) VALUES (?, ?, 'watched', ?)");
+      for (const seasonNumber of expanded) recordWatched.run(rollingShowId, seasonNumber, now());
       // Prefetch records only represent individually retained episodes in an
       // otherwise unexpanded season. Reconciliation can promote a season from
       // stored viewer progress without passing through markSeasonExpanded.
@@ -917,12 +1074,61 @@ export class PacearrDatabase {
   }
 
   removeExpandedSeason(rollingShowId: number, seasonNumber: number): void {
-    const show = this.getRollingShow(rollingShowId);
-    if (!show) return;
-    const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
-    this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(expanded), now(), rollingShowId);
-    this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    this.transaction(() => {
+      const show = this.getRollingShow(rollingShowId);
+      if (!show) return;
+      if (show.expandedSeasons.includes(seasonNumber)) this.clearExcludedEpisodesForSeasons(rollingShowId, [seasonNumber]);
+      const expanded = show.expandedSeasons.filter((season) => season !== seasonNumber);
+      this.db.prepare("UPDATE rolling_shows SET expanded_seasons = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(expanded), now(), rollingShowId);
+      this.db.prepare("DELETE FROM rolling_expanded_seasons WHERE rolling_show_id = ? AND season_number = ?").run(rollingShowId, seasonNumber);
+      this.clearSeasonInactivity(rollingShowId, seasonNumber);
+    });
+  }
+
+  /**
+   * A season that stops being expanded loses its episode exclusions. Sonarr rejects any
+   * season pack containing an unmonitored episode, so exclusions carried into a later
+   * re-expansion would block the packs it depends on. Excluding again is cheap by comparison.
+   */
+  private clearExcludedEpisodesForSeasons(rollingShowId: number, seasonNumbers: number[]): void {
+    const clear = this.db.prepare("DELETE FROM rolling_excluded_episodes WHERE rolling_show_id = ? AND season_number = ?");
+    for (const seasonNumber of seasonNumbers) clear.run(rollingShowId, seasonNumber);
+  }
+
+  getRollingExclusions(rollingShowId: number): RollingExclusions {
+    const seasons = (this.db.prepare("SELECT season_number AS seasonNumber FROM rolling_excluded_seasons WHERE rolling_show_id = ? ORDER BY season_number")
+      .all(rollingShowId) as Array<{ seasonNumber: number }>).map((row) => row.seasonNumber);
+    const episodes = this.db.prepare(`
+      SELECT season_number AS seasonNumber, episode_number AS episodeNumber FROM rolling_excluded_episodes
+      WHERE rolling_show_id = ? ORDER BY season_number, episode_number
+    `).all(rollingShowId) as Array<{ seasonNumber: number; episodeNumber: number }>;
+    return { seasons, episodes };
+  }
+
+  excludeSeason(rollingShowId: number, seasonNumber: number): boolean {
+    return this.db.prepare("INSERT OR IGNORE INTO rolling_excluded_seasons (rolling_show_id, season_number, excluded_at) VALUES (?, ?, ?)")
+      .run(rollingShowId, seasonNumber, now()).changes > 0;
+  }
+
+  includeSeason(rollingShowId: number, seasonNumber: number): boolean {
+    return this.db.prepare("DELETE FROM rolling_excluded_seasons WHERE rolling_show_id = ? AND season_number = ?")
+      .run(rollingShowId, seasonNumber).changes > 0;
+  }
+
+  excludeEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): boolean {
+    return this.db.prepare("INSERT OR IGNORE INTO rolling_excluded_episodes (rolling_show_id, season_number, episode_number, excluded_at) VALUES (?, ?, ?, ?)")
+      .run(rollingShowId, seasonNumber, episodeNumber, now()).changes > 0;
+  }
+
+  clearPrefetchedEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): void {
+    this.db.prepare("DELETE FROM rolling_prefetched_episodes WHERE rolling_show_id = ? AND season_number = ? AND episode_number = ?")
+      .run(rollingShowId, seasonNumber, episodeNumber);
+  }
+
+  includeEpisode(rollingShowId: number, seasonNumber: number, episodeNumber: number): boolean {
+    return this.db.prepare("DELETE FROM rolling_excluded_episodes WHERE rolling_show_id = ? AND season_number = ? AND episode_number = ?")
+      .run(rollingShowId, seasonNumber, episodeNumber).changes > 0;
   }
 
   getSeasonInactiveSince(rollingShowId: number, seasonNumber: number): string | null {
@@ -1119,30 +1325,82 @@ export class PacearrDatabase {
     }>;
   }
 
-  insertWatchEvent(input: NormalizedWatchEventInput): { inserted: boolean; id: number | null } {
-    const result = this.db.prepare(`
-      INSERT OR IGNORE INTO watch_events
-        (source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.source,
-      input.sourceEventId,
-      input.userId,
-      input.plexAccountId,
-      input.username,
-      input.sonarrSeriesId,
-      input.showTitle,
-      input.seasonNumber,
-      input.episodeNumber,
-      input.watchedAt,
-      JSON.stringify(input.rawPayload),
-      now()
-    );
-    // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
-    // whatever a previous successful insert on this connection left it as. Gate on
-    // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
-    // event would incorrectly report some unrelated earlier row's id as its own.
-    return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+  /**
+   * Moves this event's row from its server's URL fallback to the stable connection, so it
+   * is recognised as a duplicate rather than imported again. Only a row recording the
+   * same watch moves: a different install behind the same URL can reuse the ID for
+   * another watch, and that row must stay where it is rather than absorb the new event.
+   * Every field compared is stored as imported and never rewritten. A missed match only
+   * stores the watch twice; a false one would drop the new event, so the check is strict.
+   */
+  private adoptFallbackWatchEvent(input: NormalizedWatchEventInput): boolean {
+    if (!input.fallbackConnection || input.fallbackConnection === input.sourceConnection) return false;
+    this.adoptFallbackStatement ??= this.db.prepare(`
+      UPDATE OR IGNORE watch_events SET source_connection = ?
+      WHERE source = ? AND source_connection = ? AND source_event_id = ?
+        AND watched_at = ? AND season_number = ? AND episode_number = ?
+        AND show_title = ? AND username IS ? AND plex_account_id IS ?
+    `);
+    return this.adoptFallbackStatement.run(
+      input.sourceConnection, input.source, input.fallbackConnection, input.sourceEventId,
+      input.watchedAt, input.seasonNumber, input.episodeNumber,
+      input.showTitle, input.username, input.plexAccountId,
+    ).changes > 0;
+  }
+
+  /**
+   * Tautulli merges a resumed play into the earlier unfinished play of the same episode and
+   * reports the group under the first play's reference ID with the latest play's date, so
+   * an already-stored event can come back later. Moves the stored date forward to it; never
+   * back, so an older re-read cannot undo it. Only a row recording the same episode for the
+   * same Tautulli user moves, as adoptFallbackWatchEvent guards against a reused ID.
+   * Returns the stored row's user, or undefined when nothing moved.
+   */
+  private advanceTautulliWatchEvent(input: NormalizedWatchEventInput, rawPayload: string): { userId: number | null } | undefined {
+    if (input.source !== "tautulli") return undefined;
+    this.advanceTautulliStatement ??= this.db.prepare(`
+      UPDATE watch_events SET watched_at = ?, raw_payload = ?
+      WHERE source = 'tautulli' AND source_connection = ? AND source_event_id = ?
+        AND watched_at < ? AND season_number = ? AND episode_number = ? AND show_title = ?
+        AND CAST(json_extract(raw_payload, '$.user_id') AS TEXT) IS CAST(json_extract(?, '$.user_id') AS TEXT)
+      RETURNING user_id AS userId
+    `);
+    return this.advanceTautulliStatement.get(
+      input.watchedAt, rawPayload, input.sourceConnection, input.sourceEventId,
+      input.watchedAt, input.seasonNumber, input.episodeNumber, input.showTitle, rawPayload,
+    ) as { userId: number | null } | undefined;
+  }
+
+  insertWatchEvent(input: NormalizedWatchEventInput): WatchEventInsertResult {
+    return this.db.transaction(() => {
+      const adopted = this.adoptFallbackWatchEvent(input);
+      const result = this.db.prepare(`
+        INSERT OR IGNORE INTO watch_events
+          (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.source,
+        input.sourceConnection,
+        input.sourceEventId,
+        input.userId,
+        input.plexAccountId,
+        input.username,
+        input.sonarrSeriesId,
+        input.showTitle,
+        input.seasonNumber,
+        input.episodeNumber,
+        input.watchedAt,
+        JSON.stringify(input.rawPayload),
+        now()
+      );
+      // SQLite's last_insert_rowid() is not reset by an ignored INSERT OR IGNORE - it keeps
+      // whatever a previous successful insert on this connection left it as. Gate on
+      // result.changes, not the truthiness of lastInsertRowid, or an ignored (duplicate)
+      // event would incorrectly report some unrelated earlier row's id as its own.
+      if (result.changes > 0) return { inserted: true, id: Number(result.lastInsertRowid), adopted };
+      const advanced = this.advanceTautulliWatchEvent(input, JSON.stringify(input.rawPayload));
+      return advanced ? { inserted: false, id: null, adopted, advanced } : { inserted: false, id: null, adopted };
+    })();
   }
 
   /**
@@ -1151,17 +1409,20 @@ export class PacearrDatabase {
    * process thousands of rows in one run; measured on this exact pattern, 2000 unwrapped
    * inserts took ~212ms versus ~3ms wrapped in one transaction.
    */
-  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): Array<{ inserted: boolean; id: number | null }> {
+  insertWatchEventsBatch(inputs: NormalizedWatchEventInput[]): WatchEventInsertResult[] {
     if (inputs.length === 0) return [];
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO watch_events
-        (source, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (source, source_connection, source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const stamp = now();
     const insertAll = this.db.transaction((items: NormalizedWatchEventInput[]) => items.map((item) => {
+      const adopted = this.adoptFallbackWatchEvent(item);
+      const rawPayload = JSON.stringify(item.rawPayload);
       const result = insert.run(
         item.source,
+        item.sourceConnection,
         item.sourceEventId,
         item.userId,
         item.plexAccountId,
@@ -1171,10 +1432,12 @@ export class PacearrDatabase {
         item.seasonNumber,
         item.episodeNumber,
         item.watchedAt,
-        JSON.stringify(item.rawPayload),
+        rawPayload,
         stamp
       );
-      return { inserted: result.changes > 0, id: result.changes > 0 ? Number(result.lastInsertRowid) : null };
+      if (result.changes > 0) return { inserted: true, id: Number(result.lastInsertRowid), adopted };
+      const advanced = this.advanceTautulliWatchEvent(item, rawPayload);
+      return advanced ? { inserted: false, id: null, adopted, advanced } : { inserted: false, id: null, adopted };
     }));
     return insertAll(inputs);
   }
@@ -1249,8 +1512,8 @@ export class PacearrDatabase {
     return this.db.prepare(`SELECT COALESCE(SUM(bytes_reclaimed), 0) AS bytesReclaimed, COALESCE(SUM(file_count), 0) AS fileCount FROM reclaimed_storage_events`).get() as { bytesReclaimed: number; fileCount: number };
   }
 
-  getLatestWatchEventAt(source: EventSourceKind): string | null {
-    return (this.db.prepare("SELECT MAX(watched_at) AS watchedAt FROM watch_events WHERE source = ?").get(source) as { watchedAt: string | null }).watchedAt;
+  getLatestWatchEventAt(source: EventSourceKind, sourceConnection: string): string | null {
+    return (this.db.prepare("SELECT MAX(watched_at) AS watchedAt FROM watch_events WHERE source = ? AND source_connection = ?").get(source, sourceConnection) as { watchedAt: string | null }).watchedAt;
   }
 
   addHistory(level: HistoryEvent["level"], action: string, title: string, details: unknown): void {

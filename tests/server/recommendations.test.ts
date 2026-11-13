@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PacearrDatabase } from "../../src/server/db/index.js";
@@ -29,7 +29,7 @@ function createHarness(logger: Logger = silentLogger()) {
   const services = new PacearrServices(db, logger, imageCache, dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
   db.updateAppSettings({ recommendationMinimumSavingsGb: 0 });
-  return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { db, services, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 function jsonResponse(body: unknown) {
@@ -55,10 +55,16 @@ function installFetchStub(routes: {
   episodeFileErrorsBySeries?: Record<number, string>;
   plexHistoryXml?: string;
   plexMetadataXml?: string;
+  plexMetadataNotFound?: string[];
+  plexMetadataErrorKeys?: string[];
   plexTitleSearchXml?: string;
   tautulliHistory?: unknown[];
+  tautulliInstallId?: string | null;
   tautulliMetadata?: unknown;
   tautulliMetadataError?: boolean;
+  tautulliMetadataNotFound?: string[];
+  tautulliMetadataErrorKeys?: string[];
+  tautulliPlexServerId?: string;
   requests?: Array<{ method: string; pathname: string; search?: string; body?: string }>;
 }) {
   const originalFetch = globalThis.fetch;
@@ -71,16 +77,25 @@ function installFetchStub(routes: {
         : emptyPlexHistoryXml();
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/metadata/")) {
+      if (routes.plexMetadataNotFound?.includes(url.pathname.split("/").pop()!)) return new Response("Not Found", { status: 404, statusText: "Not Found" });
+      if (routes.plexMetadataErrorKeys?.includes(url.pathname.split("/").pop()!)) return new Response("Internal Server Error", { status: 500, statusText: "Internal Server Error" });
       return new Response(routes.plexMetadataXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
     }
     if (url.hostname.startsWith("plex") && url.pathname.startsWith("/library/sections/") && url.pathname.endsWith("/all")) {
       return new Response(routes.plexTitleSearchXml ?? '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>', { status: 200, headers: { "content-type": "application/xml" } });
     }
+    if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_settings") {
+      return jsonResponse({ response: { result: "success", data: { pms_uuid: routes.tautulliInstallId === undefined ? "tautulli-install" : routes.tautulliInstallId, pms_identifier: routes.tautulliPlexServerId ?? "plex-id" } } });
+    }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_history") {
       return jsonResponse({ response: { result: "success", data: { data: routes.tautulliHistory ?? [] } } });
     }
     if (url.hostname.startsWith("tautulli") && url.pathname === "/api/v2" && url.searchParams.get("cmd") === "get_metadata") {
-      if (routes.tautulliMetadataError) return new Response(JSON.stringify({ response: { result: "error", message: "unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
+      const ratingKey = url.searchParams.get("rating_key")!;
+      if (routes.tautulliMetadataNotFound?.includes(ratingKey)) {
+        return new Response(JSON.stringify({ response: { result: "error", message: `Unable to retrieve metadata for rating_key '${ratingKey}'`, data: {} } }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } });
+      }
+      if (routes.tautulliMetadataError || routes.tautulliMetadataErrorKeys?.includes(ratingKey)) return new Response(JSON.stringify({ response: { result: "error", message: "unavailable" } }), { status: 503, headers: { "content-type": "application/json" } });
       return jsonResponse({ response: { result: "success", data: routes.tautulliMetadata ?? {} } });
     }
     if (url.pathname === "/api/v3/series") return jsonResponse(routes.series ?? []);
@@ -112,7 +127,7 @@ test("stored watch events are not associated by title alone during history impor
   const restoreFetch = installFetchStub({ series: [theWire] });
   try {
     const stored = db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "unmatched-1",
       userId: null,
       plexAccountId: "1",
@@ -272,6 +287,175 @@ test("history import stops source identity lookups after repeated metadata failu
 
     assert.equal(result.unmatched, 5);
     assert.equal(requests.filter((request) => request.search?.includes("cmd=get_metadata")).length, 3);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+function tautulliHistoryRows(grandparentRatingKeys: string[]) {
+  return grandparentRatingKeys.map((grandparent_rating_key, index) => ({
+    reference_id: `event-${index}`,
+    user_id: 7,
+    username: "viewer",
+    user: "Viewer",
+    grandparent_title: `Show ${grandparent_rating_key}`,
+    parent_media_index: 1,
+    media_index: index + 1,
+    date: 1784220000 + index,
+    rating_key: `episode-${index}`,
+    grandparent_rating_key,
+  }));
+}
+
+function tautulliMetadataRequests(requests: Array<{ search?: string }>, ratingKey?: string) {
+  return requests.filter((request) => request.search?.includes("cmd=get_metadata") && (!ratingKey || new URLSearchParams(request.search).get("rating_key") === ratingKey)).length;
+}
+
+test("deleted Tautulli shows do not stop identity lookups and are asked about once per job", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  // Four deleted shows ahead of a live one, the first with several watches (#208).
+  const history = tautulliHistoryRows(["gone-1", "gone-1", "gone-2", "gone-3", "gone-4", "gone-1", "118306"]);
+  const route = { series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://208111"] }, tautulliMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"], plexMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"] };
+  const identityKey = (ratingKey: string) => `${sourceIdentityScope(db.getSessionSecret(), "http://tautulli:8181", "secret")}:rating:${ratingKey}`;
+  const firstRequests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const firstFetch = installFetchStub({ ...route, requests: firstRequests });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 1);
+    assert.equal(tautulliMetadataRequests(firstRequests, "gone-1"), 1);
+    // Tautulli cannot tell a deleted show from a Plex failure, so Plex confirms it.
+    assert.equal(firstRequests.filter((request) => request.pathname === "/library/metadata/gone-1").length, 1);
+    assert.equal(tautulliMetadataRequests(firstRequests), 5);
+    assert.equal(db.getSourceIdentity("tautulli", identityKey("gone-1")), null);
+  } finally {
+    firstFetch();
+  }
+  const secondRequests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const secondFetch = installFetchStub({ ...route, requests: secondRequests });
+  try {
+    await services.reconcileFullHistory();
+
+    // The next job asks again, so a show restored under the same key would match.
+    assert.equal(tautulliMetadataRequests(secondRequests, "gone-1"), 1);
+  } finally {
+    secondFetch();
+    cleanup();
+  }
+});
+
+test("deleted Plex shows do not stop identity lookups and are asked about once per job", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: null, username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  const series: SonarrSeries = { id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] };
+  const video = (ratingKey: string, index: number) => `<Video type="episode" grandparentTitle="Show ${ratingKey}" parentIndex="1" index="${index + 1}" viewedAt="${1784220000 + index}" historyKey="event-${index}" ratingKey="episode-${index}" grandparentRatingKey="${ratingKey}" accountID="1" user="viewer"/>`;
+  const keys = ["gone-1", "gone-1", "gone-2", "gone-3", "gone-4", "118306"];
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series],
+    plexHistoryXml: `<?xml version="1.0"?><MediaContainer size="${keys.length}">${keys.map(video).join("")}</MediaContainer>`,
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://208111" /></Directory></MediaContainer>',
+    plexMetadataNotFound: ["gone-1", "gone-2", "gone-3", "gone-4"],
+    requests,
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 1);
+    assert.equal(requests.filter((request) => request.pathname === "/library/metadata/gone-1").length, 1);
+    assert.equal(requests.filter((request) => request.pathname === "/library/metadata/118306").length, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+function tautulliAmbiguousHarness() {
+  const harness = createHarness();
+  harness.db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  harness.db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  harness.db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  return harness;
+}
+
+test("an item Tautulli cannot read still counts as a failed lookup when Plex fails too", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const keys = ["show-1", "show-2", "show-3", "show-4", "show-5"];
+  // Tautulli gives the same answer when its own request to Plex fails (#208).
+  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, plexMetadataErrorKeys: keys });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.unmatched, 5);
+    assert.equal(tautulliMetadataRequests(requests), 3);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("an item Tautulli cannot read counts as a failed lookup when Tautulli reads a different Plex server", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const keys = ["show-1", "show-2", "show-3", "show-4", "show-5"];
+  const restoreFetch = installFetchStub({ requests, tautulliHistory: tautulliHistoryRows(keys), tautulliMetadataNotFound: keys, plexMetadataNotFound: keys, tautulliPlexServerId: "another-plex" });
+  try {
+    await services.importHistory();
+
+    // The rating keys belong to another server, so Pacearr's Plex is never asked.
+    assert.equal(tautulliMetadataRequests(requests), 3);
+    assert.equal(requests.some((request) => request.pathname.startsWith("/library/metadata/")), false);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("an item Tautulli cannot read is matched from Plex when Plex still has it", async () => {
+  const { services, cleanup } = tautulliAmbiguousHarness();
+  const restoreFetch = installFetchStub({
+    series: [{ id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] }],
+    tautulliHistory: tautulliHistoryRows(["118306"]),
+    tautulliMetadataNotFound: ["118306"],
+    plexMetadataXml: '<?xml version="1.0"?><MediaContainer><Directory><Guid id="tvdb://208111" /></Directory></MediaContainer>',
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 1);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("deleted shows between real metadata failures do not keep identity lookups running", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    requests,
+    series: [{ id: 5810, title: "Gold Rush", tvdbId: 208111, seasons: [] }],
+    tautulliHistory: tautulliHistoryRows(["gone-1", "down-1", "gone-2", "down-2", "gone-3", "down-3", "118306"]),
+    tautulliMetadata: { guids: ["tvdb://208111"] },
+    tautulliMetadataNotFound: ["gone-1", "gone-2", "gone-3"],
+    plexMetadataNotFound: ["gone-1", "gone-2", "gone-3"],
+    tautulliMetadataErrorKeys: ["down-1", "down-2", "down-3"],
+  });
+  try {
+    const result = await services.importHistory();
+
+    assert.equal(result.matched, 0);
+    assert.equal(tautulliMetadataRequests(requests), 6);
+    assert.equal(tautulliMetadataRequests(requests, "118306"), 0);
   } finally {
     restoreFetch();
     cleanup();
@@ -441,6 +625,90 @@ test("history import batches events outside the activity window while still appl
   }
 });
 
+test("history import moves a Tautulli event to the later date of a resumed play and applies it as a new watch", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  db.updateAppSettings({ dryRun: false, viewerActivityWindowDays: 30 });
+  const [viewer] = db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const series: SonarrSeries = {
+    id: 970,
+    title: "Resumed Show",
+    tvdbId: 9700,
+    monitored: true,
+    monitorNewItems: "none",
+    seasons: [{ seasonNumber: 1, monitored: true }, { seasonNumber: 2, monitored: false }],
+  };
+  const episodes: SonarrEpisode[] = [
+    { id: 9701, seriesId: 970, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 97001 },
+    { id: 9702, seriesId: 970, seasonNumber: 2, episodeNumber: 1, monitored: false, hasFile: true, episodeFileId: 97002 },
+  ];
+  const rolling = db.upsertRollingShow(series);
+  const firstPlay = Math.floor((Date.now() - 60 * 24 * 60 * 60 * 1000) / 1000);
+  const resumed = Math.floor((Date.now() - 1 * 24 * 60 * 60 * 1000) / 1000);
+  // Tautulli reports the merged play under the first play's reference ID, dated by its latest play.
+  const play = (date: number, userId = 7) => ({ reference_id: "102506", user_id: userId, username: "viewer", user: "Viewer", grandparent_title: "Resumed Show", parent_media_index: 2, media_index: 1, date, rating_key: "episode", grandparent_rating_key: "970" });
+  const importWith = async (history: unknown[], full = false) => {
+    const restoreFetch = installFetchStub({
+      series: [series],
+      seriesById: { 970: series },
+      episodesBySeries: { 970: episodes },
+      episodeFilesBySeries: { 970: [] },
+      tautulliHistory: history,
+      tautulliMetadata: { guids: ["tvdb://9700"] },
+    });
+    try { return full ? await services.reconcileFullHistory() : await services.importHistory(); } finally { restoreFetch(); }
+  };
+  const latestWatch = () => db.listLatestWatchProgressForUser(viewer!.id).map((item) => item.watchedAt);
+  const progressAt = () => db.listProgressForShow(rolling.id).map((item) => item.lastWatchedAt);
+  try {
+    await importWith([play(firstPlay)]);
+    assert.deepEqual(latestWatch(), [new Date(firstPlay * 1000).toISOString()]);
+    assert.deepEqual(db.getRollingShowBySeriesId(970)?.expandedSeasons, [], "an unfinished play outside the activity window expands nothing");
+
+    // The viewer finishes the episode weeks later; the incremental read resumes from the
+    // first play's date and sees the same reference ID with the later date.
+    const result = await importWith([play(resumed)]);
+    assert.equal(result.imported, 0);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(latestWatch(), [new Date(resumed * 1000).toISOString()]);
+    assert.deepEqual(progressAt(), [new Date(resumed * 1000).toISOString()]);
+    assert.deepEqual(db.getRollingShowBySeriesId(970)?.expandedSeasons, [2], "the resumed play inside the window is applied as a new watch");
+    assert.equal(db.getHistorySyncState().tautulli.cursor, new Date(resumed * 1000).toISOString());
+
+    // An older re-read never moves the date back, and another Tautulli user's play that
+    // reuses the ID is not taken as this one.
+    await importWith([play(firstPlay)], true);
+    await importWith([play(resumed + 3600, 8)], true);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(latestWatch(), [new Date(resumed * 1000).toISOString()]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a full history read moves a stored Tautulli event to a resumed play's date and refreshes progress", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+  const [viewer] = db.upsertUsers([{ plexUserId: "viewer", plexAccountId: "1", tautulliUserId: "7", username: "viewer", displayName: "Viewer", avatarUrl: null }]);
+  db.updateUser(viewer!.id, { enabled: true });
+  const series: SonarrSeries = { id: 971, title: "Resumed Show", tvdbId: 9710, seasons: [] };
+  const rolling = db.upsertRollingShow(series);
+  const play = (date: number) => ({ reference_id: "55", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Resumed Show", parent_media_index: 1, media_index: 4, date, rating_key: "episode", grandparent_rating_key: "971" });
+  const readInFull = async (history: unknown[]) => {
+    const restoreFetch = installFetchStub({ series: [series], tautulliHistory: history, tautulliMetadata: { guids: ["tvdb://9710"] } });
+    try { await services.reconcileFullHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    await readInFull([play(1750000000)]);
+    await readInFull([play(1784220000)]);
+    assert.equal(db.countWatchEvents(), 1);
+    assert.deepEqual(db.listProgressForShow(rolling.id).map((item) => item.lastWatchedAt), [new Date(1784220000 * 1000).toISOString()]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a dry-run history import expands an unexpanded season only once", async () => {
   const { db, services, cleanup } = createHarness();
   db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
@@ -496,7 +764,7 @@ test("a full history reconciliation repairs a previously orphaned Tautulli event
   // Simulates a row imported before #75's fix: Tautulli's friendly name at the time didn't
   // resolve to any Pacearr user, so it landed with user_id = NULL.
   const stored = db.insertWatchEvent({
-    source: "tautulli", sourceEventId: "ref-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
+    source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "ref-orphan-1", userId: null, plexAccountId: null, username: "Big Chief Dave",
     sonarrSeriesId: 960, showTitle: "Repair Test", seasonNumber: 1, episodeNumber: 2,
     watchedAt: "2026-04-01T10:00:00.000Z", rawPayload: {},
   });
@@ -540,7 +808,7 @@ test("a full history reconciliation refreshes rolling progress after repairing a
   const series: SonarrSeries = { id: 962, title: "Plex Repair Test", tvdbId: 9620, monitored: true, monitorNewItems: "none", seasons: [{ seasonNumber: 2, monitored: true }] };
   const rolling = db.upsertRollingShow(series);
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "plex-orphan-1", userId: viewer!.id, plexAccountId: "1", username: "viewer",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "plex-orphan-1", userId: viewer!.id, plexAccountId: "1", username: "viewer",
     sonarrSeriesId: null, showTitle: "Plex Repair Test", seasonNumber: 2, episodeNumber: 3,
     watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: {},
   });
@@ -572,7 +840,7 @@ test("manual Tautulli mapping refreshes rolling progress from relinked history",
     const [dave] = db.upsertUsers([{ plexUserId: "plex-dave", plexAccountId: "4", tautulliUserId: null, username: "dave", displayName: "Dave", avatarUrl: null }]);
     const rolling = db.upsertRollingShow({ id: 961, title: "Manual Mapping Test" });
     db.insertWatchEvent({
-      source: "tautulli", sourceEventId: "manual-map-orphan", userId: null, plexAccountId: null, username: "Different Tautulli Name",
+      source: "tautulli", sourceConnection: "tautulli-install", sourceEventId: "manual-map-orphan", userId: null, plexAccountId: null, username: "Different Tautulli Name",
       sonarrSeriesId: 961, showTitle: "Manual Mapping Test", seasonNumber: 2, episodeNumber: 4,
       watchedAt: "2026-04-02T10:00:00.000Z", rawPayload: { user_id: 47 },
     });
@@ -611,7 +879,7 @@ test("rolling reconciliation waits for the default seven-day inactivity delay", 
   try {
     db.updateAppSettings({ dryRun: false });
     const rolling = db.upsertRollingShow({ id: 901, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString());
 
     await services.reconcileRollingShows();
@@ -632,7 +900,7 @@ test("rolling reconciliation honours a custom delay and immediate cleanup at zer
   try {
     db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 3 });
     const rolling = db.upsertRollingShow({ id: 902, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString());
     await services.reconcileRollingShows();
     assert.deepEqual(db.getRollingShow(rolling.id)?.expandedSeasons, [1]);
@@ -667,8 +935,8 @@ test("progressive cleanup deletes a multipart file shared only by eligible non-p
   try {
     db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
     const rolling = db.upsertRollingShow({ id: 904, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
-    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
+    db.markSeasonExpanded(rolling.id, 2, "2026-01-01T00:00:00.000Z", { reason: "watched" });
 
     await (services as unknown as { performProgressiveCleanup: (rollingShowId: number, currentSeason: number, observedAt: Date) => Promise<void> })
       .performProgressiveCleanup(rolling.id, 3, new Date("2026-01-02T00:00:00.000Z"));
@@ -692,7 +960,7 @@ test("a returning active viewer clears an inactive season's cleanup timer", asyn
     const [user] = db.upsertUsers([{ plexUserId: "plex-delay", plexAccountId: "delay", tautulliUserId: null, username: "delay", displayName: "Delay", avatarUrl: null }]);
     db.updateUser(user.id, { enabled: true });
     const rolling = db.upsertRollingShow({ id: 903, title: series.title });
-    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-01-01T00:00:00.000Z", { reason: "watched" });
     db.markSeasonInactive(rolling.id, 1, "2026-01-01T00:00:00.000Z");
     db.upsertRollingUserProgress(rolling.id, user.id, 1, 2, new Date().toISOString());
 
@@ -740,7 +1008,7 @@ test("enrolling a show seeds rolling progress from watch history that was alread
     // Simulate matching having already happened via a routine history-import run,
     // long before the show is enrolled.
     db.insertWatchEvent({
-      source: "plex-history",
+      source: "plex-history", sourceConnection: "plex-id",
       sourceEventId: "pre-matched-1",
       userId: user.id,
       plexAccountId: "1",
@@ -808,6 +1076,87 @@ test("manual enrollment applies its pilot baseline before its full history recon
   }
 });
 
+test("an interrupted manual enrollment stays protected when a new service instance starts", async () => {
+  const { db, services, dir, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+  const series: SonarrSeries = { id: 805, title: "Interrupted Enrollment", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 805: series }, requests,
+    episodesBySeries: { 805: [
+      { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true },
+      { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+    ] },
+  });
+  try {
+    const enrollment = await services.beginEnrollment(805, { applyBaseline: true, importHistory: true });
+    assert.equal(db.isRollingShowAwaitingHistory(enrollment.rolling.id), true);
+    const restarted = new PacearrServices(db, silentLogger(), new ImageCacheService(dir, silentLogger()), dir);
+    const before = requests.length;
+    await restarted.reconcileRollingShows();
+    assert.deepEqual(requests.slice(before), [], "the restarted reconciler leaves monitoring and files alone");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a full history read does not clear a guard renewed during the read", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const show = db.upsertRollingShow({ id: 1, title: "Guarded Show" });
+    db.markRollingShowAwaitingHistory(show.id);
+    const captured = db.listRollingShowsAwaitingHistory();
+    services.importHistory = async () => {
+      db.markRollingShowAwaitingHistory(show.id);
+      return { ok: true, message: "History read completed." };
+    };
+    await services.reconcileFullHistory();
+    const remaining = db.listRollingShowsAwaitingHistory();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.id, show.id);
+    assert.notEqual(remaining[0]?.guard, captured[0]?.guard);
+  } finally {
+    cleanup();
+  }
+});
+
+for (const replace of [false, true]) {
+  test(`rolling reconciliation skips a show ${replace ? "re-enrolled" : "marked"} while processing an earlier show`, async () => {
+    const { db, services, cleanup } = createHarness();
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const earlier = { id: 806, title: "A Earlier", seasons: [] };
+    const later = { id: 807, title: "Z Later", seasons: [] };
+    db.upsertRollingShow(earlier);
+    let guarded = db.upsertRollingShow(later);
+    const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+    const restoreFetch = installFetchStub({ series: [earlier, later], seriesById: { 806: earlier, 807: later }, requests });
+    const fakeFetch = globalThis.fetch;
+    let marked = false;
+    globalThis.fetch = async (input, init) => {
+      if (!marked) {
+        marked = true;
+        if (replace) {
+          db.deleteRollingShow(guarded.id);
+          guarded = db.upsertRollingShow(later);
+        }
+        db.markRollingShowAwaitingHistory(guarded.id);
+      }
+      return fakeFetch(input, init);
+    };
+    try {
+      const result = await services.reconcileRollingShows();
+      assert.equal(result.ok, true);
+      assert.equal(marked, true);
+      assert.equal(requests.some(({ pathname, search }) => pathname.endsWith("/807") || search?.includes("seriesId=807")), false);
+      assert.equal(db.isRollingShowAwaitingHistory(guarded.id), true);
+    } finally {
+      restoreFetch();
+      cleanup();
+    }
+  });
+}
+
 test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
   const { db, services, cleanup } = createHarness();
   db.updateAppSettings({ dryRun: false });
@@ -824,6 +1173,7 @@ test("manual enrollment preserves files when full history reconciliation reports
     assert.equal(result.ok, true);
     assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
     assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
+    assert.equal(db.isRollingShowAwaitingHistory(db.getRollingShowBySeriesId(805)!.id), true);
   } finally {
     restoreFetch();
     cleanup();
@@ -841,7 +1191,7 @@ test("enrollment repairs and seeds previously unmatched history with a full veri
   const otherRolling = db.upsertRollingShow(other);
   db.upsertRollingUserProgress(otherRolling.id, user.id, 2, 3, new Date().toISOString());
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "pre-enrollment-orphan", userId: user.id, plexAccountId: "1", username: "bob",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "pre-enrollment-orphan", userId: user.id, plexAccountId: "1", username: "bob",
     sonarrSeriesId: null, showTitle: "Fringe", seasonNumber: 2, episodeNumber: 4,
     watchedAt: "2026-04-05T10:00:00.000Z", rawPayload: {},
   });
@@ -978,11 +1328,11 @@ test("dry-run expansion does not clear existing prefetch targets", async () => {
   try {
     const [user] = db.upsertUsers([{ plexUserId: "plex-dry-expand", plexAccountId: "dry-expand", tautulliUserId: null, username: "dry-expand", displayName: "Dry Expand", avatarUrl: null }]);
     const rolling = db.upsertRollingShow({ id: 908, title: "Dry Run Expansion" });
-    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z");
+    db.markSeasonExpanded(rolling.id, 1, "2026-08-03T10:00:00.000Z", { reason: "watched" });
     db.recordPrefetchedEpisodes(rolling.id, user.id, 1, [2], "2026-08-03T10:00:00.000Z");
     db.updateAppSettings({ dryRun: true });
 
-    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test");
+    const result = await services.expandSeason(908, 1, "2026-08-03T11:00:00.000Z", "test", { reason: "watched" });
 
     assert.equal(result, false);
     assert.equal(db.listPrefetchedEpisodes(rolling.id).length, 1);
@@ -1158,7 +1508,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     { id: 9102, seriesId: 600, seasonNumber: 2, size: 400_000_000 },
   ];
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "continuum-1", userId: user.id, plexAccountId: "2", username: "carol",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "continuum-1", userId: user.id, plexAccountId: "2", username: "carol",
     sonarrSeriesId: 600, showTitle: "Continuum", seasonNumber: 2, episodeNumber: 1,
     watchedAt: new Date().toISOString(), rawPayload: {},
   });
@@ -1178,7 +1528,7 @@ test("listRecommendations computes precise per-season savings, excludes enrolled
     { id: 501, seriesId: 650, seasonNumber: 1, episodeNumber: 1, monitored: true, hasFile: true, episodeFileId: 9201 },
   ];
   db.insertWatchEvent({
-    source: "plex-history", sourceEventId: "firefly-1", userId: user2.id, plexAccountId: "3", username: "dave",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: "firefly-1", userId: user2.id, plexAccountId: "3", username: "dave",
     sonarrSeriesId: 650, showTitle: "Firefly", seasonNumber: 1, episodeNumber: 1,
     watchedAt: new Date().toISOString(), rawPayload: {},
   });
@@ -1371,7 +1721,7 @@ test("ignored recommendations are persistent, hidden by default, and can be rest
 
   try {
     await services.refreshRecommendations();
-    services.ignoreRecommendation(900, show.title);
+    await services.ignoreRecommendation(900, show.title);
     const hidden = services.listRecommendations();
     assert.deepEqual(hidden.candidates, []);
     assert.equal(hidden.ignoredCount, 1);
@@ -1379,7 +1729,7 @@ test("ignored recommendations are persistent, hidden by default, and can be rest
     const included = services.listRecommendations(true);
     assert.equal(included.candidates[0]?.ignored, true);
 
-    services.unignoreRecommendation(900);
+    await services.unignoreRecommendation(900);
     const restored = services.listRecommendations();
     assert.equal(restored.candidates[0]?.ignored, false);
     assert.equal(restored.ignoredCount, 0);
@@ -1435,11 +1785,94 @@ test("history import reads a changed or unknown Tautulli server in full instead 
     }
   };
 
-  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "http://tautulli:8181" });
-  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 0, syncedConnection: "http://tautulli:8181" }, "the same server resumes from its cursor");
+  assert.deepEqual(await importedFrom("http://tautulli-old:8181"), { imported: 1, syncedConnection: "tautulli-install" });
+  assert.deepEqual(await importedFrom("other-install"), { imported: 1, syncedConnection: "tautulli-install" }, "another install is read in full");
+  assert.deepEqual(await importedFrom("tautulli-install"), { imported: 0, syncedConnection: "tautulli-install" }, "the same install resumes from its cursor");
+  // A cursor stamped with the configured URL (migration 23, or before the install ID was
+  // known) may come from an install since replaced behind that URL, so it is read in full.
+  assert.deepEqual(await importedFrom("http://tautulli:8181"), { imported: 1, syncedConnection: "tautulli-install" }, "a URL-stamped cursor is read in full");
   // Migration 23 stamps cursors saved before connections were recorded, so one still
   // unstamped is treated as belonging to another server.
-  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "http://tautulli:8181" }, "an unstamped cursor is read in full");
+  assert.deepEqual(await importedFrom(undefined), { imported: 1, syncedConnection: "tautulli-install" }, "an unstamped cursor is read in full");
+});
+
+test("history import keeps a new Plex server's events that reuse an old server's history keys", async () => {
+  const { db, services, cleanup } = createHarness();
+  const historyXml = (episode: number) => `<?xml version="1.0"?><MediaContainer size="1"><Video type="episode" grandparentTitle="Gold Rush: Alaska" parentIndex="16" index="${episode}" viewedAt="1784220000" historyKey="/status/sessions/history/1" ratingKey="episode" grandparentRatingKey="118306" accountID="1" user="viewer"/></MediaContainer>`;
+  const importFrom = async (machineIdentifier: string, episode: number) => {
+    db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier, token: "tok" });
+    services.invalidateSourceIdentityScope("plex");
+    const restoreFetch = installFetchStub({ plexHistoryXml: historyXml(episode) });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    // Until its machine identifier is known, the server is identified by URL. Learning
+    // the identifier must not import the same history a second time.
+    await importFrom("", 23);
+    await importFrom("plex-one", 23);
+    assert.equal(db.countWatchEvents(), 1);
+    // A different server at the same address numbers its history from 1 as well.
+    await importFrom("plex-two", 24);
+    assert.equal(db.countWatchEvents(), 2);
+    assert.deepEqual(db.listUnmatchedWatchEvents().map((event) => event.episodeNumber).sort(), [23, 24]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("history import identifies Tautulli by its install ID, across URL changes and upgrades", async () => {
+  const { db, services, cleanup } = createHarness();
+  const watch = (referenceId: string, episode: number) => ({ reference_id: referenceId, user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: episode, date: 1784220000, rating_key: "episode", grandparent_rating_key: "118306" });
+  const importFrom = async (baseUrl: string, tautulliInstallId: string | null, history: unknown[]) => {
+    db.saveTautulliSettings({ enabled: true, baseUrl, apiKey: "secret" });
+    services.invalidateSourceIdentityScope("tautulli");
+    const restoreFetch = installFetchStub({ tautulliHistory: history, tautulliInstallId, tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    // Stamped with the URL, as migration 27 stamps rows imported before this change.
+    await importFrom("http://tautulli:8181", null, [watch("1", 1)]);
+    await importFrom("http://tautulli:8181", "install-a", [watch("1", 1)]);
+    assert.equal(db.countWatchEvents(), 1, "reading the same Tautulli under its install ID imports no duplicates");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-a");
+
+    await importFrom("https://tautulli.example", "install-a", [watch("1", 1)]);
+    assert.equal(db.countWatchEvents(), 1, "a new URL for the same install imports no duplicates");
+
+    await importFrom("http://tautulli-new:8181", "install-b", [watch("1", 2), watch("2", 3)]);
+    assert.equal(db.countWatchEvents(), 3, "a new install's events are kept even when they reuse reference IDs");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-b");
+
+    // Reinstalled behind the same URL and API key while Pacearr keeps running, with no
+    // settings save: the install ID is asked for on every run, not cached.
+    const restoreFetch = installFetchStub({ tautulliHistory: [watch("1", 4)], tautulliInstallId: "install-c", tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+    assert.equal(db.countWatchEvents(), 4, "a reinstalled Tautulli's events are kept without a settings change");
+    assert.equal(db.getHistorySyncState().tautulli.connection, "install-c");
+  } finally {
+    cleanup();
+  }
+});
+
+test("history import does not attribute a replaced Tautulli's history to the install now at its URL", async () => {
+  const { db, services, cleanup } = createHarness();
+  const watch = (date: number, episode: number) => ({ reference_id: "1", user_id: 7, username: "viewer", user: "Viewer", grandparent_title: "Gold Rush: Alaska", parent_media_index: 16, media_index: episode, date, rating_key: "episode", grandparent_rating_key: "118306" });
+  const importFrom = async (tautulliInstallId: string | null, history: unknown[]) => {
+    const restoreFetch = installFetchStub({ tautulliHistory: history, tautulliInstallId, tautulliMetadata: { guids: [] } });
+    try { await services.importHistory(); } finally { restoreFetch(); }
+  };
+  try {
+    db.saveTautulliSettings({ enabled: true, baseUrl: "http://tautulli:8181", apiKey: "secret" });
+    // The old install's watch, stored under the URL as migration 27 stamps it.
+    await importFrom(null, [watch(1784220000, 1)]);
+    // A fresh install replaced it behind the same URL before the upgrade, and numbers its
+    // history from 1 again. Its watch is kept; the old row is not moved to its install ID.
+    await importFrom("install-new", [watch(1784300000, 9)]);
+    assert.equal(db.countWatchEvents(), 2);
+    assert.deepEqual(db.listUnmatchedWatchEvents().map((event) => event.episodeNumber).sort((a, b) => a - b), [1, 9]);
+  } finally {
+    cleanup();
+  }
 });
 
 test("discovering Plex users links history imported before they were known and refreshes their progress", async () => {
@@ -1450,7 +1883,7 @@ test("discovering Plex users links history imported before they were known and r
   // Imported while neither viewer existed: the friend by Plex.tv account ID, the owner
   // by the server-local ID "1" that Plex's history endpoint reports.
   const orphan = (sourceEventId: string, plexAccountId: string, seasonNumber: number, episodeNumber: number) => db.insertWatchEvent({
-    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
     showTitle: "The Wire", seasonNumber, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
   });
   orphan("friend-watch", "4242", 2, 3);
@@ -1485,7 +1918,7 @@ test("discovering Plex users leaves history unlinked when its account ID belongs
   db.upsertUsers([{ plexUserId: "legacy-4242", plexAccountId: "4242", tautulliUserId: null, username: "legacy", displayName: "Legacy", avatarUrl: null }]);
   db.upsertRollingShow({ id: 700, title: "The Wire", year: 2002, seasons: [] });
   const orphan = (sourceEventId: string, plexAccountId: string) => db.insertWatchEvent({
-    source: "plex-history", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId, userId: null, plexAccountId, username: null, sonarrSeriesId: 700,
     showTitle: "The Wire", seasonNumber: 1, episodeNumber: 2, watchedAt: new Date().toISOString(), rawPayload: {},
   });
   // "1" is both the owner's server-local ID and, here, a friend's Plex.tv account ID.
@@ -1507,6 +1940,316 @@ test("discovering Plex users leaves history unlinked when its account ID belongs
     assert.equal(db.listUsers().length, 4);
   } finally {
     globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
+test("Enrolled lists every enrolled show, including one the Sonarr library cache has not seen yet", () => {
+  // Regression for #196: an automatic enrolment between six-hourly library refreshes
+  // was recorded but missing from Enrolled until someone pressed Refresh.
+  const { db, services, cleanup } = createHarness();
+  const cached: SonarrSeries = {
+    id: 1,
+    title: "Cached Show",
+    year: 2001,
+    seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 3, sizeOnDisk: 5_000 } }],
+    statistics: { sizeOnDisk: 5_000 },
+  };
+  try {
+    db.saveSonarrLibraryCache([{ series: cached, posterUrl: "/images/cached.jpg" }]);
+    db.upsertRollingShow(cached);
+    db.upsertRollingShow({ id: 2, title: "The Graham Norton Show", year: 2007 });
+
+    const enrolled = services.listShows({ enrolledOnly: true });
+    assert.deepEqual(enrolled.map((show) => [show.sonarrSeriesId, show.enrolled]), [[1, true], [2, true]]);
+    // A cached show keeps its Sonarr enrichment; the uncached one uses Pacearr's record.
+    assert.equal(enrolled[0]?.posterUrl, "/images/cached.jpg");
+    assert.equal(enrolled[0]?.sizeOnDiskBytes, 5_000);
+    assert.equal(enrolled[0]?.sonarrDetailsUnavailable, undefined);
+    assert.equal(enrolled[1]?.year, 2007);
+    assert.equal(enrolled[1]?.posterUrl, null);
+    // Its zeroed Sonarr fields are flagged, so the client shows them as unknown.
+    assert.equal(enrolled[1]?.sonarrDetailsUnavailable, true);
+    assert.deepEqual(services.listShows({ enrolledOnly: true, query: "grah" }).map((show) => show.sonarrSeriesId), [2]);
+    // The Sonarr tab remains a view of the library cache.
+    assert.deepEqual(services.listShows().map((show) => show.sonarrSeriesId), [1]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Ignored lists every ignore record, whatever the recommendation cache holds", async () => {
+  const { db, services, cleanup } = createHarness();
+  const candidate = {
+    sonarrSeriesId: 10, title: "Small Savings", year: 2010, posterUrl: null, status: "ended", seasonCount: 2, episodeCount: 20,
+    sizeOnDiskBytes: 500, retainedSeasons: [1], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 400, ignored: false,
+  };
+  try {
+    db.updateAppSettings({ recommendationMinimumSavingsGb: 1 });
+    db.saveRecommendationCache([candidate]);
+    await services.ignoreRecommendation(10, "Small Savings");
+    await services.ignoreRecommendation(11, "Not In Any Cache");
+
+    const result = services.listRecommendations(true);
+    const byId = new Map(result.candidates.map((item) => [item.sonarrSeriesId, item]));
+    assert.equal(result.ignoredCount, 2);
+    assert.deepEqual([...byId.keys()].sort(), [10, 11]);
+    // Below the savings threshold, the cached candidate still supplies its details.
+    assert.equal(byId.get(10)?.projectedSavingsBytes, 400);
+    assert.equal(byId.get(10)?.ignored, true);
+    assert.equal(byId.get(10)?.savingsUnavailable, undefined);
+    // With no cached data, the stored title keeps the record visible and restorable.
+    assert.equal(byId.get(11)?.title, "Not In Any Cache");
+    assert.equal(byId.get(11)?.ignored, true);
+    assert.equal(byId.get(11)?.savingsUnavailable, true);
+    assert.equal(byId.get(11)?.sonarrDetailsUnavailable, true);
+
+    await services.unignoreRecommendation(11);
+    const restored = services.listRecommendations(true);
+    assert.deepEqual(restored.candidates.map((item) => item.sonarrSeriesId), [10]);
+    assert.equal(restored.ignoredCount, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Enrolling a show clears its ignore, and an enrolled show cannot be ignored", async () => {
+  const { db, services, cleanup } = createHarness();
+  const candidate = {
+    sonarrSeriesId: 20, title: "Now Enrolled", year: null, posterUrl: null, status: null, seasonCount: 2, episodeCount: 4,
+    sizeOnDiskBytes: 100, retainedSeasons: [1], droppedSeasons: [2], viewerCount: 0, viewers: [], projectedSavingsBytes: 50, ignored: false,
+  };
+  try {
+    // A recommendation calculated before the enrolment must not keep listing the show.
+    db.saveRecommendationCache([candidate]);
+    assert.equal(await services.ignoreRecommendation(20, "Now Enrolled"), true);
+    db.upsertRollingShow({ id: 20, title: "Now Enrolled" });
+
+    assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+    assert.equal(await services.ignoreRecommendation(20, "Now Enrolled"), false);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+    const result = services.listRecommendations(true);
+    assert.deepEqual(result.candidates, []);
+    assert.equal(result.ignoredCount, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+/**
+ * Sonarr answers its series list with `listed` and each by-ID lookup with the status in
+ * `byIdStatus` (200 when absent); Plex answers poster uploads with `plexPosterStatus`.
+ */
+function installDeletedSeriesFetchStub(listed: SonarrSeries[], byIdStatus: Record<number, number>, plexPosterStatus = 200) {
+  const originalFetch = globalThis.fetch;
+  const posterUploads: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.hostname === "plex" && url.pathname.endsWith("/posters")) {
+      posterUploads.push(url.pathname);
+      return new Response("", { status: plexPosterStatus });
+    }
+    if (url.pathname === "/api/v3/series") return jsonResponse(listed);
+    const byId = url.pathname.match(/^\/api\/v3\/series\/(\d+)$/);
+    if (byId) {
+      const id = Number(byId[1]);
+      const status = byIdStatus[id] ?? 200;
+      return status === 200 ? jsonResponse({ id, title: `Series ${id}` }) : new Response("{}", { status });
+    }
+    throw new Error(`Unhandled fetch in test: ${url.toString()}`);
+  }) as typeof fetch;
+  return { posterUploads, restore: () => { globalThis.fetch = originalFetch; } };
+}
+
+test("A library refresh removes Pacearr records only for series Sonarr confirms deleted", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false });
+  // 2 and 5 are deleted (404); 3 is missing only from a stale list read; 4 and 6 fail to look up.
+  const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 4: 500, 5: 404, 6: 500 });
+  try {
+    for (const id of [1, 2, 3, 4]) db.upsertRollingShow({ id, title: `Series ${id}` });
+    await services.ignoreRecommendation(5, "Series 5");
+    await services.ignoreRecommendation(6, "Series 6");
+
+    await services.refreshSonarrLibrary();
+
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId).sort(), [1, 3, 4]);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), [6]);
+    assert.deepEqual(db.listHistory(10).filter((entry) => entry.action === "show.removed_from_sonarr").map((entry) => entry.title).sort(), ["Series 2", "Series 5"]);
+  } finally {
+    stub.restore();
+    cleanup();
+  }
+});
+
+for (const phase of ["series list", "deletion lookup"] as const) {
+  for (const field of ["baseUrl", "apiKey"] as const) {
+    test(`a Sonarr ${field} change during the ${phase} preserves deleted-series candidates`, async () => {
+      const { db, services, cleanup } = createHarness();
+      db.updateAppSettings({ dryRun: false });
+      db.upsertRollingShow({ id: 2, title: "Enrolled" });
+      db.ignoreRecommendation(3, "Ignored");
+      db.queueSonarrTagRemoval(4, "ignored");
+      const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Listed" }], { 2: 404, 3: 404, 4: 404 });
+      const fakeFetch = globalThis.fetch;
+      let changed = false;
+      const lookups: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (changed && url.pathname === "/api/v3/series") {
+          return jsonResponse([1, 2, 3, 4].map((id) => ({ id, title: `New instance series ${id}` })));
+        }
+        if (/^\/api\/v3\/series\/\d+$/.test(url.pathname)) lookups.push(url.pathname);
+        const response = await fakeFetch(input, init);
+        if (!changed && url.pathname === (phase === "series list" ? "/api/v3/series" : "/api/v3/series/2")) {
+          db.saveSonarrSettings({ ...db.getSonarrSettings()!, [field]: field === "baseUrl" ? "http://new-sonarr:8989" : "new-key" });
+          changed = true;
+        }
+        return response;
+      }) as typeof fetch;
+      try {
+        await services.refreshSonarrLibrary();
+        assert.equal(changed, true);
+        if (phase === "series list") assert.equal(db.getSonarrLibraryCache(), null, "the stale snapshot is not published");
+        assert.deepEqual(lookups, phase === "series list" ? [] : ["/api/v3/series/2"], "no further deletion lookups after a connection change");
+        await services.refreshSonarrLibrary();
+        assert.deepEqual(db.getSonarrLibraryCache()?.items.map((item) => item.series.id), [1, 2, 3, 4]);
+        assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+        assert.deepEqual(db.listIgnoredRecommendationIds(), [3]);
+        assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 4, tag: "ignored" }]);
+        assert.ok(!db.listHistory(10).some((entry) => entry.action === "show.removed_from_sonarr"));
+      } finally {
+        stub.restore();
+        cleanup();
+      }
+    });
+  }
+}
+
+test("a Sonarr connection change during Plex restoration keeps the enrolment and artwork backup", async () => {
+  const { db, services, cleanup } = createHarness();
+  const backupDir = mkdtempSync(path.join(os.tmpdir(), "pacearr-connection-artwork-test-"));
+  const originalPosterPath = path.join(backupDir, "original.jpg");
+  writeFileSync(originalPosterPath, "original poster");
+  db.updateAppSettings({ dryRun: false });
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const rolling = db.upsertRollingShow({ id: 2, title: "Enrolled" });
+  db.ignoreRecommendation(3, "Ignored");
+  db.queueSonarrTagRemoval(2, "ignored");
+  const artwork = db.createPlexArtwork({
+    rollingShowId: rolling.id, plexShowRatingKey: "100", plexItemRatingKey: "101",
+    itemType: "season", seasonNumber: 1, originalPosterPath,
+    overlayPosterPath: path.join(backupDir, "overlay.jpg"), overlaySha256: "abc123",
+  });
+  db.setPlexArtworkOverlayApplied(artwork.id, true);
+  const stub = installDeletedSeriesFetchStub([{ id: 1, title: "Listed" }], { 2: 404, 3: 404 });
+  const fakeFetch = globalThis.fetch;
+  let changed = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const response = await fakeFetch(input, init);
+    if (url.hostname === "plex" && url.pathname.endsWith("/posters")) {
+      db.saveSonarrSettings({ ...db.getSonarrSettings()!, baseUrl: "http://new-sonarr:8989" });
+      changed = true;
+    }
+    return response;
+  }) as typeof fetch;
+  try {
+    await services.refreshSonarrLibrary();
+    assert.equal(changed, true);
+    assert.deepEqual(stub.posterUploads, ["/library/metadata/101/posters"]);
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), [3]);
+    assert.deepEqual(db.listSonarrTagRemovals(), [{ sonarrSeriesId: 2, tag: "ignored" }]);
+    assert.equal(db.listPlexArtwork(rolling.id).length, 1);
+    assert.equal(existsSync(originalPosterPath), true);
+    assert.ok(!db.listHistory(10).some((entry) => entry.action === "show.removed_from_sonarr"));
+
+    // A later refresh can acquire the same show again and finish confirmed cleanup.
+    globalThis.fetch = fakeFetch;
+    await services.refreshSonarrLibrary();
+    assert.equal(db.getRollingShow(rolling.id), null);
+    assert.equal(existsSync(originalPosterPath), false);
+  } finally {
+    stub.restore();
+    rmSync(backupDir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("An empty Sonarr series list or dry run never removes Pacearr records", async () => {
+  const { db, services, cleanup } = createHarness();
+  const stub = installDeletedSeriesFetchStub([], { 2: 404 });
+  try {
+    db.upsertRollingShow({ id: 2, title: "Series 2" });
+    db.updateAppSettings({ dryRun: false });
+    // An empty list could be a misconfigured or freshly reset Sonarr, not a deletion.
+    await services.refreshSonarrLibrary();
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    stub.restore();
+
+    // Dry run changes nothing, Pacearr's own records included; it previews each removal.
+    const dryRunStub = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404, 5: 404 });
+    await services.ignoreRecommendation(5, "Series 5");
+    db.updateAppSettings({ dryRun: true });
+    try {
+      await services.refreshSonarrLibrary();
+      assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+      assert.deepEqual(db.listIgnoredRecommendationIds(), [5]);
+      const history = db.listHistory(10);
+      assert.equal(history.some((entry) => entry.action === "show.removed_from_sonarr"), false);
+      assert.deepEqual(history.filter((entry) => entry.action === "dry_run.show.removed_from_sonarr").map((entry) => entry.title).sort(), ["Series 2", "Series 5"]);
+    } finally {
+      dryRunStub.restore();
+    }
+  } finally {
+    stub.restore();
+    cleanup();
+  }
+});
+
+test("A deleted series keeps its enrolment and artwork backup until Plex artwork is restored or gone", async () => {
+  const { db, services, cleanup } = createHarness();
+  const backupDir = mkdtempSync(path.join(os.tmpdir(), "pacearr-artwork-test-"));
+  const originalPosterPath = path.join(backupDir, "original.jpg");
+  writeFileSync(originalPosterPath, "original poster");
+  db.updateAppSettings({ dryRun: false });
+  db.savePlexSettings({ serverUrl: "http://plex:32400", machineIdentifier: "plex-id", token: "tok" });
+  const rolling = db.upsertRollingShow({ id: 2, title: "Series 2" });
+  const artwork = db.createPlexArtwork({
+    rollingShowId: rolling.id,
+    plexShowRatingKey: "100",
+    plexItemRatingKey: "101",
+    itemType: "season",
+    seasonNumber: 1,
+    originalPosterPath,
+    overlayPosterPath: path.join(backupDir, "overlay.jpg"),
+    overlaySha256: "abc123",
+  });
+  db.setPlexArtworkOverlayApplied(artwork.id, true);
+  try {
+    // An unreachable Plex must not cost the only copy of the original poster.
+    const failing = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404 }, 500);
+    try {
+      await services.refreshSonarrLibrary();
+    } finally {
+      failing.restore();
+    }
+    assert.deepEqual(db.listRollingShows().map((show) => show.sonarrSeriesId), [2]);
+    assert.equal(existsSync(originalPosterPath), true);
+
+    // Plex no longer having the item leaves nothing to restore.
+    const gone = installDeletedSeriesFetchStub([{ id: 1, title: "Still Listed" }], { 2: 404 }, 404);
+    try {
+      await services.refreshSonarrLibrary();
+      assert.deepEqual(gone.posterUploads, ["/library/metadata/101/posters"]);
+    } finally {
+      gone.restore();
+    }
+    assert.deepEqual(db.listRollingShows(), []);
+    assert.equal(existsSync(originalPosterPath), false);
+  } finally {
+    rmSync(backupDir, { recursive: true, force: true });
     cleanup();
   }
 });

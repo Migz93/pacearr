@@ -27,6 +27,27 @@ A history read that returns errors is treated as incomplete: Pacearr records a w
 
 The current UI enroll action sends both `applyBaseline: true` and `importHistory: true`.
 
+### Requested Seasons On Triage Enrolment
+
+Seerr adds a series with only the requested seasons monitored. When automatic triage
+enrols a series and some, but not all, of its real seasons are monitored in Sonarr,
+those seasons were requested and are kept:
+
+| Monitored when triage enrols | Result |
+|---|---|
+| Some real seasons | Each monitored season is recorded as expanded (reason `requested`) before the baseline, which retains it: fully monitored, one `SeasonSearch`. Other seasons get the pilot baseline |
+| Every real season | A whole-show request: the plain pilot baseline, nothing expanded |
+| None | The plain pilot baseline |
+
+The classification is made from the series as read before any Sonarr change. It is
+stored with the pending enrolment and reused on retry. A requested season is then
+managed like any expanded season. With no active viewer,
+the next reconcile starts its inactivity timer and, when **Progressive cleanup** is
+enabled, it is trimmed to E01 after **Cleanup delay**, deleting the other episodes' files
+when file deletion is enabled; a viewer who starts it keeps it. Excluded seasons are never
+expanded. History records `sonarr.expand_season` with `source: "auto-triage"` and
+`reason: "requested"`. A manual enrol from the UI keeps the plain pilot baseline.
+
 ## Early Season Prefetch
 
 Early season prefetch is optional and disabled by default. When enabled, a watch
@@ -50,7 +71,7 @@ inactive or have progressed beyond it). Dry-run previews this cleanup without
 clearing persisted prefetch state. This reclaim, like expanded-season cleanup,
 is disabled when the **Progressive cleanup** setting is disabled.
 
-The settings are under Settings → General → Rolling behaviour:
+The settings are under Settings → General → Watching and expansion:
 
 | Setting | Default | Meaning |
 |---|---:|---|
@@ -142,10 +163,71 @@ Expansion does this:
 2. Set the season-level monitored flag to `true`.
 3. Monitor all episodes in the watched season.
 4. Trigger Sonarr `SeasonSearch`.
-5. Add the season number to `rolling_shows.expanded_seasons`.
+5. Add the season number to `rolling_shows.expanded_seasons`, and its reason (see Expansion Reasons).
 6. Record a `history_events` audit entry.
 
 If the season is already expanded, Pacearr skips the Sonarr mutation and search.
+
+### Manual Expansion
+
+An enrolled show's pilot-only season can be expanded by hand with **Expand** on its
+season row (`POST /api/rolling-shows/:id/seasons/:season/expansion`), for example
+ahead of someone starting it. It takes the series lock and runs the expansion above
+with source and reason `manual`. It is refused, as `ok: false`, for a season that is
+already expanded, excluded, or missing from Sonarr, and while another operation holds
+the show. Dry run records `dry_run.sonarr.expand_season` only. The season is not watch
+activity, so when **Progressive cleanup** is enabled it is trimmed after **Cleanup delay**
+unless someone watches it: E01 stays monitored and, when file deletion is enabled (the
+default), the other episodes' files are deleted. With it disabled, the season stays expanded.
+
+### Expansion Reasons
+
+Each expanded season records why, in `rolling_expanded_seasons`, alongside
+`rolling_shows.expanded_seasons`:
+
+| Reason | Set by | User |
+|---|---|---|
+| `watched` | A viewer's position, any job; also, with no user, a season the reconcile retains from stored progress, a season re-adopted from a Sonarr tag, and seasons expanded before reasons were recorded | The viewer, when known |
+| `finale` | Expand next season on finale | The viewer |
+| `requested` | Triage enrolment of a requested season | — |
+| `manual` | The Expand button | — |
+
+The reason goes wherever the season's expanded state goes: trim, reset, exclusion and
+unenrolment clear it. The show page shows it beside **Expanded**, with a tooltip. A
+`watched` row with no user may have no watch behind it, so it is shown as plain
+**Expanded** with "No reason recorded". Once the reconcile has started an unwatched
+season's inactivity timer, the page also shows the date it trims back to its pilot.
+`sonarr.expand_season` history records the `reason` and `userId`.
+Only `watched` and `finale` update the show's last activity.
+
+## Exclusions
+
+An enrolled show's seasons and individual episodes can be permanently excluded from
+the show detail page, for example seasons that cannot be sourced. They are stored in
+`rolling_excluded_seasons` and `rolling_excluded_episodes` and deleted on unenrolment.
+
+| Action | Sonarr change (once) | Pacearr state |
+|---|---|---|
+| Exclude season | Season flag and every real episode unmonitored | Removed from `expanded_seasons`; its prefetch records cleared, and its episode exclusions cleared if it was expanded (live only) |
+| Include season | E01 monitored and searched if missing (unless E01 is itself excluded) | Back on the pilot-only baseline |
+| Exclude episode | Episode unmonitored | Its prefetch record cleared (live only) |
+| Include episode | Set to the rolling plan's target: monitored when its season is expanded or held by an active viewer, when prefetched, or when it is E01 — unless its season is excluded; searched if now monitored and missing | — |
+
+Excluding never deletes files, and an excluded episode's file is never chosen for
+deletion while it stays excluded. Afterwards every job treats excluded items as follows:
+
+| Rule | Behaviour |
+|---|---|
+| Reconcile, baseline, reset | Excluded items are target-unmonitored and never searched; an excluded season's flag stays off |
+| Expansion | An excluded season is never expanded; expanding a season re-unmonitors its excluded episodes |
+| Trimming | When an expanded season stops being expanded (progressive cleanup, reconcile, reset), its episode exclusions are reset in the same pass and it is trimmed like any other season: E01 monitored, other files deleted. Sonarr rejects a season pack containing an unmonitored episode, so exclusions carried into a later re-expansion would block its packs. Episode exclusions in a season that was never expanded, such as an excluded pilot, are kept. History records the count as `resetExcludedEpisodes` |
+| Prefetch, finale | Nothing happens when the next season is excluded — Pacearr does not skip past it. Excluded episodes are never prefetched |
+| Watch activity | Watching an excluded season or episode still updates viewer progress but triggers no expansion, prefetch, cleanup, or retention of that season |
+| Artwork | An excluded season keeps its original Plex poster |
+| Dry run | The exclusion is stored and applied to every dry-run plan; Sonarr, expanded and prefetch state are not changed, and history records the `dry_run.` action. Reconciliation applies it once live |
+
+History records `show.season_excluded`, `show.season_included`, `show.episode_excluded`
+and `show.episode_included`. Unenrolling re-monitors everything, excluded items included.
 
 ## Per-User Progress
 

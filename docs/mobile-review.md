@@ -10,8 +10,8 @@ non-obvious CSS traps found during the #87 mobile audit.
 | Breakpoint | Where | Purpose |
 |---|---|---|
 | `md` (768px, Tailwind default) | `Layout.tsx` | Sidebar switches between the permanent desktop rail and the off-canvas mobile drawer |
-| `max-[820px]` | Most page headers/controls (`Shows.tsx`, `Users.tsx`, `Settings.tsx`, `Dashboard.tsx`) | Control rows and multi-column grids stack to a single column or reduced column count for tablet-and-below |
-| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone |
+| `max-[820px]` | Most page headers/controls (`Shows.tsx`, `Users.tsx`, `Settings.tsx`, `Dashboard.tsx`), and wide settings rows in `FormControls.tsx` | Control rows and multi-column grids stack to a single column or reduced column count for tablet-and-below; a settings row with a text input drops it under the label |
+| `max-[480px]` | `Users.tsx` viewer grids, `Shows.tsx` poster grid, compact settings rows and the unsaved-changes bar in `FormControls.tsx` | Phone-specific overrides where the 820px tablet value still doesn't leave enough room on a ~375px phone; a number box drops under its label, while a toggle keeps to the right |
 
 Every authenticated route renders inside `Page` (`components/Page.tsx`), which
 sets `mx-auto max-w-7xl p-6`, inside `Layout.tsx`'s content column
@@ -35,11 +35,13 @@ site, linked below — this table is just the operational rule.
 ## How To Verify A Mobile Layout Against A Real Instance
 
 Vite's dev server (`npm run dev:client`) has no API proxy, so it can't
-exercise authenticated routes. Verification needs a rebuilt container (see
-"Rebuilding The Container After Code Changes" in `AGENTS.md`) plus a real
-session:
+exercise authenticated routes. Follow the
+[Manual Smoke Test](../TESTING.md#manual-smoke-test) to build and validate the
+candidate before checking the authenticated layout.
 
-1. Rebuild and recreate the `pacearr` container from the current workspace.
+1. Use the configured disposable instance running the exact candidate image.
+   To verify on the live app, wait until that image is deployed and obtain
+   authorization for tests involving live data or real integrations.
 2. Get a fresh `pacearr_session` cookie (see `TESTING.md`'s Playwright setup)
    into `tests/playwright/.auth/storageState.json`, matching the `domain` the
    instance is actually reached at — a cookie saved for one host isn't sent

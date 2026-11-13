@@ -51,6 +51,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
     requests.push({ method: (init?.method ?? "GET").toUpperCase(), pathname: url.pathname, body: typeof init?.body === "string" ? init.body : undefined });
     if (url.hostname === "tautulli") {
       const command = url.searchParams.get("cmd");
+      if (command === "get_settings") return new Response(JSON.stringify({ response: { result: "success", data: { pms_uuid: "tautulli-install" } } }), { status: 200, headers: { "content-type": "application/json" } });
       if (command === "get_activity") return new Response(JSON.stringify({ response: { result: "success", data: { sessions: [{
         media_type: "episode", session_key: "7", session_id: sessionId, user_id: activityUserId, username: activityUsername, user: "Gina",
         grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: ratingKey, parent_media_index: seasonNumber, media_index: 2,
@@ -90,7 +91,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
     assert.equal(db.getUser(gina!.id)?.tautulliUsername, "gina");
     assert.deepEqual(db.getRollingShowBySeriesId(31)?.expandedSeasons, [2]);
     assert.equal(db.countWatchEvents(), 1);
-    assert.equal(db.getLatestWatchEventAt("tautulli"), null);
+    assert.equal(db.getLatestWatchEventAt("tautulli", "tautulli-install"), null);
     assert.equal(requests.filter((request) => request.method === "POST" && request.pathname === "/api/v3/command" && request.body === JSON.stringify({ name: "SeasonSearch", seriesId: 31, seasonNumber: 2 })).length, 1);
 
     // A poll can repair both links at once. In dry-run mode, the repair must
@@ -120,7 +121,7 @@ test("an active Tautulli session retries expansion after a series-operation coll
     activityUserId = "tautulli-gina";
     activityUsername = "gina";
     db.insertWatchEvent({
-      source: "tautulli-session", sourceEventId: "session:session-3:103", userId: null,
+      source: "tautulli-session", sourceConnection: "tautulli-install", sourceEventId: "session:session-3:103", userId: null,
       plexAccountId: null, username: "gina", sonarrSeriesId: 31, showTitle: "The Wire",
       seasonNumber: 3, episodeNumber: 2, watchedAt: "2023-11-14T22:13:20.000Z", rawPayload: {},
     });
@@ -144,6 +145,7 @@ test("a reused Tautulli session key is a new playback event, while repeated poll
       media_type: "episode", session_key: "39", session_id: sessionId, user_id: "1", grandparent_title: "The Wire", grandparent_rating_key: "11", rating_key: "101",
       parent_media_index: 1, media_index: 10,
     }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_settings") return new Response(JSON.stringify({ response: { result: "success", data: { pms_uuid: "tautulli-install" } } }), { status: 200, headers: { "content-type": "application/json" } });
     if (url.hostname === "tautulli" && url.searchParams.get("cmd") === "get_metadata") return new Response(JSON.stringify({ response: { result: "success", data: { guids: [] } } }), { status: 200, headers: { "content-type": "application/json" } });
     if (url.pathname === "/api/v3/series") return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
     throw new Error(`Unhandled fetch: ${url}`);

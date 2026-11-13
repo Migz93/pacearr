@@ -5,6 +5,7 @@ import sharp from "sharp";
 import type { PlexArtworkRecord, RollingShowRecord, SonarrSeries } from "../shared/types.js";
 import type { PacearrDatabase } from "./db/index.js";
 import { PlexIntegration, type PlexEpisodeArtworkItem, type PlexSeasonArtworkItem } from "./integrations/plex.js";
+import { formatIntegrationError, isNotFoundError } from "./integrations/request.js";
 import type { Logger } from "./logger.js";
 
 type ArtworkItem = { ratingKey: string; seasonNumber: number; thumb: string; episodeNumber?: number };
@@ -42,9 +43,9 @@ export class PlexArtworkService {
   }
 
   async syncShow(plex: PlexIntegration, rolling: RollingShowRecord, series: SonarrSeries, retainedSeasons: number[]): Promise<void> {
-    const show = await plex.findShowForArtwork({ tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
+    const show = await plex.findShowForArtwork({ tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null, path: series.path ?? null });
     if (!show) {
-      this.logger.warn("Plex artwork skipped; no exact TVDB or IMDb match", { seriesId: series.id, title: series.title, tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
+      this.logger.warn("Plex artwork skipped; no single Plex show to update", { seriesId: series.id, title: series.title, tvdbId: series.tvdbId ?? null, imdbId: series.imdbId ?? null });
       return;
     }
     if (show.thumb) await this.overlayItem(plex, rolling, show.ratingKey, { ratingKey: show.ratingKey, seasonNumber: 0, thumb: show.thumb }, "show");
@@ -60,14 +61,24 @@ export class PlexArtworkService {
           if (pilot) await this.overlayItem(plex, rolling, show.ratingKey, pilot, "episode");
         }
       } catch (error) {
-        this.logger.warn("Plex rolling artwork update failed", { seriesId: series.id, seasonNumber: season.seasonNumber, error: error instanceof Error ? error.message : String(error) });
+        this.logger.warn("Plex rolling artwork update failed", { seriesId: series.id, seasonNumber: season.seasonNumber, error: formatIntegrationError(error) });
       }
     }
   }
 
-  async restoreAll(plex: PlexIntegration, rollingShowId: number): Promise<void> {
+  /**
+   * `skipMissingItems` treats a Plex item that no longer exists as having nothing to
+   * restore, for a show whose series was deleted, rather than failing the whole restore.
+   */
+  async restoreAll(plex: PlexIntegration, rollingShowId: number, options: { skipMissingItems?: boolean } = {}): Promise<void> {
     for (const record of this.db.listPlexArtwork(rollingShowId).filter((item) => item.overlayApplied)) {
-      await plex.uploadPoster(record.plexItemRatingKey, fs.readFileSync(record.originalPosterPath));
+      try {
+        await plex.uploadPoster(record.plexItemRatingKey, fs.readFileSync(record.originalPosterPath));
+      } catch (error) {
+        if (!options.skipMissingItems || !isNotFoundError(error)) throw error;
+        this.logger.info("Plex item no longer exists; no rolling artwork to restore", { rollingShowId, itemType: record.itemType, seasonNumber: record.seasonNumber });
+        continue;
+      }
       this.db.setPlexArtworkOverlayApplied(record.id, false);
       this.logger.info("Plex rolling artwork restored", { rollingShowId, itemType: record.itemType, seasonNumber: record.seasonNumber });
     }
@@ -77,7 +88,7 @@ export class PlexArtworkService {
     const showDirs = new Set<string>();
     for (const record of records) for (const filePath of [record.originalPosterPath, record.overlayPosterPath]) {
       try { fs.unlinkSync(filePath); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork backup", { filePath, error: error instanceof Error ? error.message : String(error) });
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork backup", { filePath, error: formatIntegrationError(error) });
       }
       const dir = path.dirname(filePath);
       // Records that predate the per-show folder migration still point at
@@ -90,7 +101,7 @@ export class PlexArtworkService {
     for (const dir of showDirs) {
       try { fs.rmdirSync(dir); } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOTEMPTY" && code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork show folder", { dir, error: error instanceof Error ? error.message : String(error) });
+        if (code !== "ENOTEMPTY" && code !== "ENOENT") this.logger.warn("Failed to remove Plex artwork show folder", { dir, error: formatIntegrationError(error) });
       }
     }
   }

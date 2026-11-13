@@ -80,7 +80,12 @@ scheduler.registerRecurringJob({
   id: "new-show-triage",
   intervalMs: settings.newShowTriageIntervalMinutes * 60 * 1000,
   enabled: settings.newShowTriageEnabled,
-  task: () => services.triageNewSonarrSeries(),
+  task: async () => {
+    const enrolled = await services.triageNewSonarrSeries();
+    // Enrolled listing does not depend on the library cache, but a refresh gives a new
+    // show its poster and Sonarr stats without waiting for the library schedule.
+    if (enrolled > 0) scheduler.runNowOrQueue("sonarr-library-refresh");
+  },
 });
 if (isReady() && (!db.getSonarrLibraryCache() || !db.getRecommendationCache())) {
   logger.info("Sonarr library or recommendation cache is empty; scheduling initial refresh");

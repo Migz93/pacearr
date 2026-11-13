@@ -68,7 +68,7 @@ When changing the schema in the future:
 
 The Shows page reads the shared Sonarr library snapshot from SQLite and overlays Pacearr enrollment state from `rolling_shows`, so opening or searching the page does not wait on Sonarr. Its Refresh action starts the `sonarr-library-refresh` job, which owns routine whole-library fetching and caching of missing posters. `recommendation-refresh` separately recalculates recommendations from that snapshot on its own configurable schedule, at initial setup, or on demand; it does not repeat the whole-library fetch. History processing uses the snapshot, falling back to a direct fetch only before the first cache exists. Session processing also makes one direct fetch when an active session is absent from the cached snapshot.
 
-Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run one full verified history reconciliation immediately to repair older unmatched source events and apply pending active progress. New-show triage coalesces that reconciliation after its automatic enrollment batch.
+Enrolling a show creates or updates one `rolling_shows` row keyed by Sonarr series id. Enrollment can apply the all-season-pilot baseline and run one full verified history reconciliation immediately to repair older unmatched source events and apply pending active progress. New-show triage coalesces that reconciliation after its automatic enrollment batch. When an enrollment needs a full history read, Pacearr stores a cleanup guard with the enrollment. The guard survives a restart and remains until a successful full reconciliation rebuilds viewer history.
 
 Every Sonarr series can be opened at `/shows/:seriesId`, whether or not it is enrolled. The detail view shows current Sonarr monitoring, seasons and episodes, plus matched viewer progress. Unenrolled shows offer an Enroll action; enrolled shows offer Reset and Unenroll. In live mode, Unenroll restores any Pacearr-managed Plex artwork and re-monitors the Sonarr series, seasons, and episodes before removing Pacearr's enrollment and rolling-progress state. It does not search for or delete media, and requests a background recommendation refresh after completing.
 
@@ -80,7 +80,7 @@ Recommendation calculations are stored in `recommendation_cache` so page loads d
 
 Plex playback history is imported through `/status/sessions/history/all`. Tautulli history is imported through `get_history` when configured and enabled. Its separately scheduled `get_activity` episode polling records active playback under a distinct source, so it cannot advance the completed-history import cursor.
 
-Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_event_id)`.
+Imported rows are normalised into `watch_events`. Re-imports are idempotent by `(source, source_connection, source_event_id)`: Plex history keys and Tautulli reference IDs are only unique within one server, so each event records the server it came from (see [jobs-and-history.md](jobs-and-history.md#watch-events)).
 
 ### Live session monitoring
 
@@ -117,7 +117,9 @@ Plex, Sonarr, and Tautulli base URLs must be credential-free HTTP(S) URLs withou
 When enabled, the `new-show-triage` job polls Sonarr on a configurable interval
 (default every five minutes) and acts only on series added after its activation
 boundary. It searches smaller arrivals in full and enrolls larger arrivals onto
-the pilot baseline. Completed
+the pilot baseline, keeping any seasons requested on arrival (some, but not all,
+real seasons monitored) expanded. With **Search newly monitored seasons** on, a season monitored later
+on any unenrolled series is searched once as it becomes monitored. Completed
 decisions and partial automatic enrollments are persisted independently of the
 replaceable Sonarr cache, so retries resume only Pacearr-initiated work and
 never alter a manual enrollment.
@@ -142,7 +144,8 @@ It is designed as an operational admin surface rather than a public landing page
 - New-show triage is disabled by default and never changes series that predate its activation boundary.
 - Specials, season `0`, are ignored by rolling baseline and expansion logic.
 - All-season-pilot baseline keeps E01 of every real season monitored and searches those pilot episodes.
-- Expanded seasons are stored as a sorted unique season-number array.
+- Expanded seasons are stored as a sorted unique season-number array. Each one's reason (`watched`, `finale`, `requested`, `manual`) is stored in `rolling_expanded_seasons` and cleared wherever the season stops being expanded.
 - Duplicate imported watch events must not retrigger Sonarr actions.
 - Disabled users do not trigger expansion and should not block cleanup.
 - Destructive cleanup must be auditable through `history_events`.
+- Excluded seasons and episodes are never monitored, searched, expanded, or deleted by Pacearr while excluded. Trimming an expanded season resets its episode exclusions first.

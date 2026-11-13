@@ -79,6 +79,8 @@ export interface TautulliSettingsView {
 export interface AppSettings {
   dryRun: boolean;
   artworkEnabled: boolean;
+  /** Opt-in: mirror enrolments and ignores onto Sonarr series as Pacearr tags. */
+  sonarrTagsEnabled: boolean;
   viewerActivityWindowDays: number;
   historyRetentionDays: number;
   sessionPollIntervalMinutes: number;
@@ -103,6 +105,13 @@ export interface AppSettings {
   newShowTriageEpisodeThreshold: number;
   /** Internal activation boundary; series already in Sonarr before this instant are ignored. */
   newShowTriageEnabledAt: string | null;
+  /** Searches a season once it becomes monitored on an unenrolled series. Runs in the triage poll. */
+  searchNewlyMonitoredSeasonsEnabled: boolean;
+  /**
+   * Internal; incremented each time the season check becomes active (it and triage both on,
+   * after either was off), so a poll that started under an earlier activation stops.
+   */
+  searchNewlyMonitoredSeasonsActivation: number;
 }
 
 export interface PlexArtworkRecord {
@@ -195,10 +204,13 @@ export interface SonarrSeries {
   tvdbId?: number;
   imdbId?: string | null;
   year?: number;
+  path?: string;
   status?: string;
   added?: string;
   monitored?: boolean;
   monitorNewItems?: "all" | "none";
+  /** Sonarr tag IDs. Pacearr only ever adds or removes its own two tags. */
+  tags?: number[];
   images?: Array<{
     coverType?: string;
     url?: string;
@@ -261,6 +273,8 @@ export interface ShowListItem {
   sizeOnDiskBytes: number;
   viewerCount: number;
   viewers: ShowUserProgress[];
+  /** Listed from Pacearr's own record before the library cache has the show: season, episode, size and status fields are placeholders, not Sonarr values. */
+  sonarrDetailsUnavailable?: boolean;
 }
 
 export interface ShowSeasonSummary {
@@ -272,7 +286,29 @@ export interface ShowSeasonSummary {
   watchedUsers: number;
   latestWatchedAt: string | null;
   isExpanded: boolean;
+  /** Why an expanded season was expanded, and when it trims back to its pilot; null when not expanded. */
+  expansion: SeasonExpansionSummary | null;
+  /** Permanently excluded from rolling management; never monitored or searched by Pacearr. */
+  excluded: boolean;
   prefetchedEpisodes: PrefetchedEpisodeSummary[];
+}
+
+/**
+ * - `watched`: a viewer started the season (or the reason predates tracking).
+ * - `finale`: a viewer reached the previous season's last episode.
+ * - `requested`: monitored in Sonarr when triage auto-enrolled the show.
+ * - `manual`: the Expand button on the show page.
+ */
+export type SeasonExpansionReason = "watched" | "finale" | "requested" | "manual";
+
+export interface SeasonExpansionSummary {
+  reason: SeasonExpansionReason;
+  /** Null when unknown, e.g. seasons expanded before reasons were recorded. */
+  expandedAt: string | null;
+  userId: number | null;
+  displayName: string | null;
+  /** When the inactivity timer trims the season back to its pilot, if nobody watches it first. */
+  trimsAt: string | null;
 }
 
 export interface PrefetchedEpisodeSummary {
@@ -293,6 +329,12 @@ export interface PrefetchedEpisodeRecord {
   triggeredAt: string;
 }
 
+/** Seasons and episodes of one enrolled show that Pacearr must never monitor or search. */
+export interface RollingExclusions {
+  seasons: number[];
+  episodes: Array<{ seasonNumber: number; episodeNumber: number }>;
+}
+
 export interface ShowEpisodeSummary {
   id: number;
   seasonNumber: number;
@@ -301,6 +343,8 @@ export interface ShowEpisodeSummary {
   airDate: string | null;
   monitored: boolean;
   targetMonitored: boolean;
+  /** This episode itself is excluded; an excluded season is reported on the season. */
+  excluded: boolean;
   hasFile: boolean;
   watchedUsers: number;
   latestWatchedAt: string | null;
@@ -359,6 +403,10 @@ export interface ShowRecommendation {
   viewers: ShowUserProgress[];
   projectedSavingsBytes: number;
   ignored: boolean;
+  /** An ignored show with no library cache entry: season, episode, size and status fields are placeholders. */
+  sonarrDetailsUnavailable?: boolean;
+  /** An ignored show with no calculated recommendation: savings and retained/dropped seasons are placeholders. */
+  savingsUnavailable?: boolean;
 }
 
 export interface RecommendationsResponse {
@@ -482,6 +530,32 @@ export interface AboutInfo {
 export interface ConnectionTestResult {
   ok: boolean;
   message: string;
+}
+
+/** Pacearr's own Sonarr tags, mirroring its enrolments and ignores. No other tag is ever touched. */
+export type PacearrSonarrTag = "enrolled" | "ignored";
+
+export interface SonarrTagImportShow {
+  sonarrSeriesId: number;
+  title: string;
+}
+
+/** What an import from Sonarr tags would do, computed before anything is written. */
+export interface SonarrTagImportPreview {
+  confirmationToken: string;
+  toEnroll: SonarrTagImportShow[];
+  toIgnore: SonarrTagImportShow[];
+  /** Tagged shows Pacearr already has a record for; the import leaves them as they are. */
+  alreadyKnown: SonarrTagImportShow[];
+  /** Shows carrying both Pacearr tags, which only a manual edit in Sonarr can cause. */
+  conflicts: SonarrTagImportShow[];
+}
+
+export interface SonarrTagImportResult {
+  ok: boolean;
+  message: string;
+  enrolled: number;
+  ignored: number;
 }
 
 export interface RunResult {

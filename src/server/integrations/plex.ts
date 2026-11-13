@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import { parseStringPromise } from "xml2js";
 import type { ConnectionTestResult, PlexSettingsInput } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { createProgressLog } from "../progress-log.js";
 import { PLEX_USER_AGENT } from "../version.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError, IntegrationHttpError } from "./request.js";
 
 const PLEX_TV_ACCOUNT_URL = "https://plex.tv/users/account.json";
 const PLEX_TV_RESOURCES_URL = "https://plex.tv/api/v2/resources";
@@ -74,6 +75,12 @@ function unixToIso(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? new Date(parsed * 1000).toISOString() : new Date().toISOString();
 }
 
+// Sonarr and Plex paths are compared exactly; only a trailing separator is
+// ignored. Differing mount points are deliberately not mapped (#201).
+function normalizeFolder(folder: string) {
+  return folder.replace(/[\\/]+$/, "");
+}
+
 export function buildPlexServerUrl(serverUrl: string, pathname: string): URL {
   return buildIntegrationUrl(serverUrl, pathname);
 }
@@ -135,7 +142,7 @@ export class PlexIntegration {
     const url = this.buildServerUrl(pathname);
     url.searchParams.set("X-Plex-Token", this.settings.token);
     const response = await fetchIntegration(url, { headers: { "User-Agent": PLEX_USER_AGENT, Accept: "application/xml" } }, timeoutMs);
-    if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new IntegrationHttpError(`Plex ${response.status} ${response.statusText}`, response.status);
     return parseStringPromise(await response.text(), { explicitArray: false, mergeAttrs: false });
   }
 
@@ -146,7 +153,7 @@ export class PlexIntegration {
       ...options,
       headers: { "User-Agent": PLEX_USER_AGENT, ...(options.headers ?? {}) },
     });
-    if (!response.ok) throw new Error(`Plex ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new IntegrationHttpError(`Plex ${response.status} ${response.statusText}`, response.status);
     return response;
   }
 
@@ -157,8 +164,8 @@ export class PlexIntegration {
       this.logger.info("Plex connection test succeeded", { machineIdentifier: machineIdentifier ?? null });
       return { ok: true, message: `Connected to Plex${machineIdentifier ? ` (${machineIdentifier})` : ""}.` };
     } catch (error) {
-      this.logger.warn("Plex connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Plex connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 
@@ -195,7 +202,7 @@ export class PlexIntegration {
         });
       }
     } catch (error) {
-      this.logger.warn("Failed to fetch Plex friends; continuing with owner", { error: error instanceof Error ? error.message : String(error) });
+      this.logger.warn("Failed to fetch Plex friends; continuing with owner", { error: formatIntegrationError(error) });
     }
     return users;
   }
@@ -205,6 +212,7 @@ export class PlexIntegration {
     const cutoff = since ? new Date(since).getTime() : null;
     let start = 0;
     const size = 1000;
+    const progress = createProgressLog(this.logger, "Plex playback history fetch progress", null);
     for (;;) {
       const data = await this.requestServerXml(`/status/sessions/history/all?sort=viewedAt%3Adesc&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}`, 60_000);
       const videos = toArray(data?.MediaContainer?.Video);
@@ -214,6 +222,7 @@ export class PlexIntegration {
         if (normalized) pageEvents.push(normalized);
       }
       events.push(...pageEvents.filter((event) => cutoff === null || new Date(event.watchedAt).getTime() >= cutoff));
+      progress.tick(videos.length);
       if (videos.length < size) break;
       if (cutoff !== null && pageEvents.some((event) => new Date(event.watchedAt).getTime() < cutoff)) break;
       start += size;
@@ -265,8 +274,12 @@ export class PlexIntegration {
     return ids.tvdbId || ids.imdbId ? { status: "resolved", ...ids } : { status: "missing", ...ids };
   }
 
-  /** Finds a show only by immutable external IDs. Artwork changes must never use a title match. */
-  async findShowForArtwork(ids: { tvdbId: number | null; imdbId: string | null }): Promise<PlexShowArtworkItem | null> {
+  /**
+   * Finds a show only by immutable external IDs. Artwork changes must never use a title match.
+   * `path` is Sonarr's folder for the series; it only breaks a tie between copies of the
+   * same Plex show in several libraries, and never overrides the ID match.
+   */
+  async findShowForArtwork(ids: { tvdbId: number | null; imdbId: string | null; path?: string | null }): Promise<PlexShowArtworkItem | null> {
     if (!ids.tvdbId && !ids.imdbId) return null;
     const sections = await this.requestServerXml("/library/sections");
     const tvSections = toArray(sections?.MediaContainer?.Directory)
@@ -282,7 +295,10 @@ export class PlexIntegration {
       matches: (await Promise.all(tvSections.map((section) => this.findArtworkGuidInSection(section, identifier)))).flat(),
     })));
     const nonEmpty = matchesByIdentifier.filter((result) => result.matches.length > 0);
-    if (nonEmpty.length === 0) return null;
+    if (nonEmpty.length === 0) {
+      this.logger.warn("Plex artwork lookup found no show by ID", { identifiers });
+      return null;
+    }
 
     // All supplied identifiers must resolve to the same Plex show. A bad
     // upstream match must never change an unrelated library item's poster.
@@ -293,20 +309,42 @@ export class PlexIntegration {
     const candidates = nonEmpty.flatMap((result) => result.matches).filter((match, index, matches) =>
       canonicalGuids.has(match.guid) && matches.findIndex((other) => other.sectionKey === match.sectionKey && other.ratingKey === match.ratingKey) === index
     );
-    if (candidates.length !== 1) {
-      this.logger.warn("Plex artwork lookup is missing or ambiguous", {
+    if (candidates.length === 0 || new Set(candidates.map((candidate) => candidate.guid)).size > 1) {
+      this.logger.warn("Plex artwork lookup matched different shows", {
         identifiers,
-        matches: candidates.map((candidate) => ({ section: candidate.sectionTitle, ratingKey: candidate.ratingKey, guid: candidate.guid })),
+        matches: nonEmpty.flatMap((result) => result.matches.map((match) => ({ identifier: result.identifier, section: match.sectionTitle, ratingKey: match.ratingKey, guid: match.guid }))),
       });
       return null;
     }
-    const item = candidates[0]!;
+    let item = candidates[0]!;
+    if (candidates.length > 1) {
+      // The same Plex show in several libraries. Only the copy in Sonarr's
+      // folder reflects the seasons Pacearr keeps, so only it gets artwork.
+      const tied = await Promise.all(candidates.map(async (candidate) => ({ ...candidate, folders: await this.getItemFolders(candidate.ratingKey) })));
+      const sonarrFolder = ids.path ? normalizeFolder(ids.path) : null;
+      const inSonarrFolder = sonarrFolder ? tied.filter((candidate) => candidate.folders.some((folder) => normalizeFolder(folder) === sonarrFolder)) : [];
+      if (inSonarrFolder.length !== 1) {
+        this.logger.warn("Plex artwork lookup found the same show in several libraries, but not exactly one in Sonarr's folder", {
+          identifiers,
+          sonarrPath: ids.path ?? null,
+          matches: tied.map((candidate) => ({ section: candidate.sectionTitle, ratingKey: candidate.ratingKey, folders: candidate.folders })),
+        });
+        return null;
+      }
+      item = inSonarrFolder[0]!;
+    }
     const children = await this.requestServerXml(`/library/metadata/${encodeURIComponent(item.ratingKey)}/children`);
     const seasons = toArray(children?.MediaContainer?.Directory)
       .map((season) => attr(season))
       .filter((season) => season.type === "season" && Number(season.index) > 0 && season.ratingKey && season.thumb)
       .map((season) => ({ ratingKey: String(season.ratingKey), seasonNumber: Number(season.index), thumb: String(season.thumb) }));
     return { ratingKey: item.ratingKey, thumb: String(item.thumb ?? ""), seasons };
+  }
+
+  private async getItemFolders(ratingKey: string): Promise<string[]> {
+    const data = await this.requestServerXml(`/library/metadata/${encodeURIComponent(ratingKey)}`);
+    const item = first(data?.MediaContainer?.Directory ?? data?.MediaContainer?.Metadata);
+    return toArray(item?.Location).map((location) => String(attr(location).path ?? "")).filter(Boolean);
   }
 
   async getSeasonPilotArtwork(season: PlexSeasonArtworkItem): Promise<PlexEpisodeArtworkItem | null> {
@@ -321,7 +359,9 @@ export class PlexIntegration {
     // Plex's native TV agent resolves an external ID through an item's matches
     // endpoint. The resulting Plex GUID is then filtered directly in this
     // library section, avoiding both title matching and full-library scans.
-    const firstPage = await this.requestServerXml(`/library/sections/${encodeURIComponent(section.key)}/all?type=2&X-Plex-Container-Size=1`);
+    // Plex ignores X-Plex-Container-Size without X-Plex-Container-Start and
+    // returns the whole section, which times out on large libraries (#200).
+    const firstPage = await this.requestServerXml(`/library/sections/${encodeURIComponent(section.key)}/all?type=2&X-Plex-Container-Start=0&X-Plex-Container-Size=1`);
     const seed = toArray(firstPage?.MediaContainer?.Directory).map((item) => attr(item)).find((item) => item.ratingKey);
     if (!seed?.ratingKey) return [];
     const matches = await this.requestServerXml(`/library/metadata/${encodeURIComponent(String(seed.ratingKey))}/matches?manual=1&agent=${encodeURIComponent(section.agent)}&title=${encodeURIComponent(externalGuid.replace("://", "-"))}`);
@@ -339,7 +379,21 @@ export class PlexIntegration {
   }
 
   async downloadPoster(thumb: string): Promise<Buffer> {
-    const response = await this.requestServer(thumb, { headers: { Accept: "image/jpeg,image/png,image/webp,image/*" } });
+    const options = { headers: { Accept: "image/jpeg,image/png,image/webp,image/*" } };
+    let response: Response;
+    try {
+      response = await this.requestServer(thumb, options);
+    } catch (error) {
+      // Keep direct image bytes for overlay hash comparisons. Only Plex's remote
+      // thumbnail redirect needs the transcoder; never follow it with our token.
+      if (!(error instanceof Error && error.cause instanceof Error && error.cause.message === "unexpected redirect")) throw error;
+      // Plex resolves the source internally, without a reverse proxy's prefix.
+      // Validate it against the server origin and authenticate only that local path.
+      const source = buildIntegrationUrl(new URL(this.settings.serverUrl).origin, thumb);
+      source.searchParams.set("X-Plex-Token", this.settings.token);
+      const params = new URLSearchParams({ url: source.pathname + source.search, width: "1920", height: "1920", minSize: "0", upscale: "0" });
+      response = await this.requestServer(`/photo/:/transcode?${params}`, options);
+    }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.startsWith("image/")) throw new Error("Plex poster download returned a non-image response.");
     return Buffer.from(await response.arrayBuffer());

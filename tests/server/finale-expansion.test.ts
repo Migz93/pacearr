@@ -50,7 +50,7 @@ function createHarness(settings: Partial<AppSettings>, options: { episodes?: Son
   ]);
   db.updateUser(gina!.id, { enabled: true });
   const rolling = db.upsertRollingShow(nineOneOne);
-  if (options.expandSeasonOne ?? true) db.markSeasonExpanded(rolling.id, 1, new Date().toISOString());
+  if (options.expandSeasonOne ?? true) db.markSeasonExpanded(rolling.id, 1, new Date().toISOString(), { reason: "watched" });
 
   let episodes = options.episodes ?? nineOneOneEpisodes();
   let sessionsXml = '<?xml version="1.0"?><MediaContainer size="0"></MediaContainer>';
@@ -125,7 +125,8 @@ test("starting a season's last episode expands the whole next season, with early
     assert.equal(harness.requests.some((request) => request.pathname === "/api/v3/episode/monitor" && request.body === JSON.stringify({ episodeIds: [7202, 7203, 7204, 7205], monitored: true })), true);
     const history = harness.db.listHistory(20).filter((entry) => entry.action === "sonarr.expand_season");
     assert.equal(history.length, 1);
-    assert.deepEqual(JSON.parse(String(history[0]!.details)), { seasonNumber: 2, source: "plex-session-finale", monitoredEpisodes: 4, dryRun: false });
+    const gina = harness.db.listUsers().find((user) => user.username === "gina")!;
+    assert.deepEqual(JSON.parse(String(history[0]!.details)), { seasonNumber: 2, source: "plex-session-finale", reason: "finale", userId: gina.id, monitoredEpisodes: 4, dryRun: false });
   } finally {
     harness.cleanup();
   }
@@ -299,7 +300,7 @@ test("enrolment applies a stored finale watch the same way a live watch would", 
     const user = harness.db.listUsers().find((item) => item.username === "gina")!;
     harness.db.deleteRollingShow(harness.rollingShowId);
     harness.db.insertWatchEvent({
-      source: "plex-history", sourceEventId: "finale-before-enrolment", userId: user.id, plexAccountId: "42", username: "gina",
+      source: "plex-history", sourceConnection: "plex-id", sourceEventId: "finale-before-enrolment", userId: user.id, plexAccountId: "42", username: "gina",
       sonarrSeriesId: 71, showTitle: "9-1-1", seasonNumber: 1, episodeNumber: 10, watchedAt: new Date().toISOString(), rawPayload: {},
     });
 
@@ -329,7 +330,7 @@ async function enrollWithStoredProgress(settings: Partial<AppSettings>, episodeN
   const user = harness.db.listUsers().find((item) => item.username === "gina")!;
   harness.db.deleteRollingShow(harness.rollingShowId);
   harness.db.insertWatchEvent({
-    source: "plex-history", sourceEventId: `s1e${episodeNumber}-before-enrolment`, userId: user.id, plexAccountId: "42", username: "gina",
+    source: "plex-history", sourceConnection: "plex-id", sourceEventId: `s1e${episodeNumber}-before-enrolment`, userId: user.id, plexAccountId: "42", username: "gina",
     sonarrSeriesId: 71, showTitle: "9-1-1", seasonNumber: 1, episodeNumber, watchedAt: new Date().toISOString(), rawPayload: {},
   });
   try {

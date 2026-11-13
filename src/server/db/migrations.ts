@@ -457,6 +457,178 @@ const migrations: Migration[] = [
       db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
     },
   },
+  {
+    // Seasons and individual episodes an administrator has permanently excluded from
+    // rolling management, for example seasons that cannot be sourced. They belong to
+    // the enrolment, so unenrolling removes them.
+    version: 24,
+    up(db) {
+      db.exec(`
+        CREATE TABLE rolling_excluded_seasons (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          excluded_at TEXT NOT NULL,
+          PRIMARY KEY (rolling_show_id, season_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE
+        );
+        CREATE TABLE rolling_excluded_episodes (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          excluded_at TEXT NOT NULL,
+          PRIMARY KEY (rolling_show_id, season_number, episode_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE
+        );
+      `);
+    },
+  },
+  {
+    // A show is never both enrolled and ignored: enrolment now clears the ignore record.
+    // Remove the overlaps that earlier versions allowed.
+    version: 25,
+    up(db) {
+      db.exec("DELETE FROM ignored_recommendations WHERE sonarr_series_id IN (SELECT sonarr_series_id FROM rolling_shows)");
+    },
+  },
+  {
+    // Pacearr mirrors enrolments and ignores onto Sonarr series as tags. A tag removal
+    // that could not be sent (Sonarr unreachable, or dry run) is kept here and retried,
+    // so a stale tag cannot survive to be imported back later.
+    // A show re-adopted from its tag has no viewer progress until a full history read
+    // completes; awaiting_history_since keeps cleanup off it until then.
+    version: 26,
+    up(db) {
+      db.exec(`
+        ALTER TABLE rolling_shows ADD COLUMN awaiting_history_since TEXT;
+        CREATE TABLE sonarr_tag_removals (
+          sonarr_series_id INTEGER NOT NULL,
+          tag TEXT NOT NULL CHECK (tag IN ('enrolled', 'ignored')),
+          queued_at TEXT NOT NULL,
+          PRIMARY KEY (sonarr_series_id, tag)
+        );
+      `);
+    },
+  },
+  {
+    // Plex history keys and Tautulli reference IDs are only unique within one server, so
+    // a watch event's identity now includes the connection it came from. Otherwise a new
+    // server's event that reused an old server's ID was dropped as a duplicate. Which
+    // server an existing row came from is unknown: the one configured now may have
+    // replaced it. So existing rows are stamped with the configured URL fallback, never a
+    // stable ID, and the Plex cursor is restamped to match. The first import that resolves
+    // a stable ID therefore reads that source in full (while none is reported, the URL is
+    // the connection and its cursor resumes). insertWatchEvent moves a row to the stable
+    // ID only when that read reports the same watch; any other row stays under the URL.
+    version: 27,
+    up(db) {
+      const read = <T>(key: string): T | null => {
+        const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+        if (!row) return null;
+        try { return JSON.parse(row.value) as T; } catch { return null; }
+      };
+      // A hand-edited setting can hold any JSON; binding a non-string would throw and block
+      // startup, so it counts as missing, like an unconfigured source.
+      const text = (value: unknown) => typeof value === "string" ? value : "";
+      const plex = read<{ serverUrl?: unknown; machineIdentifier?: unknown }>("plex");
+      const tautulli = read<{ baseUrl?: unknown }>("tautulli");
+      const plexUrl = text(plex?.serverUrl);
+      const tautulliUrl = text(tautulli?.baseUrl);
+      // Migration 23 stamped the Plex cursor with the machine identifier, which would resume
+      // it and skip the full read. A Tautulli cursor already holds the URL.
+      const sync = read<{ plex?: unknown }>("historySync");
+      if (plexUrl && sync?.plex && typeof sync.plex === "object") {
+        const cursor = sync.plex as { connection?: unknown };
+        if (cursor.connection === plexHistoryConnection({ serverUrl: plexUrl, machineIdentifier: text(plex?.machineIdentifier) })) {
+          cursor.connection = plexUrl;
+          db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'historySync'").run(JSON.stringify(sync), new Date().toISOString());
+        }
+      }
+      db.exec(`
+        CREATE TABLE watch_events_next (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL CHECK(source IN ('plex-history', 'plex-session', 'tautulli', 'tautulli-session')),
+          source_connection TEXT NOT NULL,
+          source_event_id TEXT NOT NULL,
+          user_id INTEGER,
+          plex_account_id TEXT,
+          username TEXT,
+          sonarr_series_id INTEGER,
+          show_title TEXT NOT NULL,
+          season_number INTEGER NOT NULL,
+          episode_number INTEGER NOT NULL,
+          watched_at TEXT NOT NULL,
+          raw_payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(source, source_connection, source_event_id),
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+      `);
+      db.prepare(`
+        INSERT INTO watch_events_next
+          SELECT id, source,
+            CASE WHEN source IN ('plex-history', 'plex-session') THEN ? ELSE ? END,
+            source_event_id, user_id, plex_account_id, username, sonarr_series_id, show_title, season_number, episode_number, watched_at, raw_payload, created_at
+          FROM watch_events
+      `).run(plexUrl, tautulliUrl);
+      db.exec(`
+        DROP TABLE watch_events;
+        ALTER TABLE watch_events_next RENAME TO watch_events;
+        CREATE INDEX idx_watch_events_user ON watch_events(user_id);
+        CREATE INDEX idx_watch_events_show ON watch_events(sonarr_series_id);
+        CREATE INDEX idx_watch_events_series_user_watched
+          ON watch_events(sonarr_series_id, user_id, watched_at DESC, id DESC);
+        CREATE INDEX idx_watch_events_user_series_watched
+          ON watch_events(user_id, sonarr_series_id, watched_at DESC, id DESC);
+      `);
+    },
+  },
+  {
+    // A series triaged for a full search only had the seasons monitored at that moment
+    // searched; a season requested later (monitored by Seerr with search on add off) was
+    // never searched. searched_seasons holds the monitored seasons already searched, so
+    // the triage poll can search a season once it becomes monitored. NULL means "not yet
+    // known": the next poll records the currently monitored seasons without searching,
+    // which is how rows triaged before this migration start.
+    version: 28,
+    up(db) {
+      db.exec("ALTER TABLE new_show_triage ADD COLUMN searched_seasons TEXT");
+    },
+  },
+  {
+    // Why each expanded season was expanded, so the show page can explain seasons with no
+    // viewer behind them (a Seerr request kept at enrolment, or the Expand button).
+    // rolling_shows.expanded_seasons stays the record of which seasons are expanded; a row
+    // here only describes one. Seasons already expanded came from watch activity, a finale,
+    // or re-adoption from a Sonarr tag, and which is not known, so they start as `watched`
+    // with no user or time; the show page shows such a row without a reason.
+    // requested_seasons snapshots which seasons an automatic enrolment treats as requested,
+    // taken before any Sonarr change: a retry after a partial baseline would otherwise read
+    // monitoring that the baseline had already changed. NULL (a pending row from before this
+    // migration) means none, today's behaviour.
+    version: 29,
+    up(db) {
+      db.exec(`
+        ALTER TABLE new_show_triage_pending_enrollments ADD COLUMN requested_seasons TEXT;
+        CREATE TABLE rolling_expanded_seasons (
+          rolling_show_id INTEGER NOT NULL,
+          season_number INTEGER NOT NULL,
+          reason TEXT NOT NULL CHECK(reason IN ('watched', 'finale', 'requested', 'manual')),
+          user_id INTEGER,
+          expanded_at TEXT,
+          PRIMARY KEY (rolling_show_id, season_number),
+          FOREIGN KEY (rolling_show_id) REFERENCES rolling_shows(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        INSERT OR IGNORE INTO rolling_expanded_seasons (rolling_show_id, season_number, reason)
+          SELECT rs.id, CAST(season.value AS INTEGER), 'watched'
+          -- json_each throws on malformed JSON, which would block startup; parseJson reads
+          -- such a value as no expanded seasons, so the migration does too.
+          FROM rolling_shows rs,
+            json_each(CASE WHEN json_valid(rs.expanded_seasons) THEN rs.expanded_seasons ELSE '[]' END) season
+          WHERE CAST(season.value AS INTEGER) > 0;
+      `);
+    },
+  },
 ];
 
 export function runMigrations(db: Database.Database, logger?: Logger, targetVersion?: number): void {

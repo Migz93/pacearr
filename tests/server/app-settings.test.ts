@@ -130,3 +130,61 @@ test("saving Plex resumes waiting jobs after user discovery and queues a history
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test("turning on the season search clears recorded seasons only when it becomes active", async () => {
+  const dataDir = mkdtempSync(path.join(os.tmpdir(), "pacearr-app-settings-"));
+  const config: RuntimeConfig = { port: 9302, dataDir, sessionCookieName: "pacearr_test", sessionTtlMs: 60_000, logLevel: "error" };
+  const { app, db, logger } = createApp(config);
+  const sessionId = "test-session";
+  db.savePlexOwner({ plexId: "owner", username: "owner", displayName: "Owner", email: null, avatarUrl: null, plexToken: "token" });
+  db.createSession(sessionId, "owner", new Date(Date.now() + 60_000).toISOString());
+  const cookie = `${config.sessionCookieName}=${encodeURIComponent(`${sessionId}.${signedValue(db.getSessionSecret(), sessionId)}`)}`;
+  const server = app.listen(0);
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test server did not bind a TCP port.");
+  const patch = async (body: Record<string, unknown>) => {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/settings/app`, { method: "PATCH", headers: { Cookie: cookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200);
+  };
+  const recorded = () => db.listTriagedSeries().find((row) => row.seriesId === 1)?.searchedSeasons;
+  try {
+    db.recordNewShowTriage({ seriesId: 1, title: "Recorded", addedAt: null, decision: "baseline" });
+    db.setNewShowTriageSearchedSeasons(1, [1]);
+
+    // Not active while triage is off.
+    await patch({ searchNewlyMonitoredSeasonsEnabled: true });
+    assert.deepEqual(recorded(), [1]);
+
+    const activation = () => db.getAppSettings().searchNewlyMonitoredSeasonsActivation;
+    assert.equal(activation(), 0);
+    await patch({ newShowTriageEnabled: true, searchNewlyMonitoredSeasonsEnabled: true });
+    assert.equal(recorded(), null);
+    assert.equal(activation(), 1);
+
+    // Saving the form again while it is already on keeps the records and the boundary.
+    db.setNewShowTriageSearchedSeasons(1, [1, 2]);
+    await patch({ newShowTriageEnabled: true, searchNewlyMonitoredSeasonsEnabled: true, dryRun: false });
+    assert.deepEqual(recorded(), [1, 2]);
+    assert.equal(activation(), 1);
+
+    await patch({ searchNewlyMonitoredSeasonsEnabled: false });
+    assert.deepEqual(recorded(), [1, 2]);
+    await patch({ searchNewlyMonitoredSeasonsEnabled: true });
+    assert.equal(recorded(), null);
+    assert.equal(activation(), 2);
+
+    // Turning triage off and on again also starts a new activation, however quickly.
+    db.setNewShowTriageSearchedSeasons(1, [1]);
+    await patch({ newShowTriageEnabled: false });
+    await patch({ newShowTriageEnabled: true });
+    assert.equal(recorded(), null);
+    assert.equal(activation(), 3);
+
+    const invalid = await fetch(`http://127.0.0.1:${address.port}/api/settings/app`, { method: "PATCH", headers: { Cookie: cookie, "content-type": "application/json" }, body: JSON.stringify({ searchNewlyMonitoredSeasonsEnabled: "yes" }) });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await logger.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

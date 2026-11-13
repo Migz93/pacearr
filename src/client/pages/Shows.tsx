@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowLeft, ArrowRight, ArrowUpDown, ChevronDown, ChevronRight, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, X,
+  ArrowLeft, ArrowRight, ArrowUpDown, Ban, ChevronDown, ChevronRight, Expand, Eye, EyeOff, LayoutGrid, List, Plus, RefreshCw, RotateCcw, Search, Trash2, Undo2, X,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { badgeClass, formatBytes } from "../lib/utils";
 import { AvatarStack, Poster, type ViewerBadge } from "../components/ShowVisuals";
 import { RowLabel, ShowCard, ShowListRow, type ShowBrowserItem } from "../components/ShowCard";
-import { compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
+import { compactGhostButtonClass, compactPrimaryButtonClass, compactSecondaryButtonClass, dangerButtonClass, iconButtonClass, primaryButtonClass, secondaryButtonClass, ToggleField } from "../components/FormControls";
 import { ErrorBanner, Page, PageHeader, PageLoading } from "../components/Page";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import type {
-  RecommendationsResponse, RunResult, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
+  RecommendationsResponse, RunResult, SeasonExpansionSummary, ShowDetailResponse, ShowEpisodeSummary, ShowListItem, ShowSeasonSummary, ShowsResponse,
 } from "../../shared/types";
 
 type ShowsTab = "enrolled" | "recommendations" | "ignored" | "sonarr";
@@ -51,8 +51,10 @@ function isSortMode(value: string | null): value is SortMode {
   return SORT_MODES.includes(value as SortMode);
 }
 
-function sizeOf(item: ShowBrowserItem): number {
-  return item.kind === "recommendation" ? item.data.projectedSavingsBytes : item.data.sizeOnDiskBytes;
+/** Null when the value is not known yet (see `sonarrDetailsUnavailable`/`savingsUnavailable`). */
+function sizeOf(item: ShowBrowserItem): number | null {
+  if (item.kind === "recommendation") return item.data.savingsUnavailable ? null : item.data.projectedSavingsBytes;
+  return item.data.sonarrDetailsUnavailable ? null : item.data.sizeOnDiskBytes;
 }
 
 function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): number {
@@ -60,7 +62,11 @@ function compareItems(a: ShowBrowserItem, b: ShowBrowserItem, sort: SortMode): n
     const cmp = a.data.title.localeCompare(b.data.title);
     return sort === "title-asc" ? cmp : -cmp;
   }
-  const cmp = sizeOf(a) - sizeOf(b);
+  const sizeA = sizeOf(a);
+  const sizeB = sizeOf(b);
+  // Unknown sizes sort last in both directions rather than posing as the smallest.
+  if (sizeA === null || sizeB === null) return (sizeA === null ? 1 : 0) - (sizeB === null ? 1 : 0);
+  const cmp = sizeA - sizeB;
   return sort === "size-asc" ? cmp : -cmp;
 }
 
@@ -100,6 +106,39 @@ function loadStoredSort(tab: ShowsTab): SortMode {
 function formatDate(value: string | null) {
   if (!value) return "Never";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+}
+
+const EXPANSION_LABELS: Record<SeasonExpansionSummary["reason"], string> = {
+  watched: "Watched",
+  finale: "Finale",
+  requested: "Requested",
+  manual: "Manual",
+};
+
+/**
+ * A `watched` row with no user may have no watch behind it (re-adopted from a Sonarr tag,
+ * or expanded before reasons were recorded), so it is shown without a reason.
+ */
+function isUnattributed(expansion: SeasonExpansionSummary): boolean {
+  return expansion.reason === "watched" && !expansion.displayName;
+}
+
+function expansionDescription(expansion: SeasonExpansionSummary): string {
+  const on = expansion.expandedAt ? ` on ${formatDate(expansion.expandedAt)}` : "";
+  if (isUnattributed(expansion)) return "No reason recorded for this expansion";
+  switch (expansion.reason) {
+    case "watched":
+      return `Watched by ${expansion.displayName}${on}`;
+    case "finale":
+      return expansion.displayName
+        ? `${expansion.displayName} reached the previous season's finale${on}`
+        : "Expanded from the previous season's finale";
+    case "requested":
+      // expandedAt is when triage enrolled the show, which can be later than when it was added.
+      return `Requested when the show was added; kept expanded when it was enrolled${on}`;
+    case "manual":
+      return `Expanded manually${on}`;
+  }
 }
 
 function episodeLabel(seasonNumber: number, episodeNumber: number) {
@@ -246,15 +285,15 @@ function ShowsBrowser() {
 
   const sorted = useMemo(() => [...filtered].sort((a, b) => compareItems(a, b, sort)), [filtered, sort]);
 
-  const totalSavingsBytes = useMemo(
-    () => items.reduce((sum, item) => sum + (item.kind === "recommendation" ? item.data.projectedSavingsBytes : 0), 0),
-    [items]
-  );
-
-  const totalSizeOnDiskBytes = useMemo(
-    () => items.reduce((sum, item) => sum + (item.kind === "library" ? item.data.sizeOnDiskBytes : 0), 0),
-    [items]
-  );
+  // Both summaries are the same measure the size sort uses for this tab.
+  const sizeTotal = useMemo(() => {
+    const sizes = items.map(sizeOf);
+    const known = sizes.filter((size): size is number => size !== null);
+    const total = formatBytes(known.reduce((sum, size) => sum + size, 0));
+    const unknown = sizes.length - known.length;
+    if (known.length === 0 && unknown > 0) return "Unknown";
+    return unknown > 0 ? `${total} + ${unknown} unknown` : total;
+  }, [items]);
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -316,14 +355,14 @@ function ShowsBrowser() {
       {!loading && items.length > 0 && (isRecommendationTab ? (
         <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
           <SummaryChip label="Candidates" value={items.length} />
-          <SummaryChip label="Potential savings" value={formatBytes(totalSavingsBytes)} />
+          <SummaryChip label="Potential savings" value={sizeTotal} />
         </div>
       ) : tab === "enrolled" && (
         // The tab people live on had no summary at all, while the two recommendation
         // tabs did. Both numbers are already in the list response.
         <div className="mb-4 flex gap-2.5 max-[820px]:flex-col">
           <SummaryChip label="Enrolled shows" value={items.length} />
-          <SummaryChip label="Size on disk" value={formatBytes(totalSizeOnDiskBytes)} />
+          <SummaryChip label="Size on disk" value={sizeTotal} />
         </div>
       ))}
       {loading ? (
@@ -478,6 +517,21 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
     }
   }
 
+  /** Exclusion and expansion endpoints report refusals (e.g. a busy show) as ok: false rather than an HTTP error. */
+  async function setExcluded(path: string, excluded: boolean) {
+    await runAction(async () => {
+      const result = excluded ? await apiPost<RunResult>(path) : await apiDelete<RunResult>(path);
+      if (!result.ok) throw new Error(result.message);
+    });
+  }
+
+  async function expandSeason(path: string) {
+    await runAction(async () => {
+      const result = await apiPost<RunResult>(path);
+      if (!result.ok) throw new Error(result.message);
+    });
+  }
+
   async function enroll() {
     await runAction(() => apiPost<RunResult>(`/api/shows/${seriesId}/enroll`, { applyBaseline: true, importHistory: true }));
   }
@@ -591,6 +645,10 @@ function ShowDetail({ seriesId }: { seriesId: number }) {
               viewers={viewersBySeason.get(season.seasonNumber) ?? []}
               viewersByEpisode={viewersByEpisode}
               dryRunEnabled={detail.dryRunPreview.enabled}
+              exclusionBasePath={show.enrolled && show.rollingShowId ? `/api/rolling-shows/${show.rollingShowId}/seasons/${season.seasonNumber}` : null}
+              busy={busy}
+              onSetExcluded={setExcluded}
+              onExpand={expandSeason}
               key={season.seasonNumber}
             />
           ))}
@@ -621,18 +679,36 @@ function MonitorState({ current, target, dryRunEnabled }: { current: boolean; ta
   );
 }
 
-function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled }: {
+function ExclusionLabel({ excluded }: { excluded: boolean }) {
+  // Only the icon is tinted, reusing the danger-button red and the enrolled green, so the
+  // label keeps the quiet ghost styling.
+  return excluded
+    ? <><Undo2 size={14} className="text-success" /> Include</>
+    : <><Ban size={14} className="text-error" /> Exclude</>;
+}
+
+type ExclusionControl = {
+  /** The season's API path; null when the show is not enrolled, which hides the controls. */
+  exclusionBasePath: string | null;
+  busy: boolean;
+  onSetExcluded: (path: string, excluded: boolean) => Promise<void>;
+};
+
+function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnabled, exclusionBasePath, busy, onSetExcluded, onExpand }: {
   season: ShowSeasonSummary;
   episodes: ShowEpisodeSummary[];
   viewers: ViewerBadge[];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
-}) {
+  onExpand: (path: string) => Promise<void>;
+} & ExclusionControl) {
   const [open, setOpen] = useState(false);
   const episodeTableId = `season-${season.seasonNumber}-episodes`;
   return (
     <div className="overflow-hidden rounded-xl border border-outline-variant/30 bg-background-container-low">
-      <button type="button" className="flex w-full items-center justify-between gap-3 border-0 bg-transparent p-3 text-left hover:bg-background-container-highest" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
+      {/* The season's Expand and Exclude controls sit beside the toggle button, not inside it: a button cannot contain another. */}
+      <div className="flex items-center gap-2 pr-3 hover:bg-background-container-highest max-[820px]:flex-col max-[820px]:items-stretch max-[820px]:pb-3 max-[820px]:pl-3">
+      <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent p-3 text-left max-[820px]:p-0 max-[820px]:pt-3" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={episodeTableId}>
         {open ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
       <span className="flex-1">
         <strong className="block">Season {season.seasonNumber}</strong>
@@ -644,37 +720,95 @@ function SeasonPanel({ season, episodes, viewers, viewersByEpisode, dryRunEnable
       </span>
       <AvatarStack viewers={viewers} />
       <span className="flex flex-wrap items-center justify-end gap-1.5 text-right">
-        {season.isExpanded && <span className={badgeClass("success")}>Expanded</span>}
+        {season.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this season. Existing files are kept.">Excluded</span>}
+        {season.isExpanded && (
+          <span className={badgeClass("success")} title={season.expansion ? expansionDescription(season.expansion) : undefined}>
+            Expanded{season.expansion && !isUnattributed(season.expansion) ? ` · ${EXPANSION_LABELS[season.expansion.reason]}` : ""}
+          </span>
+        )}
+        {season.expansion?.trimsAt && (
+          <span className={badgeClass()} title={`Trims back to its pilot on ${formatDate(season.expansion.trimsAt)} if nobody watches it before then`}>
+            Trims {formatDate(season.expansion.trimsAt)}
+          </span>
+        )}
         {season.prefetchedEpisodes.length > 0 && <span className={badgeClass("warning")} title={season.prefetchedEpisodes.map((episode) => `${episodeLabel(episode.seasonNumber, episode.episodeNumber)} triggered by ${episode.displayName} on ${formatDate(episode.triggeredAt)}`).join("\n")}>Prefetched {season.prefetchedEpisodes.length}</span>}
         <MonitorState current={season.monitored} target={season.targetMonitored} dryRunEnabled={dryRunEnabled} />
       </span>
       </button>
-      {open && <EpisodeTable id={episodeTableId} episodes={episodes} prefetchedEpisodes={season.prefetchedEpisodes} viewersByEpisode={viewersByEpisode} dryRunEnabled={dryRunEnabled} />}
+      {exclusionBasePath && (
+        <span className="flex shrink-0 items-center gap-2 max-[820px]:self-start">
+          {!season.excluded && !season.isExpanded && (
+            <button
+              type="button"
+              className={compactGhostButtonClass}
+              disabled={busy}
+              aria-label={`Expand season ${season.seasonNumber}`}
+              title={dryRunEnabled
+                ? "Dry run: preview monitoring and searching the whole season. Sonarr is not changed."
+                : "Monitor and search the whole season. With progressive cleanup on, if nobody watches it within the cleanup delay it returns to its pilot, and its other episodes' files are deleted when file deletion is enabled."}
+              onClick={() => void onExpand(`${exclusionBasePath}/expansion`)}
+            >
+              <Expand size={14} className="text-success" /> Expand
+            </button>
+          )}
+          <button
+            type="button"
+            className={compactGhostButtonClass}
+            disabled={busy}
+            aria-label={`${season.excluded ? "Include" : "Exclude"} season ${season.seasonNumber}`}
+            title={season.excluded
+              ? "Return this season to the pilot-only baseline so Pacearr manages it again"
+              : "Unmonitor this whole season in Sonarr and stop Pacearr expanding or searching it. Files are not deleted."}
+            onClick={() => void onSetExcluded(`${exclusionBasePath}/exclusion`, !season.excluded)}
+          >
+            <ExclusionLabel excluded={season.excluded} />
+          </button>
+        </span>
+      )}
+      </div>
+      {open && (
+        <EpisodeTable
+          id={episodeTableId}
+          episodes={episodes}
+          prefetchedEpisodes={season.prefetchedEpisodes}
+          viewersByEpisode={viewersByEpisode}
+          dryRunEnabled={dryRunEnabled}
+          seasonExcluded={season.excluded}
+          exclusionBasePath={exclusionBasePath}
+          busy={busy}
+          onSetExcluded={onSetExcluded}
+        />
+      )}
     </div>
   );
 }
 
-function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled }: {
+function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryRunEnabled, seasonExcluded, exclusionBasePath, busy, onSetExcluded }: {
   id: string;
   episodes: ShowEpisodeSummary[];
   prefetchedEpisodes: ShowSeasonSummary["prefetchedEpisodes"];
   viewersByEpisode: Map<string, ViewerBadge[]>;
   dryRunEnabled: boolean;
-}) {
+  seasonExcluded: boolean;
+} & ExclusionControl) {
   const prefetchedByEpisode = new Map(prefetchedEpisodes.map((episode) => [`${episode.seasonNumber}:${episode.episodeNumber}`, episode]));
+  const columns = exclusionBasePath
+    ? "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px_90px]"
+    : "grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px]";
   return (
       <div id={id} className="overflow-hidden border-t border-outline-variant/30">
-        <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden">
+        <div className={`grid ${columns} items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 text-[11px] font-black uppercase text-on-surface-variant max-[820px]:hidden`}>
           <span>Episode</span>
           <span>Title</span>
           <span>Viewers</span>
           <span>State</span>
           <span>Air date</span>
+          {exclusionBasePath && <span className="sr-only">Management</span>}
         </div>
         {episodes.map((episode) => {
           const viewers = viewersByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`) ?? [];
           return (
-            <div className="grid grid-cols-[90px_minmax(180px,1fr)_minmax(90px,120px)_120px_120px] items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1" key={episode.id}>
+            <div className={`grid ${columns} items-center gap-3.5 border-b border-outline-variant/30 px-3 py-2.5 last:border-b-0 max-[820px]:grid-cols-1 max-[820px]:gap-1`} key={episode.id}>
               <strong>{episodeLabel(episode.seasonNumber, episode.episodeNumber)}</strong>
               <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-on-surface-variant">{episode.title ?? "Untitled"}</span>
               <div className="flex items-center gap-1.5">
@@ -684,6 +818,7 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
               <div className="flex flex-wrap items-center gap-1.5">
                 <RowLabel className="hidden max-[820px]:inline">State</RowLabel>
                 <MonitorState current={episode.monitored} target={episode.targetMonitored} dryRunEnabled={dryRunEnabled} />
+                {episode.excluded && <span className={badgeClass()} title="Pacearr never monitors or searches this episode. Its file is kept.">Excluded</span>}
                 {(() => {
                   const prefetch = prefetchedByEpisode.get(`${episode.seasonNumber}:${episode.episodeNumber}`);
                   if (!prefetch) return null;
@@ -691,6 +826,22 @@ function EpisodeTable({ id, episodes, prefetchedEpisodes, viewersByEpisode, dryR
                 })()}
               </div>
               <span className="text-on-surface-variant"><RowLabel className="hidden max-[820px]:inline">Air date</RowLabel>{formatDate(episode.airDate)}</span>
+              {exclusionBasePath && (
+                <button
+                  type="button"
+                  className={`${compactGhostButtonClass} justify-self-end max-[820px]:justify-self-start`}
+                  disabled={busy || seasonExcluded}
+                  aria-label={`${episode.excluded ? "Include" : "Exclude"} ${episodeLabel(episode.seasonNumber, episode.episodeNumber)}`}
+                  title={seasonExcluded
+                    ? "The whole season is excluded. Include the season first."
+                    : episode.excluded
+                      ? "Restore the monitoring this episode's season implies"
+                      : "Unmonitor this episode in Sonarr and stop Pacearr searching it. Its file is not deleted. The exclusion resets if the season is later trimmed back to its pilot."}
+                  onClick={() => void onSetExcluded(`${exclusionBasePath}/episodes/${episode.episodeNumber}/exclusion`, !episode.excluded)}
+                >
+                  <ExclusionLabel excluded={episode.excluded} />
+                </button>
+              )}
             </div>
           );
         })}

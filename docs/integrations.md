@@ -27,11 +27,30 @@ Pacearr stores:
 
 When **Rolling-season artwork** is enabled and Pacearr is in live mode, it
 matches an enrolled Sonarr show to Plex using only TVDB or IMDb identifiers.
-It never uses a title match for artwork changes. Pacearr saves each affected
+It never uses a title match for artwork changes.
+
+| ID lookup finds | Result |
+|---|---|
+| One Plex item | That item gets artwork |
+| Different Plex shows (different Plex GUIDs) | Skipped |
+| One Plex show in several TV libraries | Only the copy whose Plex folder (`Location` path) equals Sonarr's `series.path` gets artwork; skipped if not exactly one does. Paths are compared exactly apart from a trailing path separator (`/` or `\`), so differing Sonarr/Plex mount points are skipped |
+
+Pacearr saves each affected
 season's original poster under `/config/plex-artwork`, overlays `WATCH E01 TO
 UNLOCK` while that season is pilot-only, and restores the original image when
 the season expands or the show is unenrolled. The original backup makes
 restoration independent of Plex metadata refreshes.
+
+Poster downloads first request the selected thumbnail directly, preserving its
+bytes for overlay hash comparisons. If Plex redirects a thumbnail to a remote
+image, Pacearr instead requests `/photo/:/transcode` on the configured Plex
+server. Its source parameter is a validated local path with its own Plex token,
+so source reads also work when they require authentication. A configured proxy
+subpath applies to the outer request only; the source is relative to Plex's root.
+The transcoder fits the image within 1920 × 1920 without upscaling
+(up to 1920 × 1080 for landscape episode art or 1280 × 1920 for 2:3 posters).
+Credentialed requests still reject redirects; Pacearr never follows the remote
+image URL. Artwork and integration warnings include nested error causes.
 
 Artwork writes are skipped entirely in dry-run mode.
 
@@ -106,6 +125,8 @@ Use the final, canonical base URL for every configured integration. Pacearr send
 | Search full season | `POST /api/v3/command` with `SeasonSearch` |
 | Search full series | `POST /api/v3/command` with `SeriesSearch` |
 | Delete episode file | `DELETE /api/v3/episodefile/{id}` |
+| Read / create Pacearr tags | `GET /api/v3/tag`, `POST /api/v3/tag` |
+| Add / remove a Pacearr tag | `PUT /api/v3/series/editor` with `applyTags: "add"` or `"remove"` |
 
 ### Show Review Data
 
@@ -119,10 +140,93 @@ When enabled, Pacearr polls Sonarr every five minutes by default; the interval
 is configurable in Settings → Jobs. It ignores series that
 were already present when the setting was enabled, then searches smaller new
 series in full and enrolls series over the configured total-episode limit onto
-the pilot baseline. Successful live decisions are persisted so a restart does
+the pilot baseline. When only some of an enrolled series' real seasons are
+monitored, someone requested those seasons, so they stay fully monitored and
+expanded (see [rolling-monitoring.md](rolling-monitoring.md#requested-seasons-on-triage-enrolment)).
+Successful live decisions are persisted so a restart does
 not repeat them; dry-run and failed arrivals remain pending for a later poll.
+
+With **Search newly monitored seasons** on (`searchNewlyMonitoredSeasonsEnabled`,
+off by default, shown under the triage toggle), every triaged series that is not
+enrolled stays under watch, whatever its triage decision, including the library
+that predates triage. Each poll compares the monitored real seasons in its series
+list with the ones already recorded and sends one `SeasonSearch` for each season
+that has become monitored since, for example a later season requested through
+Seerr. It runs inside the triage poll, so it needs triage on.
+
+| Case | Behaviour |
+|---|---|
+| Season newly monitored | Searched once, recorded in `new_show_triage.searched_seasons`, history `show.auto_triage_season_searched` |
+| Season unmonitored, then monitored again | Searched again |
+| Search fails | Not recorded; retried on the next poll |
+| No recorded seasons yet | Records the monitored seasons from the poll's series list, without searching |
+| Check becomes active (both settings on, after either was off) | Every record is cleared, so the next poll records without searching. Turning triage on while the setting is off clears nothing |
+| Series listed without real seasons | Skipped; its record is neither filled nor pruned until a list includes them |
+| Setting or triage turned off mid-poll | Stops: no further searches are sent and no season record is written. A search already sent when it changed still gets its history entry |
+| Show enrolled | Skipped; rolling reconcile owns its monitoring. Unenrolment clears its record |
+| Unenrolled after the poll's series list was read | Skipped until the next poll, whose list shows every season re-monitored |
+| Dry run | Logged only; searched on the first live poll. Seasons no longer monitored are still forgotten |
+| Another operation holds the series | Skipped; checked again on the next poll |
+
 To minimise downloads that Pacearr subsequently purges, disable
 **Search on Add** in any source that adds series to Sonarr.
+
+### Tags
+
+Pacearr can mirror its state onto Sonarr series as tags, for recovery after database
+loss and for filtering in Sonarr. Pacearr's database stays the source of truth.
+
+Writing is opt-in: Settings → Sonarr → **Write tags to Sonarr**
+(`sonarrTagsEnabled`, off by default).
+
+| Tag | On |
+|---|---|
+| `pacearr-enrolled` | every enrolled show, manual or auto-triaged |
+| `pacearr-ignored` | every ignored show |
+
+| Rule | Detail |
+|---|---|
+| Only Pacearr's tags | Writes go through the bulk series editor with `add`/`remove`, sending only these two tag IDs. Any other tag on a series is never touched. The tags are created in Sonarr if missing. |
+| Adds are reconciled | Each Sonarr library refresh adds any tag an enrolled or ignored show is missing. |
+| Connection changed during refresh | If the saved Sonarr URL or API key changes before or during tag reconciliation, the refresh stops tag work and logs why, including after a busy-show wait. Requests already sent may finish; their queued removals are kept if the connection changed before the response. The follow-up refresh queued by the connection save reconciles using the new connection's series list. |
+| Busy shows | A show another operation is working on (for example the rolling reconcile) is deferred, because that operation's full series save would undo the tag change. The refresh logs the deferred titles, waits up to a minute for them to be free, then re-reads and applies their changes; any still busy, or whose re-read fails, are logged and retried on the next refresh. |
+| Removals need a Pacearr action | Unenrol, restore from ignored, and enrolling an ignored show queue a removal (`sonarr_tag_removals`). A show having no record never removes its tag, so an empty database cannot wipe the recovery data. |
+| Failed removals retry | A queued removal is retried on every library refresh until Sonarr confirms it, or dropped if the show is back in that state or gone from Sonarr. |
+| Off, or dry run | No tag request is sent at all. Removals are still queued, so a tag written before writing was turned off is removed once it is back on. Turning writing on (outside dry run), or dry run off with writing on, triggers a library refresh, which catches up. |
+| Manual edits | Editing a Pacearr tag in Sonarr has no effect on Pacearr. A removed tag is added back on the next refresh. |
+| Series deleted from Sonarr | No removal is sent; its tags went with it. When the library refresh's deleted-series check confirms the 404 (outside dry run), any queued removal for it is dropped, including one whose record is already gone. |
+
+A Pacearr tag has no effect in Sonarr unless someone links it to a release profile,
+delay profile, indexer, download client or notification.
+
+#### Import from Sonarr tags
+
+Settings → Sonarr → **Import from Sonarr tags**. Never automatic. Available whether
+or not tag writing is on, since a fresh install starts with it off.
+
+1. `GET /api/sonarr/tag-import` previews: shows to enrol, shows to ignore, tagged
+   shows already in Pacearr (left alone), and shows with both tags (skipped). A tag
+   with a queued removal counts as absent.
+2. After one confirmation, `POST /api/sonarr/tag-import` creates records only for
+   the series IDs that preview listed and Pacearr still has no record of. If the
+   Sonarr connection changes, run the preview again before confirming the import.
+
+Re-adoption skips the enrolment pilot baseline and sends nothing to Sonarr. Seasons
+Sonarr still monitors are recorded as expanded, so the rolling reconcile times them
+out as usual instead of trimming them to pilots. When any show was re-adopted, the
+import then runs a full history reconciliation (Plex and Tautulli; a run already in
+progress is waited out and a fresh one started) and only after it finishes a rolling
+reconciliation, so viewer progress is rebuilt before the shows are reconciled.
+
+Until a full history reconciliation that started after the import completes
+successfully, a re-adopted show is flagged (`rolling_shows.awaiting_history_since`):
+the rolling reconcile skips it and watch events do not run progressive cleanup on it,
+so its Sonarr monitoring is left as found. If that read fails, the show stays
+protected until a later full reconciliation succeeds. Tags restore membership only: exclusions, prefetch records and Plex
+poster backups are not recoverable from them.
+
+Allowed in dry run, because it writes only Pacearr's own records, like a manual
+enrolment.
 
 ### Non-Goals
 

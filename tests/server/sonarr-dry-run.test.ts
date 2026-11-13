@@ -21,9 +21,11 @@ test("dry-run Sonarr integration never sends mutation requests", async () => {
     await sonarr.searchEpisodes([10]);
     await sonarr.searchSeason(1, 2);
     await sonarr.deleteEpisodeFiles([99]);
+    await sonarr.createTag("pacearr-enrolled");
+    await sonarr.editSeriesTags([1], [2], "add");
 
     assert.deepEqual(requests, []);
-    assert.equal(warnings.length, 6);
+    assert.equal(warnings.length, 8);
   } finally {
     globalThis.fetch = originalFetch;
   }

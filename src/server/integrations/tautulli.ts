@@ -1,7 +1,8 @@
 import type { ConnectionTestResult, TautulliSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
+import { createProgressLog, type ProgressLog } from "../progress-log.js";
 import { liveSessionEventId } from "./live-session.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError } from "./request.js";
 
 export interface TautulliEpisodeRecord {
   referenceId: string;
@@ -24,6 +25,28 @@ export type TautulliActivityRecord = TautulliEpisodeRecord;
 
 export type ExternalIds = { tvdbId: number | null; imdbId: string | null };
 
+/**
+ * A non-OK Tautulli response. Deliberately not an IntegrationHttpError: Tautulli answers
+ * 404 when its API is disabled, which must never read as a missing Plex item.
+ */
+class TautulliHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "TautulliHttpError";
+  }
+}
+
+/**
+ * Tautulli's "Unable to retrieve metadata" answer. Tautulli gives it both for a rating key
+ * Plex no longer has and whenever its own request to Plex fails, so it proves neither.
+ */
+export class TautulliMetadataUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TautulliMetadataUnavailableError";
+  }
+}
+
 export class TautulliIntegration {
   constructor(private readonly settings: TautulliSettings, private readonly logger: Logger) {}
 
@@ -38,7 +61,12 @@ export class TautulliIntegration {
 
   private async command<T>(cmd: string, params: Record<string, string | number | undefined> = {}, timeoutMs?: number): Promise<T> {
     const response = await fetchIntegration(this.buildUrl({ cmd, ...params }), {}, timeoutMs);
-    if (!response.ok) throw new Error(`Tautulli ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      // Tautulli reports command errors as a 400 whose body carries the reason; keep it
+      // so callers can tell those apart.
+      const detail = await response.json().then((body: { response?: { message?: string } }) => body?.response?.message, () => undefined);
+      throw new TautulliHttpError(`Tautulli ${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`, response.status);
+    }
     const body = await response.json() as { response?: { result?: string; message?: string; data?: T } };
     if (body.response?.result === "error") throw new Error(body.response.message || "Tautulli API error");
     return body.response?.data as T;
@@ -50,13 +78,41 @@ export class TautulliIntegration {
       this.logger.info("Tautulli connection test succeeded", { version: data?.tautulli_version ?? null });
       return { ok: true, message: `Connected to Tautulli${data?.tautulli_version ? ` ${data.tautulli_version}` : ""}.` };
     } catch (error) {
-      this.logger.warn("Tautulli connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Tautulli connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 
+  /**
+   * Tautulli's install ID (`pms_uuid`, see tautulliHistoryConnection). Only the PMS
+   * settings section is requested, so the notifier credentials elsewhere in Tautulli's
+   * settings are never fetched. Null when this Tautulli does not report one.
+   */
+  async getInstallId(): Promise<string | null> {
+    const data = await this.command<{ pms_uuid?: unknown }>("get_settings", { key: "PMS" });
+    const installId = typeof data?.pms_uuid === "string" ? data.pms_uuid.trim() : "";
+    return installId || null;
+  }
+
+  /**
+   * The machine identifier of the Plex server this Tautulli reads (`pms_identifier`), from
+   * the same PMS settings section as getInstallId. Null when Tautulli does not report one.
+   */
+  async getPlexServerId(): Promise<string | null> {
+    const data = await this.command<{ pms_identifier?: unknown }>("get_settings", { key: "PMS" });
+    const serverId = typeof data?.pms_identifier === "string" ? data.pms_identifier.trim() : "";
+    return serverId || null;
+  }
+
+  /** Throws TautulliMetadataUnavailableError when Tautulli could not read the item from Plex. */
   async getShowGuids(ratingKey: string): Promise<ExternalIds> {
-    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey });
+    const metadata = await this.command<any>("get_metadata", { rating_key: ratingKey }).catch((error: unknown) => {
+      // Only Tautulli's own command error carries this: a 400, or a 200 with result "error"
+      // from older versions. Any other status is a failed request.
+      const commandError = !(error instanceof TautulliHttpError) || error.status === 400;
+      if (commandError && error instanceof Error && /unable to retrieve metadata/i.test(error.message)) throw new TautulliMetadataUnavailableError(error.message);
+      throw error;
+    });
     const guids = Array.isArray(metadata?.guids) ? metadata.guids : [];
     let tvdbId: number | null = null;
     let imdbId: string | null = null;
@@ -75,6 +131,7 @@ export class TautulliIntegration {
     const cutoff = since ? new Date(since).getTime() : null;
     let start = 0;
     const length = 1000;
+    let progress: ProgressLog | null = null;
     for (;;) {
       const data = await this.command<{ data?: any[]; recordsFiltered?: number; total_duration?: string }>("get_history", {
         media_type: "episode",
@@ -82,6 +139,11 @@ export class TautulliIntegration {
         length,
       }, 60_000);
       const rows = data?.data ?? [];
+      // Tautulli reports its row count with the first page. An incremental read stops at
+      // its cursor well before that, so only a full read reports a total.
+      const reportedTotal = Number(data?.recordsFiltered);
+      progress ??= createProgressLog(this.logger, "Tautulli history fetch progress", since === undefined && Number.isFinite(reportedTotal) ? reportedTotal : null);
+      progress.tick(rows.length);
       const pageRecords: TautulliHistoryRecord[] = [];
       for (const row of rows) {
         const seasonNumber = Number(row.parent_media_index ?? row.season ?? 0);

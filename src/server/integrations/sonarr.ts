@@ -1,6 +1,8 @@
 import type { ConnectionTestResult, SonarrEpisode, SonarrEpisodeFile, SonarrSeries, SonarrSettings } from "../../shared/types.js";
 import type { Logger } from "../logger.js";
-import { buildIntegrationUrl, fetchIntegration } from "./request.js";
+import { buildIntegrationUrl, fetchIntegration, formatIntegrationError, IntegrationHttpError } from "./request.js";
+
+export type SonarrTag = { id: number; label: string };
 
 export class SonarrIntegration {
   constructor(private readonly settings: SonarrSettings, private readonly logger: Logger, private readonly dryRun = true) {}
@@ -55,7 +57,7 @@ export class SonarrIntegration {
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       this.logger.warn("Sonarr request failed", { method, pathname, status: response.status, statusText: response.statusText });
-      throw new Error(`Sonarr ${response.status} ${response.statusText}: ${body.slice(0, 300)}`);
+      throw new IntegrationHttpError(`Sonarr ${response.status} ${response.statusText}: ${body.slice(0, 300)}`, response.status);
     }
     if (response.status === 204) return undefined as T;
     // Sonarr commonly returns HTTP 200 with an empty body for a successful
@@ -70,8 +72,8 @@ export class SonarrIntegration {
       this.logger.info("Sonarr connection test succeeded", { version: status.version ?? null });
       return { ok: true, message: `Connected to Sonarr${status.version ? ` ${status.version}` : ""}.` };
     } catch (error) {
-      this.logger.warn("Sonarr connection test failed", { error: error instanceof Error ? error.message : String(error) });
-      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      this.logger.warn("Sonarr connection test failed", { error: formatIntegrationError(error) });
+      return { ok: false, message: formatIntegrationError(error) };
     }
   }
 
@@ -89,6 +91,29 @@ export class SonarrIntegration {
 
   async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
     return this.request<SonarrEpisodeFile[]>(`episodefile?seriesId=${seriesId}`);
+  }
+
+  async getTags(): Promise<SonarrTag[]> {
+    return this.request<SonarrTag[]>("tag");
+  }
+
+  async createTag(label: string): Promise<SonarrTag | null> {
+    if (this.skipMutation("create-tag", { label })) return null;
+    return this.request<SonarrTag>("tag", { method: "POST", body: JSON.stringify({ label }) });
+  }
+
+  /**
+   * Adds or removes tags through Sonarr's bulk series editor. Unlike a full series PUT,
+   * the editor changes only the tags named here, so any other tag on the series is left
+   * as it is and a concurrent monitoring change cannot be overwritten.
+   */
+  async editSeriesTags(seriesIds: number[], tagIds: number[], applyTags: "add" | "remove") {
+    if (seriesIds.length === 0 || tagIds.length === 0) return;
+    if (this.skipMutation("edit-series-tags", { seriesIds, tagIds, applyTags })) return;
+    await this.request("series/editor", {
+      method: "PUT",
+      body: JSON.stringify({ seriesIds, tags: tagIds, applyTags }),
+    });
   }
 
   async updateSeriesMonitoring(seriesId: number, updates: { monitored?: boolean; monitorNewItems?: "all" | "none"; seasons?: SonarrSeries["seasons"] }) {
@@ -155,7 +180,7 @@ export class SonarrIntegration {
       try {
         await this.request(`episodefile/${id}`, { method: "DELETE" });
       } catch (error) {
-        this.logger.error("Failed to delete Sonarr episode file", { episodeFileId: id, error: error instanceof Error ? error.message : String(error) });
+        this.logger.error("Failed to delete Sonarr episode file", { episodeFileId: id, error: formatIntegrationError(error) });
         throw error;
       }
     }
