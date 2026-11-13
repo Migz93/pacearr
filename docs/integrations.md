@@ -208,7 +208,8 @@ or not tag writing is on, since a fresh install starts with it off.
    shows already in Pacearr (left alone), and shows with both tags (skipped). A tag
    with a queued removal counts as absent.
 2. After one confirmation, `POST /api/sonarr/tag-import` creates records only for
-   the series IDs that preview listed and Pacearr still has no record of.
+   the series IDs that preview listed and Pacearr still has no record of. If the
+   Sonarr connection changes, run the preview again before confirming the import.
 
 Re-adoption skips the enrolment pilot baseline and sends nothing to Sonarr. Seasons
 Sonarr still monitors are recorded as expanded, so the rolling reconcile times them

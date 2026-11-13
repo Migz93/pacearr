@@ -542,6 +542,7 @@ export interface SonarrTagImportShow {
 
 /** What an import from Sonarr tags would do, computed before anything is written. */
 export interface SonarrTagImportPreview {
+  confirmationToken: string;
   toEnroll: SonarrTagImportShow[];
   toIgnore: SonarrTagImportShow[];
   /** Tagged shows Pacearr already has a record for; the import leaves them as they are. */

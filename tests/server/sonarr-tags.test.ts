@@ -321,7 +321,7 @@ test("importing from Sonarr tags is additive, skips conflicts, and re-adopts wit
     const requestsBeforeImport = sonarr.state.requests.length;
 
     // 65 was not in what the administrator confirmed.
-    const result = await services.importFromSonarrTags({ enrollSeriesIds: [60], ignoreSeriesIds: [61] });
+    const result = await services.importFromSonarrTags({ confirmationToken: preview.confirmationToken, enrollSeriesIds: [60], ignoreSeriesIds: [61] });
     assert.equal(result.enrolled, 1);
     assert.equal(result.ignored, 1);
 
@@ -341,6 +341,36 @@ test("importing from Sonarr tags is additive, skips conflicts, and re-adopts wit
   }
 });
 
+test("tag import rejects a changed Sonarr connection before and during confirmation", async () => {
+  const { db, services, cleanup } = createHarness({ dryRun: false });
+  const originalConnection = db.getSonarrSettings()!;
+  const replacementConnection = { baseUrl: "http://replacement:8989", apiKey: "replacement-key" };
+  const sonarr = installFakeSonarr({
+    series: [series(80, "Tagged", [50])],
+    tags: [{ id: 50, label: "pacearr-enrolled" }],
+  });
+  try {
+    const preview = await services.previewSonarrTagImport();
+    const confirmed = { confirmationToken: preview.confirmationToken, enrollSeriesIds: [80], ignoreSeriesIds: [] };
+    db.saveSonarrSettings(replacementConnection);
+    assert.equal((await services.importFromSonarrTags(confirmed)).ok, false);
+
+    db.saveSonarrSettings(originalConnection);
+    const fakeFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const response = await fakeFetch(input, init);
+      db.saveSonarrSettings(replacementConnection);
+      return response;
+    };
+    assert.equal((await services.importFromSonarrTags(confirmed)).ok, false);
+    assert.equal(db.getRollingShowBySeriesId(80), null);
+    assert.deepEqual(db.listIgnoredRecommendationIds(), []);
+  } finally {
+    sonarr.restore();
+    cleanup();
+  }
+});
+
 test("a re-adopted show is not reconciled or cleaned up until a full history read completes", async () => {
   const { db, services, cleanup } = createHarness({ dryRun: false });
   // Immediate cleanup: without the guard, a reconcile before history is rebuilt would
@@ -353,7 +383,8 @@ test("a re-adopted show is not reconciled or cleaned up until a full history rea
   });
   const seriesWrites = () => sonarr.state.requests.filter((request) => request.method === "PUT" && request.pathname === "/api/v3/series/80");
   try {
-    await services.importFromSonarrTags({ enrollSeriesIds: [80], ignoreSeriesIds: [] });
+    const preview = await services.previewSonarrTagImport();
+    await services.importFromSonarrTags({ confirmationToken: preview.confirmationToken, enrollSeriesIds: [80], ignoreSeriesIds: [] });
     const rollingId = db.getRollingShowBySeriesId(80)!.id;
     assert.deepEqual(db.listRollingShowIdsAwaitingHistory(), [rollingId]);
 

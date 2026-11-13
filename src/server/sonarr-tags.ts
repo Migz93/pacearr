@@ -214,7 +214,7 @@ export class SonarrTagMirror {
    * Works out what an import from Sonarr tags would do. It only reads. A tag with a
    * queued removal counts as absent, because Pacearr has already decided it should go.
    */
-  async planImport(): Promise<{ preview: SonarrTagImportPreview; seriesById: Map<number, SonarrSeries> }> {
+  async planImport(): Promise<{ preview: Omit<SonarrTagImportPreview, "confirmationToken">; seriesById: Map<number, SonarrSeries> }> {
     const sonarr = this.getSonarr();
     const [tags, series] = await Promise.all([sonarr.getTags(), sonarr.getSeries()]);
     const tagIds = tagIdsFromList(tags);
@@ -225,7 +225,7 @@ export class SonarrTagMirror {
       return tagId !== undefined && Boolean(item.tags?.includes(tagId)) && !pending.has(`${item.id}:${tag}`);
     };
 
-    const preview: SonarrTagImportPreview = { toEnroll: [], toIgnore: [], alreadyKnown: [], conflicts: [] };
+    const preview: Omit<SonarrTagImportPreview, "confirmationToken"> = { toEnroll: [], toIgnore: [], alreadyKnown: [], conflicts: [] };
     for (const item of series) {
       const enrolled = hasTag(item, "enrolled");
       const ignored = hasTag(item, "ignored");

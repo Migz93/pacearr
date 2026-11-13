@@ -1076,6 +1076,31 @@ test("manual enrollment applies its pilot baseline before its full history recon
   }
 });
 
+test("an interrupted manual enrollment stays protected when a new service instance starts", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+  const series: SonarrSeries = { id: 805, title: "Interrupted Enrollment", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 805: series }, requests,
+    episodesBySeries: { 805: [
+      { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true },
+      { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+    ] },
+  });
+  try {
+    const enrollment = await services.beginEnrollment(805, { applyBaseline: true, importHistory: true });
+    assert.equal(db.isRollingShowAwaitingHistory(enrollment.rolling.id), true);
+    const restarted = new PacearrServices(db, silentLogger(), new ImageCacheService(os.tmpdir(), silentLogger()), os.tmpdir());
+    const before = requests.length;
+    await restarted.reconcileRollingShows();
+    assert.deepEqual(requests.slice(before), [], "the restarted reconciler leaves monitoring and files alone");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
   const { db, services, cleanup } = createHarness();
   db.updateAppSettings({ dryRun: false });
@@ -1092,6 +1117,7 @@ test("manual enrollment preserves files when full history reconciliation reports
     assert.equal(result.ok, true);
     assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
     assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
+    assert.equal(db.isRollingShowAwaitingHistory(db.getRollingShowBySeriesId(805)!.id), true);
   } finally {
     restoreFetch();
     cleanup();

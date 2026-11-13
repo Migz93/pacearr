@@ -1350,10 +1350,18 @@ export class PacearrServices {
     await this.sonarrTags.applyChange(seriesId, { remove: "ignored" });
   }
 
+  private sonarrTagImportToken(): string {
+    const settings = this.db.getSonarrSettings();
+    return crypto.createHmac("sha256", this.db.getSessionSecret())
+      .update(JSON.stringify(["sonarr-tag-import", settings?.baseUrl, settings?.apiKey]))
+      .digest("hex");
+  }
+
   async previewSonarrTagImport(): Promise<SonarrTagImportPreview> {
+    const confirmationToken = this.sonarrTagImportToken();
     const { preview } = await this.sonarrTags.planImport();
     this.logger.info("Sonarr tag import previewed", { toEnroll: preview.toEnroll.length, toIgnore: preview.toIgnore.length, alreadyKnown: preview.alreadyKnown.length, conflicts: preview.conflicts.length });
-    return preview;
+    return { ...preview, confirmationToken };
   }
 
   /**
@@ -1361,8 +1369,11 @@ export class PacearrServices {
    * enrolment or ignore is never changed. Only shows the confirmed preview listed are
    * imported, so the result cannot exceed what the administrator agreed to.
    */
-  async importFromSonarrTags(confirmed: { enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
+  async importFromSonarrTags(confirmed: { confirmationToken: string; enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
+    const connectionChanged = { ok: false, message: "Sonarr connection changed. Review the import again.", enrolled: 0, ignored: 0 };
+    if (confirmed.confirmationToken !== this.sonarrTagImportToken()) return connectionChanged;
     const { preview, seriesById } = await this.sonarrTags.planImport();
+    if (confirmed.confirmationToken !== this.sonarrTagImportToken()) return connectionChanged;
     const confirmedEnroll = new Set(confirmed.enrollSeriesIds);
     const confirmedIgnore = new Set(confirmed.ignoreSeriesIds);
     let enrolled = 0;
@@ -1384,8 +1395,11 @@ export class PacearrServices {
           skipped++;
           continue;
         }
-        const rolling = this.db.upsertRollingShow(series);
-        this.db.markRollingShowAwaitingHistory(rolling.id);
+        const rolling = this.db.transaction(() => {
+          const show = this.db.upsertRollingShow(series);
+          this.db.markRollingShowAwaitingHistory(show.id);
+          return show;
+        });
         // Re-adoption, not enrolment: no pilot baseline. Seasons Sonarr still monitors
         // were expanded before the database was lost, so they are recorded as expanded
         // and the rolling reconcile times them out as usual, instead of trimming them
@@ -1428,7 +1442,13 @@ export class PacearrServices {
     try {
       const sonarr = this.getSonarr();
       const series = await sonarr.getSeriesById(seriesId);
-      const rolling = this.db.upsertRollingShow(series);
+      // Persist the guard with enrolment so restarting cannot expose the show to
+      // rolling cleanup before the full history read has populated viewer progress.
+      const rolling = this.db.transaction(() => {
+        const show = this.db.upsertRollingShow(series);
+        if (options.importHistory || options.deferFileDeletion) this.db.markRollingShowAwaitingHistory(show.id);
+        return show;
+      });
       this.logger.info("Show enrolled in Pacearr control", { seriesId, title: rolling.title, applyBaseline: options.applyBaseline, importHistory: options.importHistory });
       this.db.removeRecommendationFromCache(seriesId);
       this.db.addHistory("info", "show.enrolled", series.title, { seriesId });
@@ -2753,15 +2773,15 @@ export class PacearrServices {
   }
 
   async reconcileFullHistory(options: { reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
-    // Only a complete read that started after a show was re-adopted has rebuilt its
+    // Only a complete read that started after a show was marked has rebuilt its
     // viewer progress, so only those shows are released for cleanup here.
     const awaitingHistory = this.db.listRollingShowIdsAwaitingHistory();
     const result = await this.importHistory({ full: true, ...options });
     if (result.ok && awaitingHistory.length > 0) {
       this.db.clearRollingShowsAwaitingHistory(awaitingHistory);
-      this.logger.info("Re-adopted shows released for rolling cleanup after full history reconciliation", { shows: awaitingHistory.length });
+      this.logger.info("Shows released for rolling cleanup after full history reconciliation", { shows: awaitingHistory.length });
     } else if (awaitingHistory.length > 0) {
-      this.logger.warn("Full history reconciliation did not complete; re-adopted shows stay protected from cleanup", { shows: awaitingHistory.length });
+      this.logger.warn("Full history reconciliation did not complete; shows waiting for history stay protected from cleanup", { shows: awaitingHistory.length });
     }
     return result;
   }
@@ -2922,9 +2942,9 @@ export class PacearrServices {
     const shows = this.db.listRollingShows();
     for (const [index, show] of shows.entries()) {
       if (awaitingHistory.has(show.id)) {
-        // Re-adopted from a Sonarr tag with no viewer progress yet. Reconciling now could
-        // trim seasons someone is watching; its Sonarr monitoring is left as found.
-        this.logger.info("Skipped reconciliation of a re-adopted show until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
+        // The show's viewer progress may still be incomplete. Leave monitoring
+        // and files alone until a full history reconciliation succeeds.
+        this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
         continue;
       }
       const operation = this.acquireSeriesOperation(show.sonarrSeriesId);

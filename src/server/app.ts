@@ -415,11 +415,16 @@ export function createApp(config: RuntimeConfig, scheduler?: JobScheduler) {
   app.post("/api/sonarr/tag-import", requireAuth, asyncRoute(async (req, res) => {
     const enrollSeriesIds = seriesIdList(req.body.enrollSeriesIds);
     const ignoreSeriesIds = seriesIdList(req.body.ignoreSeriesIds);
-    if (!enrollSeriesIds || !ignoreSeriesIds) {
-      res.status(400).json({ error: "enrollSeriesIds and ignoreSeriesIds must be arrays of series IDs." });
+    const confirmationToken = req.body.confirmationToken;
+    if (typeof confirmationToken !== "string" || !enrollSeriesIds || !ignoreSeriesIds) {
+      res.status(400).json({ error: "A confirmation token and arrays of series IDs are required." });
       return;
     }
-    const result = await services.importFromSonarrTags({ enrollSeriesIds, ignoreSeriesIds });
+    const result = await services.importFromSonarrTags({ confirmationToken, enrollSeriesIds, ignoreSeriesIds });
+    if (!result.ok) {
+      res.status(409).json({ error: result.message });
+      return;
+    }
     if (result.enrolled > 0 || result.ignored > 0) runRecommendationRefreshNow();
     if (result.enrolled > 0 && scheduler) {
       // Re-adopted shows are reconciled against the latest playback history rather than
