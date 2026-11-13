@@ -29,7 +29,7 @@ function createHarness(logger: Logger = silentLogger()) {
   const services = new PacearrServices(db, logger, imageCache, dir);
   db.saveSonarrSettings({ baseUrl: "http://sonarr:8989", apiKey: "secret" });
   db.updateAppSettings({ recommendationMinimumSavingsGb: 0 });
-  return { db, services, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { db, services, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 function jsonResponse(body: unknown) {
@@ -1076,6 +1076,87 @@ test("manual enrollment applies its pilot baseline before its full history recon
   }
 });
 
+test("an interrupted manual enrollment stays protected when a new service instance starts", async () => {
+  const { db, services, dir, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+  const series: SonarrSeries = { id: 805, title: "Interrupted Enrollment", seasons: [{ seasonNumber: 1, monitored: true }] };
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({
+    series: [series], seriesById: { 805: series }, requests,
+    episodesBySeries: { 805: [
+      { id: 8051, seriesId: 805, seasonNumber: 1, episodeNumber: 1, title: "Pilot", monitored: true },
+      { id: 8052, seriesId: 805, seasonNumber: 1, episodeNumber: 2, title: "Second", monitored: true, hasFile: true, episodeFileId: 8052 },
+    ] },
+  });
+  try {
+    const enrollment = await services.beginEnrollment(805, { applyBaseline: true, importHistory: true });
+    assert.equal(db.isRollingShowAwaitingHistory(enrollment.rolling.id), true);
+    const restarted = new PacearrServices(db, silentLogger(), new ImageCacheService(dir, silentLogger()), dir);
+    const before = requests.length;
+    await restarted.reconcileRollingShows();
+    assert.deepEqual(requests.slice(before), [], "the restarted reconciler leaves monitoring and files alone");
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
+test("a full history read does not clear a guard renewed during the read", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const show = db.upsertRollingShow({ id: 1, title: "Guarded Show" });
+    db.markRollingShowAwaitingHistory(show.id);
+    const captured = db.listRollingShowsAwaitingHistory();
+    services.importHistory = async () => {
+      db.markRollingShowAwaitingHistory(show.id);
+      return { ok: true, message: "History read completed." };
+    };
+    await services.reconcileFullHistory();
+    const remaining = db.listRollingShowsAwaitingHistory();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.id, show.id);
+    assert.notEqual(remaining[0]?.guard, captured[0]?.guard);
+  } finally {
+    cleanup();
+  }
+});
+
+for (const replace of [false, true]) {
+  test(`rolling reconciliation skips a show ${replace ? "re-enrolled" : "marked"} while processing an earlier show`, async () => {
+    const { db, services, cleanup } = createHarness();
+    db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+    const earlier = { id: 806, title: "A Earlier", seasons: [] };
+    const later = { id: 807, title: "Z Later", seasons: [] };
+    db.upsertRollingShow(earlier);
+    let guarded = db.upsertRollingShow(later);
+    const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+    const restoreFetch = installFetchStub({ series: [earlier, later], seriesById: { 806: earlier, 807: later }, requests });
+    const fakeFetch = globalThis.fetch;
+    let marked = false;
+    globalThis.fetch = async (input, init) => {
+      if (!marked) {
+        marked = true;
+        if (replace) {
+          db.deleteRollingShow(guarded.id);
+          guarded = db.upsertRollingShow(later);
+        }
+        db.markRollingShowAwaitingHistory(guarded.id);
+      }
+      return fakeFetch(input, init);
+    };
+    try {
+      const result = await services.reconcileRollingShows();
+      assert.equal(result.ok, true);
+      assert.equal(marked, true);
+      assert.equal(requests.some(({ pathname, search }) => pathname.endsWith("/807") || search?.includes("seriesId=807")), false);
+      assert.equal(db.isRollingShowAwaitingHistory(guarded.id), true);
+    } finally {
+      restoreFetch();
+      cleanup();
+    }
+  });
+}
+
 test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
   const { db, services, cleanup } = createHarness();
   db.updateAppSettings({ dryRun: false });
@@ -1092,6 +1173,7 @@ test("manual enrollment preserves files when full history reconciliation reports
     assert.equal(result.ok, true);
     assert.equal(requests.some((request) => request.method === "DELETE" && request.pathname === "/api/v3/episodefile/8052"), false);
     assert.equal(db.listHistory(10).some((event) => event.action === "history.full_reconcile" && event.level === "warn"), true);
+    assert.equal(db.isRollingShowAwaitingHistory(db.getRollingShowBySeriesId(805)!.id), true);
   } finally {
     restoreFetch();
     cleanup();

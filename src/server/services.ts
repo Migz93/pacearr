@@ -1351,9 +1351,10 @@ export class PacearrServices {
   }
 
   async previewSonarrTagImport(): Promise<SonarrTagImportPreview> {
+    const confirmationToken = this.db.getSonarrTagImportToken();
     const { preview } = await this.sonarrTags.planImport();
     this.logger.info("Sonarr tag import previewed", { toEnroll: preview.toEnroll.length, toIgnore: preview.toIgnore.length, alreadyKnown: preview.alreadyKnown.length, conflicts: preview.conflicts.length });
-    return preview;
+    return { ...preview, confirmationToken };
   }
 
   /**
@@ -1361,8 +1362,11 @@ export class PacearrServices {
    * enrolment or ignore is never changed. Only shows the confirmed preview listed are
    * imported, so the result cannot exceed what the administrator agreed to.
    */
-  async importFromSonarrTags(confirmed: { enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
+  async importFromSonarrTags(confirmed: { confirmationToken: string; enrollSeriesIds: number[]; ignoreSeriesIds: number[] }): Promise<SonarrTagImportResult> {
+    const connectionChanged = { ok: false, message: "Sonarr connection changed. Review the import again.", enrolled: 0, ignored: 0 };
+    if (confirmed.confirmationToken !== this.db.getSonarrTagImportToken()) return connectionChanged;
     const { preview, seriesById } = await this.sonarrTags.planImport();
+    if (confirmed.confirmationToken !== this.db.getSonarrTagImportToken()) return connectionChanged;
     const confirmedEnroll = new Set(confirmed.enrollSeriesIds);
     const confirmedIgnore = new Set(confirmed.ignoreSeriesIds);
     let enrolled = 0;
@@ -1384,8 +1388,11 @@ export class PacearrServices {
           skipped++;
           continue;
         }
-        const rolling = this.db.upsertRollingShow(series);
-        this.db.markRollingShowAwaitingHistory(rolling.id);
+        const rolling = this.db.transaction(() => {
+          const show = this.db.upsertRollingShow(series);
+          this.db.markRollingShowAwaitingHistory(show.id);
+          return show;
+        });
         // Re-adoption, not enrolment: no pilot baseline. Seasons Sonarr still monitors
         // were expanded before the database was lost, so they are recorded as expanded
         // and the rolling reconcile times them out as usual, instead of trimming them
@@ -1428,7 +1435,13 @@ export class PacearrServices {
     try {
       const sonarr = this.getSonarr();
       const series = await sonarr.getSeriesById(seriesId);
-      const rolling = this.db.upsertRollingShow(series);
+      // Persist the guard with enrolment so restarting cannot expose the show to
+      // rolling cleanup before the full history read has populated viewer progress.
+      const rolling = this.db.transaction(() => {
+        const show = this.db.upsertRollingShow(series);
+        if (options.importHistory || options.deferFileDeletion) this.db.markRollingShowAwaitingHistory(show.id);
+        return show;
+      });
       this.logger.info("Show enrolled in Pacearr control", { seriesId, title: rolling.title, applyBaseline: options.applyBaseline, importHistory: options.importHistory });
       this.db.removeRecommendationFromCache(seriesId);
       this.db.addHistory("info", "show.enrolled", series.title, { seriesId });
@@ -2753,15 +2766,24 @@ export class PacearrServices {
   }
 
   async reconcileFullHistory(options: { reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
-    // Only a complete read that started after a show was re-adopted has rebuilt its
+    // Only a complete read that started after a show was marked has rebuilt its
     // viewer progress, so only those shows are released for cleanup here.
-    const awaitingHistory = this.db.listRollingShowIdsAwaitingHistory();
+    const awaitingHistory = this.db.listRollingShowsAwaitingHistory();
     const result = await this.importHistory({ full: true, ...options });
     if (result.ok && awaitingHistory.length > 0) {
-      this.db.clearRollingShowsAwaitingHistory(awaitingHistory);
-      this.logger.info("Re-adopted shows released for rolling cleanup after full history reconciliation", { shows: awaitingHistory.length });
+      const released = this.db.transaction(() => {
+        const currentGuards = new Map(this.db.listRollingShowsAwaitingHistory().map(({ id, guard }) => [id, guard]));
+        const ready = awaitingHistory.filter(({ id, guard }) => currentGuards.get(id) === guard);
+        for (const { id } of ready) {
+          const show = this.db.getRollingShow(id)!;
+          this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, id);
+        }
+        this.db.clearRollingShowsAwaitingHistory(ready);
+        return ready.length;
+      });
+      if (released > 0) this.logger.info("Shows released for rolling cleanup after full history reconciliation", { shows: released });
     } else if (awaitingHistory.length > 0) {
-      this.logger.warn("Full history reconciliation did not complete; re-adopted shows stay protected from cleanup", { shows: awaitingHistory.length });
+      this.logger.warn("Full history reconciliation did not complete; shows waiting for history stay protected from cleanup", { shows: awaitingHistory.length });
     }
     return result;
   }
@@ -2918,27 +2940,27 @@ export class PacearrServices {
     let changed = 0;
     const errors: string[] = [];
     const episodeCache: EpisodeCache = new Map();
-    const awaitingHistory = new Set(this.db.listRollingShowIdsAwaitingHistory());
     const shows = this.db.listRollingShows();
-    for (const [index, show] of shows.entries()) {
-      if (awaitingHistory.has(show.id)) {
-        // Re-adopted from a Sonarr tag with no viewer progress yet. Reconciling now could
-        // trim seasons someone is watching; its Sonarr monitoring is left as found.
-        this.logger.info("Skipped reconciliation of a re-adopted show until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
-        continue;
-      }
-      const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
+    for (const [index, snapshot] of shows.entries()) {
+      const operation = this.acquireSeriesOperation(snapshot.sonarrSeriesId);
       if (operation === null) {
         this.logger.info("Skipped reconciliation while another show operation is running", {
-          rollingShowId: show.id,
-          seriesId: show.sonarrSeriesId,
-          title: show.title,
+          rollingShowId: snapshot.id,
+          seriesId: snapshot.sonarrSeriesId,
+          title: snapshot.title,
           position: index + 1,
           total: shows.length,
         });
         continue;
       }
       try {
+        // Skip an enrollment removed or replaced since the sweep started.
+        const show = this.db.getRollingShow(snapshot.id);
+        if (!show) continue;
+        if (this.db.isRollingShowAwaitingHistory(show.id)) {
+          this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: snapshot.id, seriesId: snapshot.sonarrSeriesId, title: snapshot.title, position: index + 1, total: shows.length });
+          continue;
+        }
         // Refresh persisted progress before planning so historical data fixes
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
@@ -2971,9 +2993,9 @@ export class PacearrServices {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        errors.push(`${show.title}: ${message}`);
-        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length, error: message });
-      } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
+        errors.push(`${snapshot.title}: ${message}`);
+        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: snapshot.id, seriesId: snapshot.sonarrSeriesId, title: snapshot.title, position: index + 1, total: shows.length, error: message });
+      } finally { this.releaseSeriesOperation(snapshot.sonarrSeriesId, operation); }
     }
     // history_events is Pacearr's audit log, not operational state — nothing else depends
     // on it, so pruning it here piggybacks on a job that already runs regularly rather

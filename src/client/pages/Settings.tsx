@@ -796,6 +796,7 @@ function SonarrTagsCard({ configured, tagsEnabled, onTagsEnabledChange }: { conf
     setImporting(true);
     try {
       const response = await apiPost<SonarrTagImportResult>("/api/sonarr/tag-import", {
+        confirmationToken: preview.confirmationToken,
         enrollSeriesIds: preview.toEnroll.map((show) => show.sonarrSeriesId),
         ignoreSeriesIds: preview.toIgnore.map((show) => show.sonarrSeriesId),
       });
