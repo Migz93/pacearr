@@ -2771,8 +2771,17 @@ export class PacearrServices {
     const awaitingHistory = this.db.listRollingShowsAwaitingHistory();
     const result = await this.importHistory({ full: true, ...options });
     if (result.ok && awaitingHistory.length > 0) {
-      this.db.clearRollingShowsAwaitingHistory(awaitingHistory);
-      this.logger.info("Shows released for rolling cleanup after full history reconciliation", { shows: awaitingHistory.length });
+      const released = this.db.transaction(() => {
+        const currentGuards = new Map(this.db.listRollingShowsAwaitingHistory().map(({ id, guard }) => [id, guard]));
+        const ready = awaitingHistory.filter(({ id, guard }) => currentGuards.get(id) === guard);
+        for (const { id } of ready) {
+          const show = this.db.getRollingShow(id)!;
+          this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, id);
+        }
+        this.db.clearRollingShowsAwaitingHistory(ready);
+        return ready.length;
+      });
+      if (released > 0) this.logger.info("Shows released for rolling cleanup after full history reconciliation", { shows: released });
     } else if (awaitingHistory.length > 0) {
       this.logger.warn("Full history reconciliation did not complete; shows waiting for history stay protected from cleanup", { shows: awaitingHistory.length });
     }
@@ -2932,23 +2941,24 @@ export class PacearrServices {
     const errors: string[] = [];
     const episodeCache: EpisodeCache = new Map();
     const shows = this.db.listRollingShows();
-    for (const [index, show] of shows.entries()) {
-      const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
+    for (const [index, snapshot] of shows.entries()) {
+      const operation = this.acquireSeriesOperation(snapshot.sonarrSeriesId);
       if (operation === null) {
         this.logger.info("Skipped reconciliation while another show operation is running", {
-          rollingShowId: show.id,
-          seriesId: show.sonarrSeriesId,
-          title: show.title,
+          rollingShowId: snapshot.id,
+          seriesId: snapshot.sonarrSeriesId,
+          title: snapshot.title,
           position: index + 1,
           total: shows.length,
         });
         continue;
       }
       try {
-        // Check under the series lock. An enrollment may have marked this show
-        // while the sweep was processing another one.
+        // Skip an enrollment removed or replaced since the sweep started.
+        const show = this.db.getRollingShow(snapshot.id);
+        if (!show) continue;
         if (this.db.isRollingShowAwaitingHistory(show.id)) {
-          this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
+          this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: snapshot.id, seriesId: snapshot.sonarrSeriesId, title: snapshot.title, position: index + 1, total: shows.length });
           continue;
         }
         // Refresh persisted progress before planning so historical data fixes
@@ -2983,9 +2993,9 @@ export class PacearrServices {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        errors.push(`${show.title}: ${message}`);
-        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length, error: message });
-      } finally { this.releaseSeriesOperation(show.sonarrSeriesId, operation); }
+        errors.push(`${snapshot.title}: ${message}`);
+        this.logger.error("Rolling monitoring reconciliation failed for show", { rollingShowId: snapshot.id, seriesId: snapshot.sonarrSeriesId, title: snapshot.title, position: index + 1, total: shows.length, error: message });
+      } finally { this.releaseSeriesOperation(snapshot.sonarrSeriesId, operation); }
     }
     // history_events is Pacearr's audit log, not operational state — nothing else depends
     // on it, so pruning it here piggybacks on a job that already runs regularly rather
