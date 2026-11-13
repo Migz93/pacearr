@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type {
@@ -869,20 +870,21 @@ export class PacearrDatabase {
   }
 
   markRollingShowAwaitingHistory(id: number): void {
-    this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = ? WHERE id = ?").run(now(), id);
+    this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = ? WHERE id = ?").run(randomUUID(), id);
   }
 
   isRollingShowAwaitingHistory(id: number): boolean {
     return this.db.prepare("SELECT 1 FROM rolling_shows WHERE id = ? AND awaiting_history_since IS NOT NULL").get(id) !== undefined;
   }
 
-  listRollingShowIdsAwaitingHistory(): number[] {
-    return (this.db.prepare("SELECT id FROM rolling_shows WHERE awaiting_history_since IS NOT NULL").all() as Array<{ id: number }>).map((row) => row.id);
+  listRollingShowsAwaitingHistory(): Array<{ id: number; guard: string }> {
+    return this.db.prepare("SELECT id, awaiting_history_since AS guard FROM rolling_shows WHERE awaiting_history_since IS NOT NULL")
+      .all() as Array<{ id: number; guard: string }>;
   }
 
-  clearRollingShowsAwaitingHistory(ids: number[]): void {
-    const clear = this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = NULL WHERE id = ?");
-    this.transaction(() => { for (const id of ids) clear.run(id); });
+  clearRollingShowsAwaitingHistory(shows: Array<{ id: number; guard: string }>): void {
+    const clear = this.db.prepare("UPDATE rolling_shows SET awaiting_history_since = NULL WHERE id = ? AND awaiting_history_since = ?");
+    this.transaction(() => { for (const { id, guard } of shows) clear.run(id, guard); });
   }
 
   deleteRollingShow(id: number): void {

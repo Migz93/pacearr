@@ -1101,6 +1101,56 @@ test("an interrupted manual enrollment stays protected when a new service instan
   }
 });
 
+test("a full history read does not clear a guard renewed during the read", async () => {
+  const { db, services, cleanup } = createHarness();
+  try {
+    const show = db.upsertRollingShow({ id: 1, title: "Guarded Show" });
+    db.markRollingShowAwaitingHistory(show.id);
+    const captured = db.listRollingShowsAwaitingHistory();
+    services.importHistory = async () => {
+      db.markRollingShowAwaitingHistory(show.id);
+      return { ok: true, message: "History read completed." };
+    };
+    await services.reconcileFullHistory();
+    const remaining = db.listRollingShowsAwaitingHistory();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0]?.id, show.id);
+    assert.notEqual(remaining[0]?.guard, captured[0]?.guard);
+  } finally {
+    cleanup();
+  }
+});
+
+test("rolling reconciliation skips a show marked while processing an earlier show", async () => {
+  const { db, services, cleanup } = createHarness();
+  db.updateAppSettings({ dryRun: false, progressiveCleanupDelayDays: 0 });
+  const earlier = { id: 806, title: "A Earlier", seasons: [] };
+  const later = { id: 807, title: "Z Later", seasons: [] };
+  db.upsertRollingShow(earlier);
+  const guarded = db.upsertRollingShow(later);
+  const requests: Array<{ method: string; pathname: string; search?: string; body?: string }> = [];
+  const restoreFetch = installFetchStub({ series: [earlier, later], seriesById: { 806: earlier, 807: later }, requests });
+  const fakeFetch = globalThis.fetch;
+  let marked = false;
+  globalThis.fetch = async (input, init) => {
+    if (!marked) {
+      marked = true;
+      db.markRollingShowAwaitingHistory(guarded.id);
+    }
+    return fakeFetch(input, init);
+  };
+  try {
+    const result = await services.reconcileRollingShows();
+    assert.equal(result.ok, true);
+    assert.equal(marked, true);
+    assert.equal(requests.some(({ pathname, search }) => pathname.endsWith("/807") || search?.includes("seriesId=807")), false);
+    assert.equal(db.isRollingShowAwaitingHistory(guarded.id), true);
+  } finally {
+    restoreFetch();
+    cleanup();
+  }
+});
+
 test("manual enrollment preserves files when full history reconciliation reports errors", async () => {
   const { db, services, cleanup } = createHarness();
   db.updateAppSettings({ dryRun: false });

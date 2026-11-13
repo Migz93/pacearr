@@ -386,7 +386,7 @@ test("a re-adopted show is not reconciled or cleaned up until a full history rea
     const preview = await services.previewSonarrTagImport();
     await services.importFromSonarrTags({ confirmationToken: preview.confirmationToken, enrollSeriesIds: [80], ignoreSeriesIds: [] });
     const rollingId = db.getRollingShowBySeriesId(80)!.id;
-    assert.deepEqual(db.listRollingShowIdsAwaitingHistory(), [rollingId]);
+    assert.deepEqual(db.listRollingShowsAwaitingHistory().map(({ id }) => id), [rollingId]);
 
     await services.reconcileRollingShows();
     assert.deepEqual(seriesWrites(), [], "an intervening reconcile leaves the show as found");
@@ -394,7 +394,7 @@ test("a re-adopted show is not reconciled or cleaned up until a full history rea
 
     const history = await services.reconcileFullHistory();
     assert.equal(history.ok, true);
-    assert.deepEqual(db.listRollingShowIdsAwaitingHistory(), []);
+    assert.deepEqual(db.listRollingShowsAwaitingHistory().map(({ id }) => id), []);
 
     // Released: with no viewer and a zero-day delay, the normal reconcile now trims it.
     await services.reconcileRollingShows();

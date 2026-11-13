@@ -2775,7 +2775,7 @@ export class PacearrServices {
   async reconcileFullHistory(options: { reconcileActiveProgress?: boolean } = {}): Promise<RunResult> {
     // Only a complete read that started after a show was marked has rebuilt its
     // viewer progress, so only those shows are released for cleanup here.
-    const awaitingHistory = this.db.listRollingShowIdsAwaitingHistory();
+    const awaitingHistory = this.db.listRollingShowsAwaitingHistory();
     const result = await this.importHistory({ full: true, ...options });
     if (result.ok && awaitingHistory.length > 0) {
       this.db.clearRollingShowsAwaitingHistory(awaitingHistory);
@@ -2938,15 +2938,8 @@ export class PacearrServices {
     let changed = 0;
     const errors: string[] = [];
     const episodeCache: EpisodeCache = new Map();
-    const awaitingHistory = new Set(this.db.listRollingShowIdsAwaitingHistory());
     const shows = this.db.listRollingShows();
     for (const [index, show] of shows.entries()) {
-      if (awaitingHistory.has(show.id)) {
-        // The show's viewer progress may still be incomplete. Leave monitoring
-        // and files alone until a full history reconciliation succeeds.
-        this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
-        continue;
-      }
       const operation = this.acquireSeriesOperation(show.sonarrSeriesId);
       if (operation === null) {
         this.logger.info("Skipped reconciliation while another show operation is running", {
@@ -2959,6 +2952,12 @@ export class PacearrServices {
         continue;
       }
       try {
+        // Check under the series lock. An enrollment may have marked this show
+        // while the sweep was processing another one.
+        if (this.db.isRollingShowAwaitingHistory(show.id)) {
+          this.logger.info("Skipped show reconciliation until full history reconciliation completes", { rollingShowId: show.id, seriesId: show.sonarrSeriesId, title: show.title, position: index + 1, total: shows.length });
+          continue;
+        }
         // Refresh persisted progress before planning so historical data fixes
         // are applied to already-enrolled shows as well as new enrolments.
         this.seedRollingProgressFromWatchHistory(show.sonarrSeriesId, show.id);
